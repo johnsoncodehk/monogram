@@ -56,6 +56,8 @@ const validJs: string[] = [
   `const g2 = a?.[b]?.(c);`,
   `const h2 = a ** b ** c;`,
   `x ??= y; x ||= y; x &&= y; x **= 2;`,
+  // a decorator's `@`, name and dotted segments are tokens of their own (trivia between them)
+  `@ a class C {} @a . b class D {} @℘ class E {} @a.℘ class F {} @(a, b) class G {}`,
   `const cond = a ? b : c ? d : e;`,
   `const cmp = a < b > c;`,
   `const t2 = tag\`a\${b}c\${d}e\`;`,

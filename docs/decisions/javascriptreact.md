@@ -11,7 +11,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | rule alternatives | 19 | 5 | 3 | 0 | 11 | 13 |
 | NUD arms | 3 | 0 | 0 | 0 | 3 | 3 |
 | LED connectors | 3 | 3 | 0 | 0 | 0 | 3 |
-| inline choice | 87 | 42 | 0 | 45 | 0 | 44 |
+| inline choice | 88 | 43 | 0 | 45 | 0 | 45 |
 | star | 65 | 62 | 0 | 3 | 0 | 38 |
 | opt | 90 | 57 | 0 | 33 | 0 | 54 |
 | sep | 45 | 7 | 0 | 38 | 0 | 0 |
@@ -43,16 +43,18 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 ### DecoratorExpr
 
 - DecoratorExpr (2 alternatives):
-  - `@`: two tokens: committed to at (#0), unless at2 (#1) admits the token (then the frame) (takes a mark: it can fail after `'@'`)
+  - `@`: two tokens: committed to at (#0), unless decorator (#1) admits the token (then the frame) (takes a mark: it can fail after `'@'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 11 more: no candidate, the list fails
-  - two tokens (pairs): at (#0) at `@` only before '('; at2 (#1) at `@` only before Ident
-  - two tokens (SECOND): at (#0) only before '('; at2 (#1) only before Ident
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over at (#0), at2 (#1)
+  - <Decorator>: one token: committed to decorator (#1)
+  - two tokens (pairs): at (#0) at `@` only before '('; decorator (#1) at `@` only before Ident
+  - two tokens (SECOND): at (#0) only before '('
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over at (#0), decorator (#1)
 - one token, no mark: 1 inline choice
 - DecoratorExpr / at: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- DecoratorExpr / at2: `many(('.' alt(Ident \| PrivateField)))`: one token; takes a mark: it can fail after `'.'`
-- DecoratorExpr / at2: `opt('(' sep(Expr, ',') ')')`: one token; takes a mark: it can fail after `'('`
-- DecoratorExpr / at2: `sep(Expr, ',')`: by attempt
+- DecoratorExpr / decorator: `alt(Decorator \| '@' !{'break'\|'case'\|'catch'\|'class'\|…3…`: one token; takes a mark: branch 1: it can fail after `'@'`
+- DecoratorExpr / decorator: `many(('.' alt(Ident \| PrivateField)))`: one token; takes a mark: it can fail after `'.'`
+- DecoratorExpr / decorator: `opt('(' sep(Expr, ',') ')')`: one token; takes a mark: it can fail after `'('`
+- DecoratorExpr / decorator: `sep(Expr, ',')`: by attempt
 
 ### Expr
 
@@ -84,8 +86,9 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <Template>: one token: committed to template (#9)
   - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
   - <Regex>: one token: committed to regex (#10)
+  - <Decorator>: two tokens: committed to namedClass (#36), unless anonymousClass (#37) admits the token (then the frame) (takes a mark: it can fail after `many(DecoratorExpr)`)
   - <PrivateField>: one token: committed to privateField (#26)
-  - two tokens (SECOND): jSXElement (#0) only before '>'|Ident; asyncArrow (#19) only before '('; arrow (#20) only before ')'|'...'|'@'|'['|'{'|Ident; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#36) only before '('|Ident; anonymousClass (#37) only before '('|'extends'|'{'|Ident
+  - two tokens (SECOND): jSXElement (#0) only before '>'|Ident; asyncArrow (#19) only before '('; arrow (#20) only before ')'|'...'|'@'|'['|'{'|Decorator|…1; asyncArrowIdentifier (#21) only before Ident; arrowIdentifier (#22) only before '=>'; namedClass (#36) only before '('|'.'|'@'|'class'|Decorator|Ident; anonymousClass (#37) only before '('|'.'|'@'|'class'|'extends'|'{'|…2
   - longest match: a candidate frame (a mark per new best) at `async`, `function`, `new`, the keys above where an `unless` candidate admits the token, every token of a kind no case names, over ident (#6), template (#9), prefixOp (#11), newDotTarget (#13), construct (#14), newNamedClass (#15) and 13 more
 - Expr LED (7 connectors, 39 binary operators):
   - `(`: one token: led_paren (takes a builder checkpoint: led_paren: it can fail after `sep(Expr, ',')`)
@@ -141,7 +144,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Prop (9 alternatives):
   - `*`: two tokens: committed to generatorMethod (#4) (takes a mark: it can fail after `'*'`)
   - `...`: one token: committed to spread (#0) (takes a mark: it can fail after `'...'`)
-  - <Template>, <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Regex>, <$templateHead>, <$templateMiddle> and 2 more: no candidate, the list fails
+  - <Template>, <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Regex>, <Decorator>, <$templateHead> and 3 more: no candidate, the list fails
   - two tokens (pairs): accessor (#1) at `get`, `set` only before '['|BigInt|BinaryNumber|HexNumber|Ident|LegacyNumber|…4; asyncGeneratorMethod (#2) at `async` only before '*'; asyncMethod (#3) at `async` only before '['|BigInt|BinaryNumber|HexNumber|Ident|LegacyNumber|…4
   - two tokens (SECOND): accessor (#1) only before '['|BigInt|BinaryNumber|HexNumber|Ident|LegacyNumber|…4; asyncGeneratorMethod (#2) only before '*'; asyncMethod (#3) only before '['|BigInt|BinaryNumber|HexNumber|Ident|LegacyNumber|…4; generatorMethod (#4) only before '['|BigInt|BinaryNumber|HexNumber|Ident|LegacyNumber|…4
   - longest match: a candidate frame (a mark per new best) at `[`, every token of a kind no case names, over accessor (#1), asyncGeneratorMethod (#2), asyncMethod (#3), method (#5), init (#6), computedList (#7) and 1 more
@@ -182,7 +185,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <LegacyNumber>: one token: committed to legacyNumber (#12)
   - <String>: one token: committed to string (#10)
   - <Template>: one token: committed to template (#17)
-  - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <PrivateField>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
+  - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Decorator>, <PrivateField>, <$templateMiddle>, <$templateTail> and 1 more: no candidate, the list fails
   - <Regex>: one token: committed to regex (#11)
   - longest match: a candidate frame (a mark per new best) at `async`, `function`, `new`, every token of a kind no case names, over ident (#4), newDotTarget (#14), new_ (#16), template (#17), function_ (#20), generator (#21) and 2 more
 - NewTarget LED (2 connectors, 0 binary operators):
@@ -211,7 +214,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ClassHeritage NUD (2 NUD arms):
   - `(`, `[`, `{`: one token: committed to newTarget (#0)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 3 more: one token: committed to newTarget (#0)
-  - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <PrivateField>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
+  - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Decorator>, <PrivateField>, <$templateMiddle>, <$templateTail> and 1 more: no candidate, the list fails
   - longest match: a candidate frame (a mark per new best) at `class`, over newTarget (#0), class_ (#1)
 - ClassHeritage LED (4 connectors, 0 binary operators):
   - `.`: one token: led_dot
@@ -255,6 +258,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - <Ident>: two tokens: committed to expr (#18), unless labelled (#12) admits the token (then the frame) (takes a mark: it can fail after `Expr`)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 3 more: one token: committed to expr (#18) (takes a mark: it can fail after `Expr`)
   - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
+  - <Decorator>: one token: committed to decl (#17)
   - two tokens (pairs): variable (#1) at `let` only before '['|'{'|Ident; using (#16) at `await` only before 'using'; using (#16) at `using` only before '['|'{'|Ident; decl (#17) at `async` only before 'function'; decl (#17) at `import` only before '*'|'defer'|'source'|'{'|Ident|String
   - two tokens (SECOND): variable (#1) only before '['|'{'|Ident; if_ (#2) only before '('; for_ (#3) only before '('|'await'; while_ (#4) only before '('; switch_ (#6) only before '('; try_ (#11) only before '{'; labelled (#12) only before ':'; with_ (#15) only before '('; using (#16) only before '['|'using'|'{'|Ident
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over variable (#1), labelled (#12), using (#16), decl (#17), expr (#18)
@@ -298,7 +302,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: two tokens: committed to identPair (#0) (takes a mark: it can fail after `Ident`)
   - <Ident>: two tokens: committed to shorthand (#1), unless identPair (#0) admits the token (then the frame)
   - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>: one token: committed to pair (#2) (takes a mark: it can fail after `alt(String \| Number \| HexNumber \| Octal…`)
-  - <Template>, <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Regex>, <PrivateField>, <$templateHead> and 3 more: no candidate, the list fails
+  - <Template>, <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Regex>, <Decorator>, <PrivateField> and 4 more: no candidate, the list fails
   - two tokens (SECOND): identPair (#0) only before ':'; rest (#3) only before '['|'{'|Ident
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over identPair (#0), shorthand (#1), pair (#2)
 - BindingProperty / shorthand: `opt('=' Expr)`: one token; takes a mark: it can fail after `'='`
@@ -316,7 +320,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `...`: two tokens: committed to rest (#1) (takes a mark: it can fail after `'...'`)
   - `[`, `{`: one token: committed to bindingElement (#0)
   - <Ident>: one token: committed to bindingElement (#0)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 10 more: no candidate, the list fails
+  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 11 more: no candidate, the list fails
   - two tokens (SECOND): rest (#1) only before '['|'{'|Ident
 - ArrayBindingElement / rest: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident \| Bindi…`: by attempt
 
@@ -351,7 +355,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `[`, `{`: two tokens: committed to bindingPattern (#1)
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: no candidate, the list fails
   - <Ident>: one token: committed to ident (#0)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 10 more: no candidate, the list fails
+  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 11 more: no candidate, the list fails
   - two tokens (SECOND): bindingPattern (#1) only before ','|'...'|'['|']'|'{'|'}'|…8
 
 ### ForHead
@@ -395,7 +399,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `break`, `case`, `catch`, `continue`, `debugger`, `default`, `do`, `else` and 14 more: no candidate, the list fails
   - `const`, `let`, `var`: two tokens: committed to declaration (#0)
   - `using`: two tokens: committed to of (#1), unless declaration (#0) admits the token (then the frame) (takes a mark: it can fail after `Expr`)
-  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 4 more: one token: committed to of (#1) (takes a mark: it can fail after `Expr`)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 5 more: one token: committed to of (#1) (takes a mark: it can fail after `Expr`)
   - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
   - two tokens (pairs): declaration (#0) at `await` only before 'using'; declaration (#0) at `using` only before '['|'{'|Ident
   - two tokens (SECOND): declaration (#0) only before '['|'using'|'{'|Ident
@@ -412,7 +416,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `case`: one token: committed to case_ (#0) (takes a mark: it can fail after `'case'`)
   - `catch`, `else`, `enum`, `extends`, `finally`, `in`, `instanceof`: no candidate, the list fails
   - `default`: two tokens: committed to default_ (#1) (takes a mark: it can fail after `'default'`)
-  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 4 more: one token: committed to stmt (#2)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 5 more: one token: committed to stmt (#2)
   - <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
   - two tokens (SECOND): default_ (#1) only before ':'
 - SwitchCase / case_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
@@ -427,9 +431,10 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `function`: two tokens: committed to function_ (#0), unless generator (#1) admits the token (then the frame) (takes a mark: it can fail after `'function'`)
   - `import`: two tokens: committed to importDeclaration (#10) (takes a mark: it can fail after `'import'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 11 more: no candidate, the list fails
+  - <Decorator>: two tokens: committed to decorated (#6) (takes a mark: it can fail after `(DecoratorExpr many(DecoratorExpr))`)
   - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; exportDefault (#7) at `export` only before 'default'; exportAll (#8) at `export` only before '*'; exportNamed (#9) at `export` only before '{'
-  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; class_ (#4) only before Ident; decorated (#6) only before '('|Ident; exportDefault (#7) only before 'default'; exportAll (#8) only before '*'; exportNamed (#9) only before '{'; importDeclaration (#10) only before '*'|'defer'|'source'|'{'|Ident|String
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), exportDeclaration (#5), exportDefault (#7) and 2 more
+  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; class_ (#4) only before Ident; decorated (#6) only before '('|'.'|'@'|'async'|'class'|'export'|…4; exportDefault (#7) only before 'default'; exportAll (#8) only before '*'; exportNamed (#9) only before '{'; importDeclaration (#10) only before '*'|'defer'|'source'|'{'|Ident|String
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), exportDeclaration (#5), decorated (#6) and 3 more
 - one token, no mark: 13 inline choices, 7 star, 6 opt, 1 sep
 - Decl / function_: `sep(Param, ',')`: by attempt
 - Decl / generator: `sep(Param, ',')`: by attempt
@@ -482,7 +487,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `*`, `@`, `[`: one token: committed to member (#2)
   - `;`: one token: committed to empty (#0)
   - `static`: two tokens: committed to member (#2), unless staticBlock (#1) admits the token (then the frame)
-  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 1 more: one token: committed to member (#2)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 2 more: one token: committed to member (#2)
   - <Template>, <JSXSelfClose>, <JSXClose>, <JSXText>, <JSXString>, <Regex>, <$templateHead>, <$templateMiddle> and 2 more: no candidate, the list fails
   - two tokens (pairs): staticBlock (#1) at `static` only before '{'
   - two tokens (SECOND): staticBlock (#1) only before '{'
@@ -519,7 +524,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `defer`: two tokens: committed to defaultBinding (#1), unless deferNamespace (#0) admits the token (then the frame)
   - `{`: two tokens: committed to named (#2) (takes a mark: it can fail after `'{'`)
   - <Ident>: one token: committed to defaultBinding (#1)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 10 more: no candidate, the list fails
+  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 11 more: no candidate, the list fails
   - two tokens (pairs): deferNamespace (#0) at `defer` only before '*'
   - two tokens (SECOND): deferNamespace (#0) only before '*'; named (#2) only before '}'|Ident|String; namespace (#3) only before 'as'
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over deferNamespace (#0), defaultBinding (#1)
@@ -532,7 +537,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ImportSpecifier (3 alternatives):
   - `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default` and 28 more: two tokens: committed to renamed (#0) (takes a mark: it can fail after `Ident`)
   - <Ident>: two tokens: committed to plain (#1), unless renamed (#0) admits the token (then the frame)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <Template>, <JSXSelfClose> and 9 more: no candidate, the list fails
+  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <Template>, <JSXSelfClose> and 10 more: no candidate, the list fails
   - <String>: two tokens: committed to stringRenamed (#2) (takes a mark: it can fail after `String`)
   - two tokens (SECOND): renamed (#0) only before 'as'; stringRenamed (#2) only before 'as'
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over renamed (#0), plain (#1)
@@ -574,7 +579,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 
 - JSXElement (3 alternatives):
   - `<`: two tokens: committed to lt (#0), unless lt2 (#1), lt3 (#2) admit the token (then the frame) (takes a mark: it can fail after `'<'`)
-  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 11 more: no candidate, the list fails
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 12 more: no candidate, the list fails
   - two tokens (SECOND): lt (#0) only before Ident; lt2 (#1) only before Ident; lt3 (#2) only before '>'
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over lt (#0), lt2 (#1), lt3 (#2)
 - one token, no mark: 4 star, 1 opt

@@ -1752,7 +1752,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.tsx",
-      "match": "@(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?![a-zA-Z0-9_$\\\\-￿])"
+      "match": "@(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*"
     },
     "privatefield": {
       "name": "variable.other.property.tsx",
