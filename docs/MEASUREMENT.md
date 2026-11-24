@@ -195,7 +195,7 @@ How to read it:
 - The products differ (CST against AST), as stated above; this is not a like-for-like claim.
 #### The element inputs (TSX and JSX)
 
-`measure-profile` full scope, run 45276033027, monogram at `908ed1e` (with only the input change of
+`measure-profile` full scope, run 45276033027, monogram at `143e93b` (with only the input change of
 the harness on top), AMD EPYC runner; Callgrind instructions per parse. The inputs
 ([`element-inputs.ts`](../test/bench-rust-profile/element-inputs.ts)) are the tsc conformance
 corpus's element code filtered to the parts BOTH parsers accept (and tsc's parser): 319 TSX parts of
