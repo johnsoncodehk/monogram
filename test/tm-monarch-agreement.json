@@ -15,6 +15,11 @@
    "name -> type": 3,
    "name -> punct": 12,
    "regexp -> punct": 2
+  },
+  "refusals": {
+   "textmate": [],
+   "monarch": [],
+   "treesitter-highlights": []
   }
  },
  "javascript": {
@@ -43,6 +48,11 @@
    "regexp -> punct": 1,
    "comment -> regexp": 9,
    "comment -> string": 7
+  },
+  "refusals": {
+   "textmate": [],
+   "monarch": [],
+   "treesitter-highlights": []
   }
  }
 }

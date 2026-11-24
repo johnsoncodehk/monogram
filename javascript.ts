@@ -369,9 +369,10 @@ export const jsLedPrecs = [
 export const ecmaPrec = [
   // Assignment operators require a LeftHandSideExpression target (ECMAScript
   // AssignmentTargetType): `-x = 1`, `++x = 1`, `x++ = 1` are syntax errors; `x = 1`,
-  // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine.
-  right(lhsTarget('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=')),
-  right(lhsTarget('??=', '||=', '&&=')),
+  // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. The logical assignments are three more
+  // AssignmentExpression arms (13.15 `LeftHandSideExpression &&= AssignmentExpression`, `||=`, `??=`):
+  // one level, so each operator's right operand is a full AssignmentExpression (`c ||= a = b`).
+  right(lhsTarget('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&=')),
   left('??'),
   left('||'),
   left('&&'),
