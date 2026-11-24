@@ -2221,6 +2221,8 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
   }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids))].join('\n\n');
   // before the library: their steps record the combinators they call (rsLib)
   const lookSharedFns = lookFns(ir, ids, ar) + sharedFns(ir, ids, ar);
+  // printed inside the library below, but their steps record what they call too: before it
+  const rebindFns = rebindRuntimeRs(ir, ids, shared), demandFns = demandFnsRs(ir, ids, ar, shared);
   if (rsNeed('ctx_word') && ctxWordLids(ir, ids).length) rsLib('ctx');
   const matchTemplate = ir.tpl ? `    // interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
     // (the grammar's expression rule, or the rule a withHoles reference names).
@@ -2678,7 +2680,7 @@ impl<${rsLt()}B: Builder> Parser<${rsLt()}B> {
     fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }${rsNeed('nud_none') ? `
     /// A NUD that matched nothing, from its commit switch: the state its frame leaves then (prattRule's nudClose).
     #[inline(always)]
-    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }` : ''}${targetRuntimeRs(ir)}${rebindRuntimeRs(ir, ids, shared)}${demandFnsRs(ir, ids, ar, shared)}${rsNeed('mark') ? `
+    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }` : ''}${targetRuntimeRs(ir)}${rebindFns}${demandFns}${rsNeed('mark') ? `
     #[inline(always)]
     fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
     /// Undo everything since m: the position (as back), the scratch list and the builder.
