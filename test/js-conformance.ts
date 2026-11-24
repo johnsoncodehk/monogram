@@ -465,8 +465,55 @@ const iN = identifierReferences.accept.length + identifierReferences.reject.leng
 console.log('\n── identifier references ──');
 console.log(`  ${iN - new Set(i_fail.map((f) => f.replace(/ \(TypeScript\)$/, ''))).size}/${iN} as the productions (JavaScript: acorn and tsc's JS mode agreeing; TypeScript: tsc)`);
 for (const c of i_fail) console.log('    - ' + c);
+// ── Statement positions (14 Statement, 14 Declaration / StatementListItem, 16.2.3 ExportDeclaration) ──
+// A sub-statement (the body of `if` / `else`, a loop, `with`, a label) is a Statement, never a
+// Declaration: there `let` is the identifier (`if (f) let \n{}` is `let`, ASI, a block) and no
+// `let` / `const` / `using` / class / generator / async function declaration stands. Annex B
+// (B.3.3, sloppy mode) and LabelledItem keep a plain FunctionDeclaration in an `if` clause and
+// after a label. `export` takes a Declaration or a VariableStatement, never another statement
+// that begins with a declaration word (`export let: x;`). JavaScript: the productions, acorn
+// agreeing (Script goal; Module for `export`). TypeScript: tsc's parser, which takes any
+// declaration in a sub-statement position and leaves it to the checker.
+const statementPositions: { accept: string[]; reject: string[] } = {
+  accept: [
+    'if (f) let \n{}', 'while (f) let \n{}', 'a: let \n{}', 'if (f) let;', 'if (f) let = 1;',
+    'if (x) function f() {}', 'if (x) function f() {} else function g() {}', 'a: function f() {}',
+    'export var a; export let b; export const c = 1; export function f() {} export class C {}',
+  ],
+  reject: [
+    'if (x) let y = 1;', 'if (x) let [a] = b;', 'while (x) const y = 1;', 'for (;;) let y;', 'do let y; while (x)',
+    'a: let y;', 'with (x) const y = 1;', 'if (x) class C {}', 'while (x) function f() {}',
+    'if (x) async function f() {}', 'if (x) function* g() {}', 'a: function* g() {}', 'if (x) using y = z;',
+    'export let: x;', 'export let.x = 1;', 'export var: x;', 'export using x = y;', 'export let\n;',
+  ],
+};
+const p_fail: string[] = [];
+const p_tsDeparts: string[] = [];
+{
+  const acorn = await import('acorn');
+  const acornAccepts = (code: string) => { try { acorn.parse(code, { ecmaVersion: 'latest', sourceType: code.startsWith('export') ? 'module' : 'script' }); return true; } catch { return false; } };
+  const tsParse = createParser((await import('../typescript.ts')).default).parse;
+  const tsWe = (code: string) => { try { tsParse(code); return true; } catch (e) { if (isInputError(e)) return false; throw e; } };
+  const tsAccepts = (code: string) => !((ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) as any).parseDiagnostics?.length);
+  const tsOnly = ['export using: x;', 'export await using meta x = y;', 'export using\nx = y;', 'export using x = y;', 'export await using x = y;', 'if (x) let y = 1;', 'if (x) class C {}'];
+  for (const [want, codes] of [[true, statementPositions.accept], [false, statementPositions.reject]] as const) {
+    for (const code of codes) {
+      if (acornAccepts(code) !== want) p_fail.push(`acorn ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case`);
+      if (weAccept(code) !== want) p_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
+    }
+  }
+  for (const code of [...new Set([...statementPositions.accept, ...statementPositions.reject, ...tsOnly])]) {
+    const want = tsAccepts(code);
+    if (tsWe(code) !== want) p_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)} (TypeScript, tsc ${want ? 'accepts' : 'rejects'})`);
+    if (statementPositions.accept.includes(code) !== want && !tsOnly.includes(code)) p_tsDeparts.push(code);
+  }
+}
+console.log('\n── statement positions ──');
+console.log(`  ${statementPositions.accept.length + statementPositions.reject.length} as the productions (JavaScript, acorn agreeing) and tsc (TypeScript; ${p_tsDeparts.length} where tsc's parser departs from the productions)${p_fail.length ? '' : ', all agree'}`);
+for (const c of p_fail) console.log('    - ' + c);
 // Corpora 1, 2, the statement ends, the for heads, the class element words, the declaration
-// lists, the new targets, the class heritage and the identifier references are hard gates.
+// lists, the statement positions, the new targets, the class heritage and the identifier
+// references are hard gates.
 // ── Expected-fail: inputs the productions reject that the grammar accepts today, each with its
 // cause. The gate fails when one of them is rejected (remove it then) or tsc stops rejecting it.
 const expectedFail: { code: string; reason: string }[] = [
@@ -479,5 +526,5 @@ for (const { code, reason } of expectedFail) {
 console.log('\n── expected-fail ──');
 console.log(`  ${expectedFail.length} accepted although the productions reject them (${new Set(expectedFail.map((e) => e.reason)).size} cause(s))${x_fail.length ? '' : ', as recorded'}`);
 for (const c of x_fail) console.log('    - ' + c);
-const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + i_fail.length + x_fail.length > 0;
+const gateFailed = v_fail.length + r_leak.length + s_fail.length + f_fail.length + c_fail.length + d_fail.length + n_fail.length + h_fail.length + i_fail.length + p_fail.length + x_fail.length > 0;
 if (gateFailed) process.exit(1);
