@@ -9,8 +9,8 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './parser-ir.ts';
-import type { ArmForm } from './declared-targets.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type AssignTargetsIR } from './parser-ir.ts';
+import type { ArmForm } from './assign-targets.ts';
 import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
@@ -165,16 +165,16 @@ const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; 
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
 const markSuffixGo = (mk: MarkForm, f: GoForm): string => (mk === 'none' ? 'C' : mk === 'leaves' && f !== 'R' ? 'L' : '');
-// An arm's form when it won (declared-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (assign-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormGo = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'p.accF' : pratt ? '(p.form &^ 3)' : 'p.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
-const lowGo = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
+const lowGo = (ir: { assignTargets?: AssignTargetsIR }, f: string): string => (ir.assignTargets ? `(${f} & 3)` : f);
 // Declared target contexts' runtime on an engine type (as target-ts.ts targetRuntimeTs): the open
 // container's accumulator `acc` (an enclosing one's is in its arm's frame: accRun), `accF` the form of the container
 // arm that just matched; `nudOkF` a committed NUD arm with a form of its own.
-const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? `\n\tacc, accF uint8${ir.targets.demand ? '\n\trpAt1, rpN, rpOver int // the demand re-parse in progress (its start + 1; 0: none), the re-parses, those above the bound (src/reparse-family.ts)' : ''}` : '');
+const targetFieldsGo = (ir: ParserIR): string => (ir.assignTargets ? `\n\tacc, accF uint8${ir.assignTargets.demand ? '\n\trpAt1, rpN, rpOver int // the demand re-parse in progress (its start + 1; 0: none), the re-parses, those above the bound (src/reparse-family.ts)' : ''}` : '');
 function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
-  const t = ir.targets;
+  const t = ir.assignTargets;
   const ret = node === 'int32' ? 'n' : 'n, true';
   const nudOkF = `func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
   // Without contexts a committed prefix-shaped NUD arm (FORM_UNARY, nudLowForm) is the one with a form of its own.
@@ -203,7 +203,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
-    // Declared target contexts (declared-targets.ts): computed only in the building forms (a
+    // Declared target contexts (assign-targets.ts): computed only in the building forms (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
     // accSwap's result, the enclosing one, is accEnd's argument (Go evaluates the calls of an
     // expression left to right), so it is kept in the frame, not on a stack.
@@ -212,7 +212,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // A demand twin's Pratt child (DemandIR): the position is read first (Go runs the calls of an
     // expression left to right).
     dfix: (call) => (f === 'R' ? call : `p.dfix(p.rpPos(), ${call})`),
-    target: (mask) => { if (f === 'R') throw new Error('go: a target() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
+    assignTarget: (mask) => { if (f === 'R') throw new Error('go: an assignTarget() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
     accRun: (cond, af) => (f === 'R' ? cond : `p.accEnd(p.accSwap(${af.init}), ${cond}, ${af.low}, ${af.last})`),
     armForm: armFormGo,
     // A body guard (parser-ir.ts annotateSteps): opt / sep test it before their one attempt,
@@ -1447,12 +1447,12 @@ ${cases.map((c) => `\t\tcase ${c.idx}:\n${c.arms.map((a) => `\t\t\t${a}`).join('
   };
 };
 
-// A Pratt rule's forms (declared-targets.ts; without target contexts every arm's but the prefix
+// A Pratt rule's forms (assign-targets.ts; without target contexts every arm's but the prefix
 // arm's is 0, a postfix or binary node's 1): each NUD arm's (fm), a postfix token arm's, the
 // template postfix's, the postfix operator node's, the binary node's (not a target, its leaf bits,
-// and those its left operand passes: info.acc); lf masks the low bits; ctx is targetOps' test.
+// and those its left operand passes: info.acc); lf masks the low bits; ctx is assignTargetOps' test.
 function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
-  const D = ir.targets?.demand, dem = demandLids(r, ids, D);
+  const D = ir.assignTargets?.demand, dem = demandLids(r, ids, D);
   const postTok = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   return {
     fm: (i: number) => (r.nudForm ? armFormGo(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`),
@@ -1560,7 +1560,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `${goPrattOpTables(r, ids, ir.targets?.demand)}
+    entry: `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
@@ -1966,7 +1966,7 @@ function rbSite(ids: LexIdPlan, recv: string, steps: string[]): number {
 // demandFnsTs): the twins (twin<k>, the closure's rd rules' `__twin` functions), dfix, twinForm,
 // reparseFrom (src/reparse-family.ts) and its externs, and per rule the cold demand_<rule>.
 function demandFnsGo(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
-  const D = ir.targets?.demand;
+  const D = ir.assignTargets?.demand;
   if (!D) return '';
   const w = recv !== 'engine';
   const S = w ? goSteps(ids, 'W', recv, ENGINE_GO_W, ar) : goSteps(ids, '', 'engine', ENGINE_GO);

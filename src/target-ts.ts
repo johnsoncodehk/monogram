@@ -4,9 +4,9 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './parser-ir.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type AssignTargetsIR } from './parser-ir.ts';
 import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
-import type { ArmForm } from './declared-targets.ts';
+import type { ArmForm } from './assign-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { Grammar } from './types.ts';
@@ -782,7 +782,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     accSep: () => (m === 'w' ? '_accS()' : 'true'),
     // A demand twin's Pratt child (DemandIR): the position is read before the call (arguments run left to right).
     dfix: (call) => `_dfix(pos, ${call})`,
-    target: (mask) => { if (m !== 'w') throw new Error('ts: a target() step in a recognized body'); return `(_form & ${mask}) !== 0`; },
+    assignTarget: (mask) => { if (m !== 'w') throw new Error('ts: an assignTarget() step in a recognized body'); return `(_form & ${mask}) !== 0`; },
     accRun: (cond, f) => (m === 'w' ? `_accEnd(_accSwap(${f.init}), ${cond}, ${f.low}, ${f.last})` : cond),
     armForm: armFormTs,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
@@ -835,10 +835,10 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   return L;
 }
 const stepCond = (s: Step, ids: LexIdPlan, m: Mode): string => stepExpr(s, tsSteps(ids, m));
-// An arm's form when it won (declared-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (assign-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormTs = (f: ArmForm, pratt: boolean): string => (f.k === 'const' ? `${f.v}` : f.k === 'acc' ? '_accF' : pratt ? '(_form & -4)' : '_form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
-const lowTs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
+const lowTs = (ir: { assignTargets?: AssignTargetsIR }, f: string): string => (ir.assignTargets ? `(${f} & 3)` : f);
 
 // ParserIR.lookaheads, one function each, in recognize form (ParserIR.forms): whether the body
 // matches here; it undoes the position (a Pratt rule it runs leaves nothing behind: its node is
@@ -1028,7 +1028,7 @@ const NUD_FAIL_TS = '{ return nudNone(); }';
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const cn = J(r.name);
   const d = r.nudDispatch;
-  // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
+  // Each arm's form (assign-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormTs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowTs(ir, f);
@@ -1038,7 +1038,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const leftOps = binLeftOps(prattOpTables(r, ids));
   // The demand operators of this rule (DemandIR.ops): their node is ASSIGNED, and a left operand
   // with a twin number goes to the cold `<rule>_demand` (demandFnsTs).
-  const D = ir.targets?.demand;
+  const D = ir.assignTargets?.demand;
   const dem = demandLids(r, ids, D);
   const tgtFail = `(${leftOps.map((o) => `opLid === ${o.lid} ? ${o.ctx ? `(form & ${o.ctx}) !== ${o.ctx}` : 'false'} : `).join('')}${lf('form')} !== 0)`;
   const keep = leftOps.filter((o) => o.acc);
@@ -1214,10 +1214,10 @@ ${sites.flatMap((st, i) => st.map((c, k) => `    case ${i * 4 + k}: return ${c};
 ${shared.rebindFamily(ir, 'free')}
 ${shared.rebindFamily(ir, 'methods')}`;
 }
-// Declared target contexts (declared-targets.ts): the open container's accumulator `_acc` (its pass
+// Declared target contexts (assign-targets.ts): the open container's accumulator `_acc` (its pass
 // bits and the last bits of a child that must stay final; an enclosing one's is an argument in its
 // arm's frame: _accSwap's result passed to _accEnd), and `_accF`, the form of the container arm that just matched.
-function targetRuntimeTs(t: TargetsIR): string {
+function targetRuntimeTs(t: AssignTargetsIR): string {
   return `let _acc = 0, _accF = 0;
 function _accSwap(init: number): number { const prev = _acc; _acc = init; return prev; }
 function _accEnd(prev: number, ok: boolean, low: number, last: number): boolean { if (ok) { const p = _acc & ${t.passes}; _accF = p | low | ((p << 1) & last); } _acc = prev; return ok; }
@@ -1231,7 +1231,7 @@ function _accS(): boolean { _acc &= ~((_acc >> 1) & ${t.passes}); return true; }
 // reparseFrom, src/reparse-family.ts: its form, 0 when it fails), and per rule the cold
 // `<rule>_demand` its demand operators reach on a left operand with a twin number.
 function demandFnsTs(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
-  const D = ir.targets?.demand;
+  const D = ir.assignTargets?.demand;
   if (!D) return '';
   const S = tsSteps(ids, 'w');
   const twinOf = (f: string) => `((${f} >> ${DEFER_SHIFT}) & 7) - 1`;
@@ -1987,7 +1987,7 @@ function emitAstRdAltSteps(
       case 'look':
       case 'ahead':
       case 'aheadCtx':
-      case 'target':
+      case 'assignTarget':
       case 'when':
       case 'sameLine': return false;
     }
@@ -2005,7 +2005,7 @@ function emitAstRdAltSteps(
   const emitSteps = (xs: Step[], sink: string): string =>
     xs.length ? xs.map((x) => emitStep(x, sink)).join(' && ') : 'true';
   const emitStep = (s: Step, sink: string): string => {
-    if (s.t === 'target') throw new Error('ts typed AST: declared target contexts not printed yet');
+    if (s.t === 'assignTarget') throw new Error('ts typed AST: declared target contexts not printed yet');
     ctx.step[s.t]++;
     switch (s.t) {
       case 'lit':
@@ -3200,7 +3200,7 @@ function emitShapeCoverageExport(cov: ShapeEmitCtx): string {
 }
 
 function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): string {
-  if (ir.targets) throw new Error('ts typed AST: declared target contexts are not printed in the typed-AST form yet');
+  if (ir.assignTargets) throw new Error('ts typed AST: declared target contexts are not printed in the typed-AST form yet');
   const cov = newShapeEmitCtx('(aggregate)', ir.lookaheads);
   const fns = shapeIR.rules.map((sir: ShapeIRRule) => {
     const r = ir.rules.find((x) => x.name === sir.name);
@@ -3562,7 +3562,7 @@ let maxLook = 0;
 let peekEnd = 0;
 let _capped = false;
 let _form = 0;   // assignment-target form of the node the last _nud/_bp call returned
-${ir.targets ? targetRuntimeTs(ir.targets) : ''}let _tail = false;   // whether the node the last _nud call returned closes the access tail
+${ir.assignTargets ? targetRuntimeTs(ir.assignTargets) : ''}let _tail = false;   // whether the node the last _nud call returned closes the access tail
 // A NUD that matched nothing, from its commit switch: the state its frame leaves then.
 function nudNone(): boolean { _capped = false; _form = 0; _tail = false; return false; }
 // Indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none): the set a \`suppress\`

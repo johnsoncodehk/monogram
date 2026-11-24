@@ -616,14 +616,14 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
       }
       const pq = post.get(r)!.get(t.lid);
       if (pq !== undefined && !tailClosed && pq.lbp > minBp && (!r.postfixSameLine || !t.nl)) {
-        if (pq.requireTarget && fm !== 0) return null;
+        if (pq.requireAssignTarget && fm !== 0) return null;
         const sb = scratch.length; scratch.push(left.h); pushLeaf(TT_OPERATOR, pos); pos++;
         left = finish(rid, sb); tailClosed = true; fm = 1; continue;
       }
       const [opLid, opN] = !GT_LEADS.has(t.lid) ? [t.lid, 1] : gtOp(pos);
       const b = bin.get(r)!.get(opLid);
       if (b === undefined || b.lbp <= minBp) break;
-      if ((b.requireTarget && fm !== 0) || (b.noUnaryLhs && fm === 2)) return null;
+      if ((b.requireAssignTarget && fm !== 0) || (b.noUnaryLhs && fm === 2)) return null;
       const ledSave = pos, sb = scratch.length; scratch.push(left.h);
       pushLeaf(TT_OPERATOR, pos); if (opN > 1) opEnd.set(pos, toks[pos + opN - 1]!.end); pos += opN;
       const rhs = prattBp(r, b.rbp);
@@ -692,7 +692,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
             const p = preAt(r, t.lid)!;
             pushLeaf(TT_OPERATOR, pos); pos++;
             const operand = prattBp(r, p.rbp);
-            if (operand !== null && p.requireTarget && form !== 0) { pos = save; scratch.length = sb; restore(ck); capped = false; return null; }
+            if (operand !== null && p.requireAssignTarget && form !== 0) { pos = save; scratch.length = sb; restore(ck); capped = false; return null; }
             if (operand !== null) { scratch.push(operand.h); res = finish(rid, sb); f = p.form; tl = true; }
           } else {
             const steps = a.kind === 'bracket' ? r.nudBrackets[a.index]!.steps : a.kind === 'seq' ? guardSteps(r.nudSeqGuard[a.index]!, r.nudSeqs[a.index]!) : guardSteps(r.nudCappedGuard[a.index]!, r.nudCapped[a.index]!.steps);
@@ -757,7 +757,7 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
           pushLeaf(TT_OPERATOR, pos); pos++;
           const operand = prattBp(r, p.rbp);
           // A prefix operator whose operand must be a target fails the whole call.
-          if (operand !== null && p.requireTarget && form !== 0) { pos = save; scratch.length = sb; restore(ck); capped = false; return null; }
+          if (operand !== null && p.requireAssignTarget && form !== 0) { pos = save; scratch.length = sb; restore(ck); capped = false; return null; }
           if (operand !== null) ends.push([i, pos]);
           if (operand !== null && beats(pos, i)) { scratch.push(operand.h); best = finish(rid, sb); won(i, p.form, true, false); }
           else { scratch.length = sb; restore(ck); }

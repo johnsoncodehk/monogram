@@ -1,11 +1,11 @@
-// patterncalc's ECMAScript-style pattern in its ON-DEMAND form (TargetContext.when 'demand';
-// declared-targets.ts planDemand): the normal parse computes nothing, a container on the left of
+// patterncalc's ECMAScript-style pattern in its ON-DEMAND form (AssignTargetContext.when 'demand';
+// assign-targets.ts planDemand): the normal parse computes nothing, a container on the left of
 // `=` is parsed again by its accumulating twin. A demand context's leaves are the arms the shallow
 // check takes, so `f() = x`, `1 = x`, `[f()] = x` parse here (they do not in patterncalc); `[a + b] =
 // x` and a rest element that is not last do not. `patternGrammar('eager')` is the same context
 // computed in every form (patterndemand-eager.ts): both must give the same verdicts.
 import {
-  token, rule, defineGrammar, left, right, op, targetOps, arm, field,
+  token, rule, defineGrammar, left, right, op, assignTargetOps, arm, field,
   seq, oneOf, range, star, many, opt, sep,
 } from '../../src/api.ts';
 
@@ -41,11 +41,11 @@ export function patternGrammar(when: 'eager' | 'demand') {
     scopeName: `source.patterndemand${when === 'demand' ? '' : 'eager'}`,
     tokens: { Ident, Num },
     prec: [
-      right(targetOps('pattern', '=')),
+      right(assignTargetOps('pattern', '=')),
       left('+'),
     ],
     rules: { Expr, Elem, Prop, Stmt, Program },
-    targets: {
+    assignTargets: {
       pattern: {
         leaves: ['ident', 'num', 'paren', 'member', 'call', 'shorthand'],
         containers: { array: 'all', object: 'all', spread: 'all', rest: 'all', init: 'value', '=': 'left' },

@@ -628,7 +628,7 @@ export const CASES: Case[] = [
   })),
   {
     // Three declared contexts in one grammar (see the fixture): star targets for `=`, a single
-    // target for `+=`, del targets for `del`, each checked by a target() marker after the head.
+    // target for `+=`, del targets for `del`, each checked by an assignTarget() marker after the head.
     grammar: 'startargets', path: './fixtures/startargets.ts',
     accept: ['a = 1;', 'a, b = x;', 'a, *b = x;', '[a, *b] = x;', '(a, b) = x;', 'a.b, c[0] = x;', 'a += 1;', 'a.b += 1;', '(a) += 1;', 'del a;', 'del a, b.c;', 'del [a, (b)];', 'a + b;', 'f();', '*a, b;', 'a, = x;', 'x = a, *b;', 'a = b.c = x;', 'a, b = [c] = x;'],
     reject: ['a + b = x;', 'f() = x;', '[a, b] += x;', '*a += x;', 'a, b += x;', 'del *a;', 'del a + b;', 'del f();', '1 = x;', '[a + 1] = x;', '(a, f()) = x;', 'del (*a);', 'a = f() = x;', 'a = b += x;', 'a += b = x;'],

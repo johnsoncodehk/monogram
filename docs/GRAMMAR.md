@@ -159,7 +159,7 @@ every operand position (Python's, [`python.ts`](../python.ts); fixture
   ```
 
   Its node is the sequence `op operand` with the operator as a literal leaf, so the operand-shape
-  checks (`lhsTarget`, `noUnaryLhs`) do not treat it as a unary.
+  checks (`lhsAssignTarget`, `noUnaryLhs`) do not treat it as a unary.
 - `atLevel(op, Rule)` reads the expression rule `Rule` at `op`'s level: only that level's operators
   and tighter ones continue it, as they would continue an operand of `op`. It is how a context
   that a reference grammar writes with a lower level's rule is written against one ladder:
@@ -215,13 +215,13 @@ deleted (step 5); `??` mixing is not a context (a form, step 6).
 
 ## Declared assignment-target contexts
 
-`lhsTarget` checks only the outermost shape of an operand (no prefix or postfix operator, no binary
+`lhsAssignTarget` checks only the outermost shape of an operand (no prefix or postfix operator, no binary
 node). A language whose targets are DESTRUCTURING patterns, such as ECMAScript's `[a, ...b] = x` or
 Python's `a, *b = x` and `del a, b.c`, declares what may stand there instead. Each target context
 names arms by their stable names (see `arm`):
 
 ```ts
-targets: {
+assignTargets: {
   pattern: {
     leaves: ['ident', 'member', 'paren', 'shorthand'],   // arms that are a target as they are
     containers: { array: 'all', object: 'all', init: 'value', '=': 'left' },   // arms whose children must be targets
@@ -235,28 +235,28 @@ A node passes a context when its arm is a leaf, or a container whose children at
 node whose arm is one rule reference and nothing else (a unit arm that belongs to no context)
 passes when its child passes. Two markers read a context:
 
-- `target('ctx')` after a rule reference in a sequence matches nothing and holds when the node just
-  before it passes: `[Exprs, target('star'), '=', Exprs]`. The head is parsed once, as an
+- `assignTarget('ctx')` after a rule reference in a sequence matches nothing and holds when the node just
+  before it passes: `[Exprs, assignTarget('star'), '=', Exprs]`. The head is parsed once, as an
   expression, and checked only where the `=` tail is taken. Literals may stand between the two, and
   the target may open an `opt` or a branch of an alternation whose branches all begin with
   different literals, reading the rule reference before it: Python's statement head is one arm,
-  `[StarExpressions, opt(alt(['=', target('star'), …], [AugAssign, target('single'), …], …))]`.
+  `[StarExpressions, opt(alt(['=', assignTarget('star'), …], [AugAssign, assignTarget('single'), …], …))]`.
   Anywhere else (after a repetition, an `opt`, a token) the generator refuses it: what the target
   reads must be one rule's node, with no other rule run between.
-- `targetOps('ctx', ...ops)` in a precedence level: the left operand of these infix operators must
-  pass the context (ECMAScript's `=` takes a pattern; `+=` keeps `lhsTarget`).
+- `assignTargetOps('ctx', ...ops)` in a precedence level: the left operand of these infix operators must
+  pass the context (ECMAScript's `=` takes a pattern; `+=` keeps `lhsAssignTarget`).
 
 A grammar declares at most three contexts. The portable engine computes the check as part of the
-form every Pratt call already returns, so a grammar without `targets` emits the same parser as
+form every Pratt call already returns, so a grammar without `assignTargets` emits the same parser as
 before.
 
 A context may instead be computed ON DEMAND (`when: 'demand'`), for a language where the question
 is rare (ECMAScript's `=` meets an array or object literal a few times in thousands): the normal
-parse computes nothing, and an array or object literal on the left of the `targetOps` operator is
+parse computes nothing, and an array or object literal on the left of the `assignTargetOps` operator is
 parsed again by its accumulating twin, from its first token to the operator (the shared
 `reparseFrom`, `src/reparse-family.ts`). Its leaves must be exactly the arms the shallow check
 takes (the generator names any arm that breaks this); it must be the grammar's only context, no
-`target(...)` marker may read it, and a `last` arm must be a container. A nested container is
+`assignTarget(...)` marker may read it, and a `last` arm must be a container. A nested container is
 parsed again by its own twin, so each token is parsed at most once more per enclosing container.
 Fixture: [`test/fixtures/patterndemand.ts`](../test/fixtures/patterndemand.ts) (the same rows as
 its eager twin). The retiring jsTarget keeps the shallow check for such a grammar. The interpreter checks the same thing by walking its tree. Fixtures:

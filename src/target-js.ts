@@ -48,7 +48,7 @@ const plainGroup = (e: RuleExpr): e is Extract<RuleExpr, { type: 'group' }> =>
   e.type === 'group' && !(e.suppress && e.suppress.length) && !e.ctxMode && e.when === undefined;
 function analyze(grammar: Grammar) {
   const {
-    tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
+    tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireAssignTargetOps,
     ledPrecByConnector, binaryConnectors, connectorLbp, atLevelBp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
@@ -74,7 +74,7 @@ function analyze(grammar: Grammar) {
     const alts = r.body.type === 'alt' ? r.body.items : [r.body];
     if (alts.some((alt) => atLevelIn(alt) && !(prattRules.has(r.name) && selfAtLevelEnd(alt, r.name)))) throw new Error(`jsTarget: rule ${r.name} reads a rule atLevel(…); not supported, use the portable targets`);
   }
-  if (grammar.targets && Object.keys(grammar.targets).length) throw new Error(`jsTarget: declared target contexts (Grammar.targets: ${Object.keys(grammar.targets).join(', ')}) are not supported; use the portable targets`);
+  if (grammar.assignTargets && Object.keys(grammar.assignTargets).length) throw new Error(`jsTarget: declared target contexts (Grammar.assignTargets: ${Object.keys(grammar.assignTargets).join(', ')}) are not supported; use the portable targets`);
 
   // First-token dispatch.
   function firstTokenOf(alt: RuleExpr): FirstTok {
@@ -238,7 +238,7 @@ function analyze(grammar: Grammar) {
             if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
             continue;
           }
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'assignTarget') continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) {
@@ -259,7 +259,7 @@ function analyze(grammar: Grammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -395,7 +395,7 @@ function analyze(grammar: Grammar) {
 
 
   return {
-    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps, binaryConnectors,
+    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireAssignTargetOps, binaryConnectors,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
@@ -1231,15 +1231,15 @@ export const jsTarget: Target = {
   emitParser: emitJsParser,
 };
 
-// A grammar whose every declared target context is on demand (TargetContext.when) is parsed by
-// this retiring emitter with the shallow check alone: its `targetOps` operators require a target
-// as `lhsTarget` does (a recorded divergence, docs/CORRECTNESS.md: it takes `[a + b] = x`). An
+// A grammar whose every declared target context is on demand (AssignTargetContext.when) is parsed by
+// this retiring emitter with the shallow check alone: its `assignTargetOps` operators require a target
+// as `lhsAssignTarget` does (a recorded divergence, docs/CORRECTNESS.md: it takes `[a + b] = x`). An
 // eager context stays refused.
 function shallowDemand(grammar: Grammar): Grammar {
-  const t = grammar.targets;
+  const t = grammar.assignTargets;
   if (!t || !Object.keys(t).length || Object.values(t).some((c) => c.when !== 'demand')) return grammar;
-  const precs = grammar.precs.map((l) => ({ ...l, operators: l.operators.map((o) => (o.targetCtx === undefined ? o : (({ targetCtx: _, ...rest }) => ({ ...rest, requireTarget: true }))(o))) }));
-  const { targets: _t, ...rest } = grammar;
+  const precs = grammar.precs.map((l) => ({ ...l, operators: l.operators.map((o) => (o.assignTargetCtx === undefined ? o : (({ assignTargetCtx: _, ...rest }) => ({ ...rest, requireAssignTarget: true }))(o))) }));
+  const { assignTargets: _t, ...rest } = grammar;
   return { ...rest, precs };
 }
 function emitJsParser(grammar: Grammar): string {
@@ -1346,7 +1346,7 @@ function emitJsParser(grammar: Grammar): string {
       }
       return arr;
     };
-    e.emit(`type OpInfo = { lbp: number; rbp: number; assoc: string; position: string; requireTarget?: boolean; when?: { mask: number; val: number } };`);
+    e.emit(`type OpInfo = { lbp: number; rbp: number; assoc: string; position: string; requireAssignTarget?: boolean; when?: { mask: number; val: number } };`);
     e.emit(`const OP_BY_T: (OpInfo | null)[] = ${J(byT(a.opTable))};`);
     e.emit(`const PREFIX_BY_T: (OpInfo | null)[] = ${J(byT(a.prefixOps))};`);
   }
@@ -1369,7 +1369,7 @@ function emitJsParser(grammar: Grammar): string {
     for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
     for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
     const rt = new Array<number>(tSize).fill(0);
-    for (const v of a.requireTargetOps) {
+    for (const v of a.requireAssignTargetOps) {
       const d = st.classifyKey(v);
       if (d.kind !== 'tok' && d.t > 0) rt[d.t] = 1;
     }
@@ -1382,7 +1382,7 @@ function emitJsParser(grammar: Grammar): string {
   // `++x`) — head kid is an operator-tag leaf in prefixOps — or a postfix-update (`x++`) —
   // tail kid is an operator-tag leaf in postfixOpValues. A parenthesized cover / member /
   // element / call / non-null tail has no operator-tag leaf at head or tail, so it passes.
-  e.emit(`function _notTarget(lhs: number) {`);
+  e.emit(`function _notAssignTarget(lhs: number) {`);
   if (a.unaryRows) e.emit(`  if ((rowCapped[lhs] & 2) !== 0) return true;`);
   e.emit(`  const n = rowCount[lhs]; if (n === 0) return false;`);
   e.emit(`  const cs = rowStart[lhs];`);
@@ -1408,7 +1408,7 @@ function emitJsParser(grammar: Grammar): string {
   e.emit(`  return false;`);
   e.emit(`}`);
   // Head-leaf TEXT of a node: descend the LEFTMOST-child spine to the OUTERMOST leaf and return its
-  // token text (the SAME head-leaf the _notTarget gate reads, generalized to recurse through child
+  // token text (the SAME head-leaf the _notAssignTarget gate reads, generalized to recurse through child
   // nodes). Drives the notLeftLeaf LED gate: a node whose head leaf text is in the arm's word set
   // (e.g. `void`/`null`/`this` for the type `.` qualification) is not a valid LEFT operand of the
   // arm. A childless ($missing recovery) node returns '' (matches no word → the arm is not blocked).
@@ -2194,8 +2194,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // A target-requiring prefix (`++`/`--`) operand must be a LeftHandSideExpression
       // (`++-x`, `++ ++x`, `++x--`, `++await x` are syntax errors). Fail hard like
       // noUnaryLhs. A recovery-synthesized $missing operand has no children, so
-      // _notTarget returns false → recovery is not falsely rejected.
-      e.emit(`        if (rhs >= 0 && info.requireTarget && _notTarget(rhs)) break _fail;`);
+      // _notAssignTarget returns false → recovery is not falsely rejected.
+      e.emit(`        if (rhs >= 0 && info.requireAssignTarget && _notAssignTarget(rhs)) break _fail;`);
       e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; nudClosed = true; }`);
       e.emit(`      }`);
       e.emit(`    }`);
@@ -2291,7 +2291,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // A target-requiring postfix (`++`/`--`) may not apply to a unary/update operand
   // (`++x++`, `x++ ++`): its operand must be a LeftHandSideExpression. Fail hard (like
   // noUnaryLhs), so the expression can't reparse some other way.
-  e.emit(`          if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
+  e.emit(`          if (REQTGT_T[opT] !== 0 && _notAssignTarget(lhs)) break _fail;`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
   e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
@@ -2300,7 +2300,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`      } else {`);
   // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
   // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Like noUnaryLhs, fail hard.
-  e.emit(`        if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
+  e.emit(`        if (REQTGT_T[opT] !== 0 && _notAssignTarget(lhs)) break _fail;`);
   if (a.unaryRows) e.emit(`        if (NOUNARY_T[opT] !== 0 && (rowCapped[lhs] & 2) !== 0) break _fail;`);
   e.emit(`        if (NOUNARY_T[opT] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);

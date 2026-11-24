@@ -1,6 +1,6 @@
 // Reparse family: `reparseFrom(p0, stop, k)`, the one primitive that parses a stretch of tokens
 // again by a routine of the engine's and puts everything back, authored once and printed for
-// every target (the demand form of a declared target context, declared-targets.ts planDemand:
+// every target (the demand form of a declared target context, assign-targets.ts planDemand:
 // a container on the left of a demand operator parsed again by its accumulating twin).
 //
 // From the mark p0 (a token index), routine k (`rpTwin`: the engine's switch) runs; it holds when

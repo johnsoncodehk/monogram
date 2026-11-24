@@ -1,6 +1,6 @@
-// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.targets) in the interpreter (interpreter.ts): the
+// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.assignTargets) in the interpreter (interpreter.ts): the
 // predicate as a WALK over the CST, the reference the portable engine's synthesized form
-// (declared-targets.ts) is held to by the parity gates. A node passes context `ctx` iff its arm is
+// (assign-targets.ts) is held to by the parity gates. A node passes context `ctx` iff its arm is
 // one of the context's leaves, or one of its containers whose children at the named field (every
 // rule child: 'all'; a binary node's left operand: 'left') all pass, a child whose arm is a `last`
 // arm of the context being the final such child with no ',' after it; a node of a unit arm (one
@@ -17,8 +17,8 @@ type Role = { leaf: Set<number>; field: Map<number, string>; last: Set<number> }
 export type ArmInfo = { name: string; unit: boolean; refs: Map<RuleExpr, string> | null; op?: string };
 
 
-export function targetWalker(grammar: Grammar, rules: Iterable<RuleDecl>, tokenNames: Set<string>) {
-  const decl = grammar.targets!;
+export function assignTargetWalker(grammar: Grammar, rules: Iterable<RuleDecl>, tokenNames: Set<string>) {
+  const decl = grammar.assignTargets!;
   const names = Object.keys(decl);
   const roles = new Map<string, Role>();
   const roleOf = (arm: string): Role => {
@@ -82,12 +82,12 @@ export function targetWalker(grammar: Grammar, rules: Iterable<RuleDecl>, tokenN
   };
   const walk = (node: CstNode, i: number, source: string): { pass: boolean; last: boolean } => {
     const info = armOf.get(node);
-    if (info === undefined) throw new Error(`targets: the interpreter has no arm recorded for a ${node.rule} node (a construct the target walk does not cover)`);
+    if (info === undefined) throw new Error(`assignTargets: the interpreter has no arm recorded for a ${node.rule} node (a construct the target walk does not cover)`);
     const role = (info.op !== undefined ? roles.get(info.op) : undefined) ?? roles.get(info.name);
     if (role === undefined) {
       if (!info.unit) return { pass: false, last: false };
       const kids = nodeKids(node);
-      if (kids.length !== 1) throw new Error(`targets: unit arm ${info.name} built ${kids.length} nodes`);
+      if (kids.length !== 1) throw new Error(`assignTargets: unit arm ${info.name} built ${kids.length} nodes`);
       return walk(kids[0]!, i, source);
     }
     const last = role.last.has(i);
@@ -125,8 +125,8 @@ export function targetWalker(grammar: Grammar, rules: Iterable<RuleDecl>, tokenN
     },
     passes(node: CstChild | undefined, ctx: string, source: string): boolean {
       const i = names.indexOf(ctx);
-      if (i < 0) throw new Error(`targets: no context named ${ctx}`);
-      if (node === undefined || 'tokenType' in node) throw new Error(`targets: target('${ctx}') must follow a rule reference`);
+      if (i < 0) throw new Error(`assignTargets: no context named ${ctx}`);
+      if (node === undefined || 'tokenType' in node) throw new Error(`assignTargets: assignTarget('${ctx}') must follow a rule reference`);
       return walk(node, i, source).pass;
     },
   };

@@ -296,7 +296,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
     }
     // A grammar whose contexts are all on demand: jsTarget keeps the shallow check (target-js.ts
     // shallowDemand), so a reject the context alone refuses may parse there (docs/CORRECTNESS.md).
-    const shallow = grammar.targets !== undefined && Object.values(grammar.targets).every((t) => t.when === 'demand');
+    const shallow = grammar.assignTargets !== undefined && Object.values(grammar.assignTargets).every((t) => t.when === 'demand');
     let wide = 0;
     for (const src of c.reject) {
       const want = oracleOut(src), got = jsOut(src);
