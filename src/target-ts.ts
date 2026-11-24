@@ -7,7 +7,7 @@
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
 import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -3276,7 +3276,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
   intTable: (name, packed) => `const _TABS_${name} = ${J(packed)};\nlet _tab_${name}: number[] = [];`,
   stmt: {
     comment: (text) => [`// ${text}`],
-    let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`],
+    let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}${s.infer ? '' : `: ${cx.type(s.ty, 'local')}`} = ${s.r.c};`],
     set: (id, val) => [`${id} = ${val};`],
     if: (s) => {
       const head = `if (${s.c})`;
@@ -3551,13 +3551,18 @@ ${liftedFns(ids)}`;
 // valid input is runW's parse alone); the recovery family decides the diagnostic and its words.
 // The interpreter's engine (src/recovery-family.ts ENGINE_EXTERNS) over this module's parse state:
 // each a call of what the native functions do. The module is the engine, so they are module
-// functions; the native dispatch by id is a switch over the plan's ids (ParserIR.forms says which
-// functions exist in building form).
+// functions; the native dispatch by id is a switch over the plan's ids or a table of the functions,
+// the shorter (ParserIR.forms says which functions exist in building form).
 function recoveryEngineTs(ir: ParserIR): string {
   const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
-  const sw = (on: string, cases: [number, string][]) => `switch (${on}) {${cases.map(([k, c]) => ` case ${k}: return ${c};`).join('')} }\n  throw new Error('recovery: no native function ' + ${on});`;
-  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
-  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  // The native dispatch (recovery-family.ts nativeCases): a switch, or a table of the functions
+  // that `use` calls as f (a hole: undefined).
+  const nc = nativeCases(ir, ar);
+  const disp = <X>(on: string, cases: [number, X][], fn: (x: X) => string, use: (f: string) => string) => {
+    const none = `\n  throw new Error('recovery: no native function ' + ${on});`;
+    return shorterDispatch(cases, fn, (cs) => `switch (${on}) {${cs.map(([k, c]) => ` case ${k}: return ${use(c)};`).join('')} }${none}`,
+      (slots) => ({ body: `const f = [${slots.map((x) => x ?? '').join(', ')}][${on}];\n  if (f !== undefined) return ${use('f')};${none}` })).body;
+  };
   return `const _RNAMES: string[] = ${J(withReservedRules(ar).ruleNames)};
 // The marks (position, children height, repair memory length) the interpreter takes, in triples;
 // the repair memory (recovery-family.ts RM_*); the offset of the node last finished; the
@@ -3578,19 +3583,19 @@ function enAhead(set: number, is: boolean): boolean { return ahead(set, is); }
 function enCtxWord(): boolean { return ctxWord(); }
 function enSecondIn(set: number): boolean { return secondIn(set); }
 function enLook(id: number): boolean {
-  ${sw('id', ir.lookaheads.map((_, i) => [i, `look${i}()`]))}
+  ${disp('id', nc.look, (i) => `look${i}`, (f) => `${f}()`)}
 }
 function enRule(r: number): boolean {
-  ${sw('r', build.map((r) => [ar.ruleNames.indexOf(r.name), `parse${r.name}W()`]))}
+  ${disp('r', nc.rule, (r) => `parse${r}W`, (f) => `${f}()`)}
 }
 function enBp(r: number, bp: number): boolean {
-  ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ar.ruleNames.indexOf(r.name), `${r.name}_bpW(bp)`]))}
+  ${disp('r', nc.bp, (r) => `${r}_bpW`, (f) => `${f}(bp)`)}
 }
 function enShared(i: number): boolean {
-  ${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `sub${i}W()`]] : [])))}
+  ${disp('i', nc.shared, (i) => `sub${i}W`, (f) => `${f}()`)}
 }
 function enTpl(hole: number): boolean {
-  ${sw('hole', holes.map((h) => [ar.ruleNames.indexOf(h), `matchTemplateW(parse${h}W)`]))}
+  ${disp('hole', nc.tpl, (h) => `parse${h}W`, (f) => `matchTemplateW(${f})`)}
 }
 function enSh(): number { return _n; }
 function enCut(h: number): void { _n = h; }

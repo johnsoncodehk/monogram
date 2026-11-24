@@ -17,7 +17,7 @@ import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, 
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { beginRsShape, RS_SLOT, rsIsPlanFn, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
@@ -5680,7 +5680,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
   },
   stmt: {
     comment: (text) => [`// ${text}`],
-    let: (cx, s) => [`let ${s.mutable ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
+    let: (cx, s) => [`let ${s.mutable ? 'mut ' : ''}${s.id}${s.infer ? '' : `: ${cx.type(s.ty, 'local', s.owned)}`} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
     set: (id, val) => [`${id} = ${val};`],
     if: (s) => {
       const head = `if ${s.c}`;
@@ -5894,8 +5894,23 @@ ${emitParseWithHelpers(ir, shapeB)}
 function recoveryEngineRust(ir: ParserIR, shared: SharedAlgorithms): string {
   const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
   const sw = (on: string, cases: [number, string][]) => `match ${on} {${cases.map(([k, c]) => ` ${k} => ${c},`).join('')} _ => panic!("recovery: no native function") }`;
-  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
-  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  // The native dispatch (recovery-family.ts nativeCases): a match, or an associated const `name`
+  // of Recov, a table of the functions of type `ty` (a hole: a closure that panics); `use` spells
+  // the dispatch from the function f and its call with arguments a.
+  const nc = nativeCases(ir, ar), decls: string[] = [];
+  const P = "Parser<'a, B>", N = 'Option<Spanned<B::H>>';
+  const disp = <X>(on: string, name: string, ty: string, cases: [number, X][], fn: (x: X) => string, use: (f: string, call: (a: string) => string) => string, hole = '|_| unreachable!()') => {
+    const t = `Self::${name}[${on} as usize]`;
+    const d = shorterDispatch(cases, fn, (cs) => sw(on, cs.map(([k, c]) => [k, use(c, (a) => `self.p.${c.slice('Parser::'.length)}(${a})`)])),
+      (slots) => ({ body: use(t, (a) => `(${t})(self.p${a ? `, ${a}` : ''})`), decl: `    const ${name}: [${ty}; ${slots.length}] = [${slots.map((x) => x ?? hole).join(', ')}];\n` }));
+    decls.push(d.decl);
+    return d.body;
+  };
+  const dLook = disp('id', 'NT_LOOK', `fn(&mut ${P}) -> bool`, nc.look, (i) => `Parser::look_${i}`, (_, c) => c(''));
+  const dRule = disp('r', 'NT_RULE', `fn(&mut ${P}) -> ${N}`, nc.rule, (r) => `Parser::parse_${r}`, (f) => `self.p.call_rule(${f})`);
+  const dBp = disp('r', 'NT_BP', `fn(&mut ${P}, i64) -> ${N}`, nc.bp, (r) => `Parser::${r}_bp`, (_, c) => c('bp as i64'), '|_, _| unreachable!()');
+  const dShared = disp('i', 'NT_SHARED', `fn(&mut ${P}) -> bool`, nc.shared, (i) => `Parser::sub_${i}`, (_, c) => c(''));
+  const dTpl = disp('hole', 'NT_TPL', `fn(&mut ${P}) -> ${N}`, nc.tpl, (h) => `Parser::parse_${h}`, (f) => `self.p.match_template(${f})`);
   const op = ttIdOf(ar, '$operator');
   return `/// The interpreter's engine over p: the marks it took, the plan's decoded table, the offset of
 /// the node it last finished, the binary operator it last read, and the steps of the run.
@@ -5907,7 +5922,7 @@ static TAB_RT: std::sync::OnceLock<Vec<isize>> = std::sync::OnceLock::new();
 impl<'r, 'a, B: Builder> Recov<'r, 'a, B> {
     #[inline(always)]
     fn t_rt(&self, i: isize) -> isize { self.tab_rt[i as usize] }
-${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
+${decls.join('')}${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
     fn en_pos(&self) -> isize { self.p.pos as isize }
     fn en_set_pos(&mut self, q: isize) { self.p.pos = q as usize; }
     fn en_back(&mut self, q: isize) { self.p.back(q as usize); }
@@ -5920,15 +5935,15 @@ ${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `    ${l}` : l)).j
     fn en_ahead(&mut self, set: isize, is: bool) -> bool { self.p.ahead(set as usize, is) }
     fn en_ctx_word(&mut self) -> bool { self.p.ctx_word() }
     fn en_second_in(&mut self, set: isize) -> bool { self.p.second_in(set as usize) }
-    fn en_look(&mut self, id: isize) -> bool { ${sw('id', ir.lookaheads.map((_, i) => [i, `self.p.look_${i}()`]))} }
-    fn en_rule(&mut self, r: isize) -> bool { ${sw('r', build.map((r) => [ruleIdOf(ar, r.name), `self.p.call_rule(Parser::parse_${r.name})`]))} }
+    fn en_look(&mut self, id: isize) -> bool { ${dLook} }
+    fn en_rule(&mut self, r: isize) -> bool { ${dRule} }
     fn en_bp(&mut self, r: isize, bp: isize) -> bool {
-        let n: Option<Spanned<B::H>> = ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), `self.p.${r.name}_bp(bp as i64)`]))};
+        let n: Option<Spanned<B::H>> = ${dBp};
         match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
     }
-    fn en_shared(&mut self, i: isize) -> bool { ${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `self.p.sub_${i}()`]] : [])))} }
+    fn en_shared(&mut self, i: isize) -> bool { ${dShared} }
     fn en_tpl(&mut self, hole: isize) -> bool {
-        let n: Option<Spanned<B::H>> = ${holes.length ? sw('hole', holes.map((h) => [ruleIdOf(ar, h), `self.p.match_template(Parser::parse_${h})`])) : '{ let _ = hole; panic!("recovery: no template") }'};
+        let n: Option<Spanned<B::H>> = ${nc.tpl.length ? dTpl : '{ let _ = hole; panic!("recovery: no template") }'};
         match n { Some(fr) => { if fr.present { self.p.scratch.push(fr.h); } true } None => false }
     }
     fn en_sh(&mut self) -> isize { self.p.scratch.len() as isize }
@@ -6018,8 +6033,8 @@ struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isiz
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize, h0: isize, hb: isize }
 // The words of a repair's message: a literal's text (by lid), a token kind's name, a rule's name.
-const LID_TEXTS: &[&str] = &[${ids.lids.map(J).join(', ')}];
-fn lit_text(x: isize) -> &'static str { LID_TEXTS[x as usize] }
+// (the lexer's literal table _LIDS)
+fn lit_text(x: isize) -> &'static str { _LIDS[x as usize] }
 fn kind_text(x: isize) -> &'static str { KIND_STR[x as usize] }
 fn rule_text(x: isize) -> &'static str { RULE_NAMES[x as usize] }
 ${shared.recoveryFamily(ir, false)}
