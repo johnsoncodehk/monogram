@@ -42,7 +42,11 @@ const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
 // disagreements are one pattern, `import` and a token neither `(` nor `.` (`import ?. ;`): the
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
 // interpreter's message on these inputs is master's.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 5994 };
+// javascript 5412 -> 5349, typescript 5994 -> 6098 (land/grammar-decorators): `@` joins the grammar's
+// literals (a decorator's `@` before trivia) and typescript's decorator lists gain accepts, so both
+// mutant populations are drawn again: javascript 5,349 of 5,850 rejects agree (91.4%; was 5,412 of
+// 5,901, 91.7%), typescript 6,098 of 6,537.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6098 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
 // own parse()'s, checked below); found by the mutation corpus, each owed as its own fix. When one

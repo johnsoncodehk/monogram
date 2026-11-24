@@ -50,11 +50,13 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // BindingIdentifier (reserved-set +2). A LegacyNumber is a MemberName but no member start (`memberStart`, shared
 // with TypeScript; in a class, strict code, it is an early error anyway), so ClassMember's two member-start
 // lookaheads are no longer vacuous (vacuous -2, lookahead1 +2).
+// Decorators (land/grammar-decorators): a `@` that trivia separates from its name takes a reserved-guarded
+// name (`@ a`; JavaScript an IdentifierReference, TypeScript not a reserved word): reserved-set +1 in each.
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 43,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 21, lookahead: 8 },
-  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
-  javascriptreact: { lowered: 45,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 21, lookahead: 8 },
-  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascript:      { lowered: 43,  vacuous: 4,  'reserved-set': 48, scanner: 0,  reserved: 0, lookahead1: 21, lookahead: 8 },
+  typescript:      { lowered: 133, vacuous: 60, 'reserved-set': 68, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
+  javascriptreact: { lowered: 45,  vacuous: 4,  'reserved-set': 48, scanner: 0,  reserved: 0, lookahead1: 21, lookahead: 8 },
+  typescriptreact: { lowered: 135, vacuous: 60, 'reserved-set': 68, scanner: 7,  reserved: 0, lookahead1: 88, lookahead: 69, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 
