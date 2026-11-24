@@ -898,6 +898,15 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   emit(`    if (t === ${tRParen} && lastCloseWasParenHead) return false;`);
   emit(`    return LX_DIVK[k] !== 0 || LX_DIVT[t] !== 0;`);
   emit(`  }`);
+  if (el && !enterAlways) {
+    // where an operand may start: not after a value, nor after a member accessor (`.`, `?.`:
+    // regexContext.memberAccessTexts), which a name follows (`a?.<T>(x)` opens no element)
+    emit(`  function lxOperandStarts() {`);
+    emit(`    if (prevIsValue()) return false;`);
+    emit(`    const k = tokN > 0 ? tkK[tokN - 1] : pvK;`);
+    emit(`    return k < 0 || LX_MEMBER[tokN > 0 ? tkT[tokN - 1] : pvT] === 0;`);
+    emit(`  }`);
+  }
   // the children's text tokens (ElementRegion.textTokens): each is an ordinary scan matcher, tried
   // first in the children; `after` bounds where it may stop a run
   const textTokens: TextTokenPlan[] = (el?.textTokens ?? []).map(({ token, after }) => {
@@ -1353,7 +1362,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     // an element entered from code, outside a tag: every tagOpen (the grammar uses it only to
     // open tags), or else one where an operand may start (the regex-literal position) unless it
     // begins a type-parameter list
-    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')}${el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${el.tagOpen.length})` : ''} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && !prevIsValue() && lxOpensElement(pos)'}) {`);
+    emit(`    if (${startsWithExpr('source', 'pos', el.tagOpen, 'cc')}${el.tagStart !== undefined ? ` && lxTagStart(source, pos + ${el.tagOpen.length})` : ''} && (templateStack.length === 0 || (templateStack[templateStack.length - 1] & 3) !== 2)${speculating ? ' && specTok < 0' : ''}${enterAlways ? '' : ' && lxOperandStarts() && lxOpensElement(pos)'}) {`);
     emit(`      templateStack.push(6);`);
     if (el.rawText?.length) emit(`      lxTagAt[templateStack.length - 1] = tokN;`);
     emit(`      tkPush(K_PUNCT, ${puT(el.tagOpen)}, pos, pos + ${el.tagOpen.length});`);

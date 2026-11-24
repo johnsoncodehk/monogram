@@ -123,15 +123,30 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   byte; without the option the entry below does not exist). It adds TS
   `parseTotal(src, builder) -> { root, errors }`, Go `ParseTotal(src, b) (h, ok, errs)`, Rust
   `parse_total(src, &mut b) -> (Option<H>, Vec<Diagnostic>)`. It never throws or panics on input:
-  an accepted text gives `parseWith`'s root and no errors; a rejected one gives no root and one
-  diagnostic `{ offset, end, message, related? }`, either the lexer error or the parse's primary
-  error. The primary error is the interpreter's: the token where the entry rule stopped
+  an accepted text gives `parseWith`'s root and no errors; a text the parser rejects gives a tree
+  all the same, with its repairs: zero-width `$missing` nodes where a literal, a token or an
+  operand the parse required is absent, `$error` nodes over tokens it skipped, and one diagnostic
+  `{ offset, end, message, related? }` per repair, in order (a text the lexer refuses gives no
+  tree and the lexer's error). The error of the strict parse comes with them (TS `strict`). It is
+  the interpreter's primary error: the token where the entry rule stopped
   (`unexpected 'x'`, with `after successful parse` when the entry rule consumed tokens and input
   is left over). Its related location is the furthest token the parse examined, when that lies
   past the error. That token is usually the interpreter's `[farthest: …]` token, but not always:
   the interpreter counts the tokens a match advanced past, and the engine also counts a guard's
   read of the next token. Messages come from one formatter (`src/recovery-family.ts`). Go and
-  Rust spans are byte offsets. Recovered trees (`$error` / `$missing`) are not there yet.
+  Rust spans are byte offsets. How good the recovered trees are is measured (not gated) on the
+  seeded mutation corpus (`test/portable-recovery.ts`: each accepted list input with one token
+  deleted, inserted or replaced; the rejected mutants, TS target). DAMAGE: the share whose
+  `$error` nodes (all of them) hold more than N tokens. STABILITY: the share whose tree outside the
+  damaged region (the edit's span widened over every `$missing` and `$error`) is the original
+  text's: the top-level entries wholly before and wholly after it, in order, node kinds and
+  leaves alike. The FALLBACK share: an `$error` child of the root (an entry skipped whole).
+
+  | grammar (rejected mutants) | damage N = 1 | N = 3 | N = 5 | stable | fallback |
+  |---|---|---|---|---|---|
+  | javascript (787) | 25.0% | 14.0% | 8.6% | 75.3% | 33.9% |
+  | typescript (1827) | 22.6% | 12.7% | 7.9% | 76.8% | 28.7% |
+
   The option also carries the parse plan as one int table (`emit-portable.ts` recoveryTables) and
   ONE interpreter of it (`src/recovery-family.ts`, printed for each target), which later stages
   make repair: TS `parseInterpreted(src, builder, depth)`, Go `ParseInterpreted`, Rust

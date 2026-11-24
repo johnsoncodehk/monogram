@@ -486,7 +486,10 @@ ${inl}    fn prev_is_value(&self) -> bool {
         let is_paren_head = prev_lid == _LID_RPAREN && self.last_close;
         !is_expr_kw && !is_paren_head && (${rsFlag('_DIVK', 'prev_kid')} || ${rsFlag('_DIVT', 'prev_lid')})
     }
-` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
+${operand ? `    /// Where an operand may start (an operand element entry): not after a value, nor after a member
+    /// accessor (regexContext.memberAccessTexts: a name follows it, so \`a?.<T>(x)\` opens no element).
+    fn operand_starts(&self) -> bool { if self.prev_is_value() { return false; } let (has_prev, _, prev_lid) = self.prev(); !(has_prev && ${rsFlag('_MEM', 'prev_lid')}) }
+` : ''}` : ''}${inl}    fn emit(&mut self, off: usize, end: usize, kid: u16, lid: u16) {
 ${rx ? `        if lid == _LID_LPAREN { let (has_prev2, bp_lid) = self.prev2(); let (_, prev_kid, prev_lid) = self.prev(); let is_member = has_prev2 && ${rsFlag('_MEM', 'bp_lid')}; self.paren_head.push(!is_member && prev_kid == _KID_IDENT && ${rsFlag('_PHK', 'prev_lid')}); }
         else if lid == _LID_RPAREN { self.last_close = self.paren_head.pop().unwrap_or(false); }
         if ${p.pavHot} { self.last_bang = self.prev_is_value(); }
@@ -562,8 +565,8 @@ ${spec}`;
   // (in a directive head, code inside an element frame, a tagOpen opens no element)
   const opensTag = `${at(el.tagOpen)}${el.tagStart ? ` && ${shared.elementFn('tagStart')}(src, (pos + ${L}) as isize)` : ''}${dirs ? ' && st.template_stack.last().map_or(true, |&t| t & 3 != 2)' : ''}`;
   const entry = !operand ? `        if ${opensTag} {\n${enter}        }\n`
-    : !(el.head || sig) ? `        if ${opensTag} && !st.prev_is_value() {\n${enter}        }\n`
-    : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && !st.prev_is_value() {
+    : !(el.head || sig) ? `        if ${opensTag} && st.operand_starts() {\n${enter}        }\n`
+    : `        if ${opensTag}${sig ? ' && !st.spec_on && pos as isize >= st.spec_until' : ''} && st.operand_starts() {
             let op;
             ${sig ? 'if sp.has_at && pos == sp.at { op = if sp.keep { 0 } else { 1 }; sp.has_at = false; } else ' : ''}{ let (o, re) = ${shared.elementFn('opens')}(src, pos as isize); op = o; if re > st.la_end { st.la_end = re; } }
             if op == 1 {
