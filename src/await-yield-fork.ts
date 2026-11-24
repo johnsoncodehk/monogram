@@ -98,12 +98,13 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
         const inner = expr.ctxMode === 'reset' ? null : (expr.ctxMode ? expr.ctxMode : fam);
         const body = rewrite(expr.body, inner);
         // strip the ctxMode marker from the emitted grammar (it has done its routing
-        // job); keep `suppress` (no-in context) and `capBelow` (assignment-level cap),
-        // both still read by the parser engine. (tsRelaxed is gen-treesitter-only and the
+        // job); keep `suppress` (no-in context), `capBelow` (assignment-level cap) and `atLevel`
+        // (a Pratt rule read at a level), all still read by the parser engine. (tsRelaxed is gen-treesitter-only and the
         // post-fork grammar is the PARSER's, which uses `body` — so it is correctly dropped.)
         const g: RuleExpr = { type: 'group', body };
         if (expr.suppress !== undefined) g.suppress = expr.suppress;
         if (expr.capBelow !== undefined) g.capBelow = expr.capBelow;
+        if (expr.atLevel !== undefined) g.atLevel = expr.atLevel;
         return g;
       }
       case 'seq': return { type: 'seq', items: expr.items.map(i => rewrite(i, fam)) };
@@ -166,7 +167,7 @@ export function dropForks(grammar: CstGrammar): CstGrammar {
         if (canonOf.has(e.name)) return { type: 'ref', name: canonOf.get(e.name)! };
         if (e.hole !== undefined && canonOf.has(e.hole)) return { type: 'ref', name: e.name, hole: canonOf.get(e.hole)! };
         return e;
-      case 'group': return { type: 'group', body: reref(e.body), ...(e.suppress !== undefined ? { suppress: e.suppress } : {}), ...(e.capBelow !== undefined ? { capBelow: e.capBelow } : {}) };
+      case 'group': return { type: 'group', body: reref(e.body), ...(e.suppress !== undefined ? { suppress: e.suppress } : {}), ...(e.capBelow !== undefined ? { capBelow: e.capBelow } : {}), ...(e.atLevel !== undefined ? { atLevel: e.atLevel } : {}) };
       case 'seq': return { type: 'seq', items: e.items.map(reref) };
       case 'alt': return { type: 'alt', items: e.items.map(reref) };
       case 'quantifier': return { type: 'quantifier', body: reref(e.body), kind: e.kind };

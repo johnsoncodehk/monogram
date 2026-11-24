@@ -51,6 +51,15 @@ function analyze(grammar: CstGrammar) {
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     exprSecond, suppressSetOf, suppressedIn,
   } = analyzeGrammar(grammar);
+  // The jsTarget parser is being retired (docs/ROADMAP.md): the engine's later Pratt mechanisms
+  // are refused by name rather than ignored (it would parse a capped prefix or a level-read
+  // operand as an ordinary one).
+  for (const [op, info] of prefixOps) if (info.capBp !== undefined) throw new Error(`jsTarget: the capped prefix operator '${op}' (cappedPrefix) is not supported; use the portable targets`);
+  const atLevelIn = (e: RuleExpr): boolean => (e.type === 'group' && e.atLevel !== undefined)
+    || ((e.type === 'seq' || e.type === 'alt') && e.items.some(atLevelIn))
+    || ((e.type === 'quantifier' || e.type === 'group' || e.type === 'not') && atLevelIn(e.body))
+    || (e.type === 'sep' && atLevelIn(e.element));
+  for (const r of grammar.rules) if (atLevelIn(r.body)) throw new Error(`jsTarget: rule ${r.name} reads a rule atLevel(…); not supported, use the portable targets`);
 
   // First-token dispatch.
   function firstTokenOf(alt: RuleExpr): FirstTok {

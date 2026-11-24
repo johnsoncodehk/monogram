@@ -21,7 +21,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { defineParserTarget, registeredTargets } from '../src/define-target.ts';
-import { buildLexIdPlan, hasRebind, portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, hasCappedSeq, hasRebind, portableIR } from '../src/emit-portable.ts';
 import { planShape } from '../src/shape-plan.ts';
 import namedcalcShape from './fixtures/shape-namedcalc.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
@@ -325,7 +325,7 @@ for (const path of FIXTURES) {
   const grammar = (await import(path)).default;
   const ir = irOf(grammar);
   const lex = lexScanFamily(ir);
-  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(hasRebind(ir), buildLexIdPlan(ir)).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
+  const fns = [...lex.fns, ...relexFamilyFns(relexMode(ir)), ...reuseFamilyFns(ir), ...recoveryFamilyFns(hasRebind(ir), buildLexIdPlan(ir), hasCappedSeq(ir)).filter((f) => f.name !== 'rbBracket'), UNPACK_INTS];
   const out = target.emitParser(grammar);
   const code = out.split('\n').filter((l) => !/^\s*;;/.test(l)).join('\n').replace(/"(?:[^"\\]|\\.)*"/g, '""');
   const bad = code.match(C_SURFACE);
