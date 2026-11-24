@@ -558,7 +558,7 @@ export type RuleIR = RdRule | PrattRule;
 // Stateful regex-vs-division disambiguation (the JS `/` problem): a `/` starts a regex
 // literal in expression context but is division after a value. The lexer threads the
 // previous token + a control-head paren stack to decide; the predicate sets are baked
-// from the grammar's `regexContext`. Mirrors emit-lexer.ts's prevIsValue exactly.
+// from the grammar's `regexContext`. Mirrors lexer.ts's prevIsValue exactly.
 export type RegexCtx = {
   regexToken: string;          // the token flagged `regex`, gated on expression context
   identToken: string;          // identifier token kind (for the keyword-vs-value test)
@@ -604,7 +604,7 @@ export function tplHoleRules(ir: ParserIR): string[] {
   return [...out];
 }
 
-// Newline-only mode (emit-lexer.ts): an engine-emitted NEWLINE token spanning every line break
+// Newline-only mode (lexer.ts): an engine-emitted NEWLINE token spanning every line break
 // outside flowOpen/flowClose.
 export type NewlineCfg = {
   token: string;
@@ -732,7 +732,7 @@ export type PortableFacts = { calleeFirstGuards: boolean };
 // stack's delimiters, its region tokens (scanned only inside the region, never by the ordinary
 // scan: scannedTokens leaves them out), how code enters it, and TypeScript's type-parameter
 // vetoes as patterns. The frame encoding and every decision are the shared lexer family's
-// (lex-family.ts elementFns); the interpreter's lexer (emit-lexer.ts) is the oracle.
+// (lex-family.ts elementFns); the interpreter's lexer (lexer.ts) is the oracle.
 export type ElementPlan = {
   tagOpen: string; tagClose: string; closeMarker: string;
   holeOpen: string; holeClose: string;
@@ -763,7 +763,7 @@ export type ElementPlan = {
   // "Where an operand may start" is ONE predicate every lexer spells over its own state: not
   // after a value (prevIsValue) and not after a member accessor (regexContext.memberAccessTexts,
   // the _mem / LX_MEMBER table: `a?.<T>(x)` opens no element). It is lxOperandStarts in
-  // src/emit-lexer.ts, operandStarts in target-ts.ts and target-go.ts, operand_starts in
+  // src/lexer.ts, operandStarts in target-ts.ts and target-go.ts, operand_starts in
   // target-rust.ts; a new target writes it beside its prevIsValue.
   entry: 'always' | 'operand';
   head: TokenPattern | null;  // after tagOpen: a type-parameter list, never an element

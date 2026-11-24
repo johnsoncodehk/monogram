@@ -163,7 +163,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
     ? `if (lexHasLineTerm(src, pos, e)) pendingNl = true; `
     : `${stateful ? 'emit' : 'push'}(pos, e, ${kid}, ${lidCallTs(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src.slice(pos, e)')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
-  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (lexer.ts).
   const ext = identLike.has(name) ? 'e = lx_ext(src, e); ' : '';
   // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
   const escErr = identLike.has(name) ? ` if (e < -1) { ${tsFail('1', 'pos', '-2 - e')} }` : '';
@@ -615,7 +615,7 @@ ${pushHooks}    toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = fa
 `
     : '  const push = (off: number, end: number, kid: number, lid: number) => { toks.push(mk_tok(off, end, pendingNl, kid, lid)); pendingNl = false; };\n';
   const loopBody = `    const c = src.charCodeAt(pos);
-    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (emit-lexer.ts).
+    // JS line terminators LF/CR/LS/PS set newline-before, matching the interpreter (lexer.ts).
 ${nlWs}${tplDispatch}${cascade}
 ${uniIdentFallbackTs}${TS_UNEXPECTED}`;
   if (el) return elementLexerTS(ir, ids, shared, { scans, consts: `${renderIdTablesTS(ids)}${lxUniIdentConst}${rxModuleConsts}`, rxStateFrom, nlWs, lexCodes, lexFirsts, tplCloseTest, tplOpenTest, uniIdentFallbackTs });

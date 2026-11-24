@@ -25,7 +25,7 @@
 // field) tokenizes byte-identically, which the yaml gates already enforce.
 import { token, rule, defineGrammar, alt, many, many1, opt, seq, oneOf, noneOf, range, star, plus, never } from '../src/api.ts';
 import type { IndentConfig } from '../src/types.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { cond ? ok++ : (fail++, console.log('  ✗', label)); };

@@ -52,7 +52,7 @@ const GATES: Gate[] = [
   { group: 'core', name: 'shape2-eval', args: ['--stack-size=7000', 'test/shape2-eval.ts'] },
   { group: 'emit-parity', name: 'target-js-verify', args: ['test/target-js-verify.ts'] },
   { group: 'emit-parity', name: 'emit-reject-messages', args: ['test/emit-reject-messages.ts'] },
-  { group: 'emit-parity', name: 'emit-lexer-verify', args: ['test/emit-lexer-verify.ts'] },
+  { group: 'emit-parity', name: 'lexer-verify', args: ['test/lexer-verify.ts'] },
   { group: 'emit-parity', name: 'emit-reentrancy', args: ['test/emit-reentrancy.ts'] },
   { group: 'emit-parity', name: 'emit-standalone', args: ['test/emit-standalone.ts'] },
   { group: 'emit-parity', name: 'parser-ir-library', args: ['test/parser-ir-library.ts'] },

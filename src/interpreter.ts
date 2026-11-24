@@ -1,7 +1,7 @@
 import type { Grammar, RuleExpr, RuleDecl } from './types.ts';
 import { CTX_SPAN, ctxReserves, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
-import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
+import { compileTokenizer, lexSpecOf, type Token } from './lexer.ts';
 import { assignTargetWalker } from './assign-targets-cst.ts';
 
 // ── CST output ──
@@ -30,7 +30,7 @@ export function getText(node: { offset: number; end: number }, source: string): 
   return source.slice(node.offset, node.end);
 }
 
-// The lexer is the generated one (emit-lexer.ts), compiled in-process once per grammar.
+// The lexer is the generated one (lexer.ts), compiled in-process once per grammar.
 const tokenizers = new WeakMap<Grammar, (source: string) => Token[]>();
 
 export function createParser(grammar: Grammar) {

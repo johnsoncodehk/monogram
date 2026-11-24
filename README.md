@@ -231,7 +231,7 @@ grammar (*.ts, src/api.ts)
    │      src/lex-match-plan.ts, src/algo-ir.ts)
    │        └─▶ one engine, rendered per target: src/target-ts.ts, target-go.ts, target-rust.ts
    │
-   ├─ emitted JS parser: src/target-js.ts + src/emit-lexer.ts   (to be retired)
+   ├─ emitted JS parser: src/target-js.ts + src/lexer.ts   (to be retired)
    │
    └─ highlighters: src/gen-tm.ts (TextMate), src/gen-treesitter.ts, src/gen-monarch.ts,
                     src/gen-vscode-config.ts (language configuration)

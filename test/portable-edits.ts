@@ -4,7 +4,7 @@
 // CST, its relexed stream aligns with the old one as the oracle lexer's does, and the fast
 // (unvalidated) session reports what the validated one does.
 import type { Grammar } from '../src/types.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import { HOLE_EDIT_DOCS, LOOK_EDIT_DOCS } from './relex-edit-docs.ts';
 import { CTX_DOCS, ctxEdits } from './context-cases.ts';
 import { applyEdits, finish, gate, prepareAll, selectedCases, type Align, type EditBatch } from './portable-harness.ts';

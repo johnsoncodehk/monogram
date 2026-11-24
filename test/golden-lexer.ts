@@ -1,4 +1,4 @@
-// The frozen lexer baseline (test/golden/lexer/, see emit-lexer-verify.ts) as an oracle: the
+// The frozen lexer baseline (test/golden/lexer/, see lexer-verify.ts) as an oracle: the
 // expected token stream — [type, offset, length, flags] per token — or the lex error message
 // for an input the golden recorded.
 import { readdirSync, readFileSync } from 'node:fs';

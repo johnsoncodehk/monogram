@@ -62,7 +62,7 @@ unit in every lexer: the interpreter extends an identifier the pattern cut short
 at a unit beyond ASCII (`LX_UNI_CONT`), as the portable lexers do (`lxExt`), so the token's pattern
 decides where an ASCII run ends; an extension, once begun, takes the whole IdentifierPart run
 (`na|ïve`, `aé$`). Witness: an identifier `[a-z_][a-z0-9_]*` and the text `a$` (every lexer: `a`, then `$`
-by the Unicode fallback; rows in `test/emit-lexer-verify.ts`). No shipped grammar shows it: every
+by the Unicode fallback; rows in `test/lexer-verify.ts`). No shipped grammar shows it: every
 real identifier pattern takes `$` and all ASCII identifier characters.
 The portable side follows the stated contract (the grammar's ASCII pattern decides ASCII; the
 Unicode classes extend a token "the ASCII pattern cut short" at a unit beyond ASCII), so the

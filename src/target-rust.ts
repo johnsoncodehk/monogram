@@ -362,7 +362,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
       ? `st.emit(pos, e, ${kid}, ${lid}); `
       : `toks.push(mk_tok(pos, e, pending_nl, ${kid}, ${lid})); pending_nl = false; `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
-  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (lexer.ts).
   const ext = identLike.has(name) ? 'let e = if e < b.len() && b[e] >= 0x80 { _lx_ext(b, e) } else { e }; ' : '';
   // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
   const escErr = identLike.has(name) ? ` if e < -1 { ${rsFail(errAt, '1', 'pos as isize', '-2 - e')} }` : '';
@@ -832,7 +832,7 @@ const _LID_INTERP_CLOSE: u16 = ${lidOf(ids, tpl.interpClose)};
   const uniClassRs = shared.uniClass();
   const identTok = ir.tokens.find((t) => t.name === identName);
   const identLid = identTok ? lidCall(shared.tokenLiterals(ir, identTok, ids.lids.slice(1)), '&b[pos..e]') : 'lid_of(&b[pos..e])';
-  // Unicode ID_Start fallback (mirrors emit-lexer uniIdentReY) before unmatched-byte panic.
+  // Unicode ID_Start fallback (mirrors lexer uniIdentReY) before unmatched-byte panic.
   const uniIdentEmit = stateful
     ? `st.emit(pos, e, ${identKid}, ${identLid});`
     : `toks.push(mk_tok(pos, e, pending_nl, ${identKid}, ${identLid})); pending_nl = false;`;
@@ -857,7 +857,7 @@ ${identName || ir.identLike.length ? `${rsUniIdentTables(ir)}// Both out of line
     Some(_lx_ext(b, pos + w))
 }
 // Extend an identifier token that the ASCII pattern cut short at a non-ASCII
-// ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
+// ID_Continue char (caf|é → café), mirroring lexer's uniIdentContReY extension.
 // A non-ASCII byte no candidate begins with: (end, 0) whitespace, (end, 1) a line-terminating
 // whitespace, (end, 2) an identifier; (pos, 3) the unexpected-character error.
 #[cold] #[inline(never)] fn _lex_non_ascii(src: &str, pos: usize) -> (usize, u8) {

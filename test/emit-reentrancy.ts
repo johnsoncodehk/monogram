@@ -167,7 +167,7 @@ for (const c of CASES) {
 // ════ The public tokenizer and document ownership (formerly emit-tokenize) ════
 // For the three lexing modes:
 //   1. tokenize(src) tokens carry exactly the Token key set and k = the module's own TYPE_KIND id
-//      (the stream itself ≡ the lexer golden is emit-lexer-verify's);
+//      (the stream itself ≡ the lexer golden is lexer-verify's);
 //   2. each call returns a fresh array of fresh objects — mutating one result changes nothing;
 //   3. tokenize — succeeding or throwing — never changes what an existing tree, handle or token
 //      view reads, and never disturbs an incremental session: a session with tokenize calls

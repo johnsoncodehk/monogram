@@ -43,7 +43,7 @@ The old gates map to new ones as follows. Cases are each gate's own count line, 
 |---|---|---|
 | emit-parity/ast-builder | emit-parity/builder-reuse | 343 + 115 → 448 (10: the demo ESTree golden) |
 | emit-parity/emit-tsc-gate | emit-parity/emit-standalone (also tsc --strict on js, jsx, tsx) | 83 + 6 → 86 (3 duplicate tsc runs) |
-| emit-parity/emit-tokenize | emit-parity/emit-reentrancy | 63 + 39 → 100 (2; 13 reduced to what emit-lexer-verify does not check) |
+| emit-parity/emit-tokenize | emit-parity/emit-reentrancy | 63 + 39 → 100 (2; 13 reduced to what lexer-verify does not check) |
 | emit-parity/emit-ts-cst | emit-parity/parser-ir-split | 80 + 21 → 101 |
 | emit-parity/shape-codegen | emit-parity/shape-parity | 85 + 21 → 105 (1 duplicate) |
 | emit-parity/syntax-agnostic | emit-parity/define-parser-target | 16 + 4 → 20 checks |
