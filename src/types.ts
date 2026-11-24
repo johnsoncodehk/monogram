@@ -595,9 +595,8 @@ type RuleExprNode =
   | { type: 'ref'; name: string; hole?: string }
   | { type: 'quantifier'; body: RuleExpr; kind: '*' | '+' | '?' }
   // `ctxMode` marks a subtree as [Await]/[Yield] context (the spec's grammar parameter):
-  // the await-yield-fork build transform reads it to name-fork the body-reachable rule
-  // closure into $A/$Y/$AY families (the interpreter, the jsTarget parser), and the
-  // portable IR reads it as a `ctx` step that sets the context word (emit-portable.ts).
+  // every parser (the interpreter, the jsTarget parser, the portable IR's `ctx` step) parses the
+  // body with the context word set to the marker's (grammar-utils.ts ctxWordOfMode).
   // Every OTHER consumer treats this exactly like a plain transparent group (recurse
   // into `body`), so the marker is invisible outside the parsers.
   // `tsRelaxed`: a TREE-SITTER-ONLY alternate rendering. The parser (and every other
@@ -636,10 +635,9 @@ type RuleExprNode =
   // punctuators it tests (grammar-utils gtComposites), a `not(L)` before an
   // optional `L…` (gen-treesitter's lowering).
   // `reservable`: this is the bare-identifier reserved-word guard (notReservedExpr).
-  // The await-yield-fork transform, when cloning a rule into the $A/$Y/$AY family,
-  // adds that family's context keyword(s) to the inner alt — so `await`/`yield` lose
-  // their identifier reading inside an async/generator body; the portable IR tests one
-  // set per context word instead (an `aheadCtx` step). Invisible elsewhere.
+  // Every parser also refuses the words the context word in force reserves (grammar-utils.ts
+  // CTX_WORDS) — so `await`/`yield` lose their identifier reading inside an async/generator
+  // body; the portable IR as an `aheadCtx` step. Invisible elsewhere.
   | { type: 'not'; body: RuleExpr; reservable?: boolean }
   // Zero-width "no LineTerminator here" assertion: matches (consuming nothing)
   // iff the NEXT token is on the same line (no preceding newline). Encodes
@@ -683,15 +681,6 @@ export interface RuleDecl {
   name: string;
   body: RuleExpr;
   flags: string[];
-  // Set by the await-yield-fork transform on a generated [Await]/[Yield] family clone:
-  // the BASE rule name this fork collapses to for every DERIVED artifact (green-node
-  // type, AST type union, TM scope, tree-sitter rule, cst-match dispatch). The emitted
-  // parser keeps the distinct `name` for its memo/adoption rule identity, but reports
-  // `canon` as the node's rule name so trees stay byte-identical to the base grammar.
-  canon?: string;
-  // Set by the await-yield-fork transform on every rule: the context word of the rule's family
-  // (grammar-utils.ts CTX_PARAMS), against which a parser evaluates a gated operator's `when`.
-  ctx?: number;
   // Display name for `expected …` diagnostics only (see api.ts RuleOptions.label).
   label?: string;
 }

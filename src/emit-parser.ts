@@ -24,12 +24,11 @@
 // parser must reproduce its CST byte-for-byte.
 
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
-import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { CTX_WORDS, collectLiterals, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest } from './grammar-utils.ts';
 import { tokenPatternSource } from './token-pattern.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer, type Sec } from './grammar-analysis.ts';
 import { emitLexer, emitTokenColumns, lexSpecOf } from './emit-lexer.ts';
 import type { Target } from './target.ts';
-import { withAwaitYield } from './await-yield-fork.ts';
 import { syntaxKey } from './grammar-names.ts';
 
 // ── Static analysis ──
@@ -43,13 +42,17 @@ type FirstTok = { lit: string } | { tok: string } | null;
 type MixfixInfo = { openLit: string; sepLit: string };
 
 /** Build the full static analysis the emitter needs, returned as plain data. */
+// A group that only groups: no suppress set, context marker or `when` condition (those change what
+// the body is parsed in, so the body is not the group).
+const plainGroup = (e: RuleExpr): e is Extract<RuleExpr, { type: 'group' }> =>
+  e.type === 'group' && !(e.suppress && e.suppress.length) && !e.ctxMode && e.when === undefined;
 function analyze(grammar: CstGrammar) {
   const {
     tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
     ledPrecByConnector, binaryConnectors, connectorLbp, atLevelBp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
-    exprSecond, suppressSetOf, suppressedIn,
+    exprSecond, suppressSetOf, suppressedIn, ctxObserve,
   } = analyzeGrammar(grammar);
   // The jsTarget parser is being retired (docs/ROADMAP.md): the engine's later Pratt mechanisms
   // are refused by name rather than ignored (it would parse a capped prefix or a level-read
@@ -396,7 +399,7 @@ function analyze(grammar: CstGrammar) {
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
-    exprFirst, exprNullable, suppressSetOf, suppressedIn, atLevelBp, selfAtLevelEnd,
+    exprFirst, exprNullable, suppressSetOf, suppressedIn, atLevelBp, selfAtLevelEnd, ctxObserve, splitSync: readsSyncFn(grammar),
     unaryRows: [...prattClassified.entries()].some(([name, { nuds }]) => nuds.some((nud) => selfAtLevelEnd(nud, name))),
     markupContainer: markupContainerOf(grammar),
   };
@@ -457,17 +460,19 @@ class Emitter {
   // after the imports/tables; we splice the collected helpers there.
   toString() {
     // MEMO_RULES is known only after every memoized rule allocated its slot.
-    this.helperDefs.push(`const MEMO_RULES = ${this.memoIdx.size};`);
+    this.helperDefs.push(`const MEMO_RULES = ${this.memoSlots};`);
     const src = this.buf.join('\n');
     return src.replace('//${HELPERS}', this.helperDefs.join('\n\n'));
   }
 
-  // Per-memoized-rule slot in the parse-wide memo array (replaces the string-keyed
-  // outer Map: parseRuleEntry runs per rule entry, so the name hash was on a hot path).
+  // Per-memoized-rule slots in the parse-wide memo array (replaces the string-keyed
+  // outer Map: parseRuleEntry runs per rule entry, so the name hash was on a hot path): one per
+  // value of the context word the rule reads (ctxObserve), parseRuleEntry adds `ctx & RULE_OBS[rid]`.
   private memoIdx = new Map<string, number>();
+  private memoSlots = 0;
   memoIndex(name: string): number {
     let i = this.memoIdx.get(name);
-    if (i === undefined) { i = this.memoIdx.size; this.memoIdx.set(name, i); }
+    if (i === undefined) { i = this.memoSlots; this.memoSlots += 1 + this.a.ctxObserve.get(name)!; this.memoIdx.set(name, i); }
     return i;
   }
 
@@ -504,7 +509,7 @@ class Emitter {
     const a = this.a;
     let expr = body;
     while (true) {
-      if (expr.type === 'group' && !(expr.suppress && expr.suppress.length)) { expr = expr.body; continue; }
+      if (plainGroup(expr)) { expr = expr.body; continue; }
       if (expr.type === 'seq') {
         const real = expr.items.filter(it => it.type !== 'op' && it.type !== 'prefix' && it.type !== 'postfix');
         if (real.length === 1) { expr = real[0]; continue; }
@@ -531,7 +536,7 @@ class Emitter {
     const a = this.a;
     const unwrap = (x: RuleExpr): RuleExpr => {
       while (true) {
-        if (x.type === 'group' && !(x.suppress && x.suppress.length)) { x = x.body; continue; }
+        if (plainGroup(x)) { x = x.body; continue; }
         if (x.type === 'seq') {
           const real = x.items.filter(it => it.type !== 'op' && it.type !== 'prefix' && it.type !== 'postfix');
           if (real.length === 1) { x = real[0]; continue; }
@@ -601,7 +606,7 @@ class Emitter {
     const a = this.a;
     // Unwrap transparent wrappers that don't themselves emit/consume.
     while (true) {
-      if (expr.type === 'group' && !(expr.suppress && expr.suppress.length)) { expr = expr.body; continue; }
+      if (plainGroup(expr)) { expr = expr.body; continue; }
       if (expr.type === 'seq') {
         const real = expr.items.filter(it => it.type !== 'op' && it.type !== 'prefix' && it.type !== 'postfix');
         if (real.length === 1) { expr = real[0]; continue; }
@@ -705,15 +710,28 @@ class Emitter {
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
         // matches its body (same as matchExpr 'group').
         // The staging ends with the group, matched or not (gen-parser.ts matchExpr 'group').
+        // A `when` group exists only where its condition holds over the word in force (gen-parser.ts).
+        if (expr.when !== undefined) {
+          const w = whenTest(expr.when);
+          return [`if ((ctx & ${w.mask}) !== ${w.val}) { ${onFail} }`, this.matchInto(expr.body, onFail)].join('\n');
+        }
+        // A context marker parses its body in its word, then puts back the one in force.
+        if (expr.ctxMode) {
+          const c = this.id();
+          return [`const ${c} = ctx; ctx = ${ctxWordOfMode(expr.ctxMode, this.a.splitSync)};`, this.matchInto(expr.body, `{ ctx = ${c}; ${onFail} }`), `ctx = ${c};`].join('\n');
+        }
         if (!expr.suppress || !expr.suppress.length) return this.matchInto(expr.body, onFail);
         return [`suppressNext = ${this.a.suppressSetOf(expr.suppress)};`, this.matchInto(expr.body, `{ suppressNext = 0; ${onFail} }`), `suppressNext = 0;`].join('\n');
       }
       case 'not': {
         // Zero-width negative lookahead: succeed (no children) iff body does NOT match.
         const kinds = this.notKwKinds(expr.body);
+        if (expr.reservable && !kinds) throw new Error('jsTarget: a reservable guard must test keywords');
         if (kinds) {
-          // Fast: one keyword-kind membership test (no body matcher, nothing pushed).
-          const cond = kinds.map(k => `_tt === ${k}`).join(' || ');
+          // Fast: one keyword-kind membership test (no body matcher, nothing pushed). A reserved-word
+          // guard also refuses each word the context in force reserves (grammar-utils.ts CTX_WORDS).
+          const ctxWords = expr.reservable ? CTX_WORDS.flatMap((w, i) => { const k = this.a.symtab.kwLitKind.get(w); return k === undefined ? [] : [`((ctx & ${1 << i}) !== 0 && _tt === ${k})`]; }) : [];
+          const cond = [...kinds.map(k => `_tt === ${k}`), ...ctxWords].join(' || ');
           return `if (pos < cap && tkK[pos] >= K_NAMED_MIN) { const _tt = tkT[pos]; if (${cond}) { ${onFail} } }`;
         }
         const save = this.id(), sn = this.id(), fn = this.matchFn(expr.body), m = this.id();
@@ -1225,12 +1243,7 @@ function shallowDemand(grammar: CstGrammar): CstGrammar {
   return { ...rest, precs };
 }
 function emitJsParser(grammar: CstGrammar): string {
-  // [Await]/[Yield] context: name-fork the body-reachable rule closure into $A/$Y/$AY
-  // families (see await-yield-fork.ts). No-op for a grammar with no ctx markers. Done
-  // HERE (not at grammar export) so the forks exist ONLY in the parser's rule identity
-  // / memo / adoption space; the derived-artifact generators see the base grammar with
-  // the (transparent-group) markers and emit byte-identically.
-  grammar = withAwaitYield(shallowDemand(grammar));
+  grammar = shallowDemand(grammar);
   const a = analyze(grammar);
   const e = new Emitter(a);
   e.litT = (v: string) => a.symtab.puLitKind.get(v) ?? -1;
@@ -1416,15 +1429,13 @@ function emitJsParser(grammar: CstGrammar): string {
   // Rule-name table: rowRule stores the index; '$template' takes the slot after the
   // declared rules (parseTemplateExpr's synthetic node).
   e.emit(`const RULE_NAMES = ${J([...grammar.rules.map(r => r.name), '$template', '$error', '$missing'])};`);
-  // DISPLAY names: an [Await]/[Yield] fork (RuleDecl.canon set) keeps its distinct
-  // RULE_NAMES entry for memo/adoption rule identity, but REPORTS its base name as the
-  // node's rule name so trees stay byte-identical to the base grammar. Identical to
-  // RULE_NAMES when no rule is forked (the common case).
-  e.emit(`const RULE_DISPLAY = ${J([...grammar.rules.map(r => r.canon ?? r.name), '$template', '$error', '$missing'])};`);
+  // The context-word bits each rule reads (grammar-utils.ts ctxObserves): with the rule id, the
+  // key of a memo slot and of a reusable row (rowCtx).
+  e.emit(`const RULE_OBS = new Uint8Array(${J([...grammar.rules.map(r => a.ctxObserve.get(r.name)!), 0, 0, 0])});`);
   // Diagnostic LABELS: what a `$missing` row's "expected …" names for a missing required RULE.
-  // `RuleDecl.label` substitutes a display string there and nowhere else (RULE_DISPLAY stays the
+  // `RuleDecl.label` substitutes a display string there and nowhere else (RULE_NAMES stays the
   // node's reported rule name), so a grammar that adds labels parses byte-identically.
-  e.emit(`const RULE_LABELS = ${J([...grammar.rules.map(r => r.label ?? r.canon ?? r.name), '$template', '$error', '$missing'])};`);
+  e.emit(`const RULE_LABELS = ${J([...grammar.rules.map(r => r.label ?? r.name), '$template', '$error', '$missing'])};`);
   e.emit(`const RID_TEMPLATE = ${grammar.rules.length};`);
   e.emit(`const RID_ERROR = ${grammar.rules.length + 1};`);
   e.emit(`const RID_MISSING = ${grammar.rules.length + 2};`);
@@ -1557,6 +1568,9 @@ function applyChange(start: number, end: number, text: string) {
 // Rows store ABSOLUTE offsets in this phase (the green {rel,len} re-base is the
 // incremental round's move; flipping the stored form regenerates matchers only).
 let rowRule = new Uint16Array(8192);    // rule id (index into RULE_NAMES)
+// the context word the row was parsed in, masked by what its rule reads (RULE_OBS): a row is
+// reused only where the rule is entered with the same masked word (adoptSeek, runExtend, surgery)
+let rowCtx = new Uint8Array(8192);
 let rowLen = new Int32Array(8192);
 let rowTokLen = new Int32Array(8192);   // subtree token count
 let rowStart = new Int32Array(8192);    // first index into kids
@@ -1632,6 +1646,7 @@ let scn = 0;
 function growRows() {
   rowCap *= 2;
   const r = new Uint16Array(rowCap); r.set(rowRule); rowRule = r;
+  const rc = new Uint8Array(rowCap); rc.set(rowCtx); rowCtx = rc;
   const l = new Int32Array(rowCap); l.set(rowLen); rowLen = l;
   const tl = new Int32Array(rowCap); tl.set(rowTokLen); rowTokLen = tl;
   const s = new Int32Array(rowCap); s.set(rowStart); rowStart = s;
@@ -1694,7 +1709,7 @@ function finishNode(rid: number, mark: number) {
     myOff = offset(); myEnd = myOff;
     myTok = pos; myTokEnd = pos;
   }
-  rowRule[id] = rid; rowLen[id] = myEnd - myOff; rowCount[id] = n;
+  rowRule[id] = rid; rowCtx[id] = ctx & RULE_OBS[rid]; rowLen[id] = myEnd - myOff; rowCount[id] = n;
   rowTokLen[id] = myTokEnd - myTok;
   rowExt[id] = frameMax - myTok;
   rowOK[id] = 0;
@@ -1746,7 +1761,7 @@ function finishWrap(rid: number, lhsId: number, mark: number) {
     }
   }
   kidN += n + 1;
-  rowRule[id] = rid; rowLen[id] = myEnd - myOff;
+  rowRule[id] = rid; rowCtx[id] = ctx & RULE_OBS[rid]; rowLen[id] = myEnd - myOff;
   rowStart[id] = ks; rowCount[id] = n + 1;
   rowTokLen[id] = myTokEnd - myTok;
   rowExt[id] = frameMax - myTok;
@@ -1808,6 +1823,9 @@ let cap = 0;
 // suppress group stages for the next pratt/left-rec parseRule, and the set in force in the current one.
 let suppressNext = 0;
 let suppressCur = 0;
+// The context word in force (grammar-utils.ts CTX_PARAMS): set by a context marker for its body,
+// read by a \`when\`, a gated prefix operator and a reserved-word guard.
+let ctx = 0;
 
 function offset() {
   if (pos < cap) return toff(pos);
@@ -1934,7 +1952,9 @@ function emitRuleFns(e: Emitter, a: ReturnType<typeof analyze>) {
       switch (x.type) {
         case 'seq': x.items.forEach(walk); return;
         case 'group':
-          if (x.suppress && x.suppress.length) { bad = true; return; }
+          // a context marker or a `when` between the container and its rep: the elements would not
+          // be parsed in the container's word
+          if ((x.suppress && x.suppress.length) || x.ctxMode || x.when !== undefined) { bad = true; return; }
           walk(x.body); return;
         case 'literal': case 'ref': case 'op': case 'prefix': case 'postfix': return;
         case 'quantifier':
@@ -2161,11 +2181,10 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
     if (items[0]?.type === 'prefix') {
       // prefix $ pattern: identical to parsePratt's prefix branch.
       e.emit(`    if (pos < cap) {`);
-      // A gated operator (`await`) exists only where its \`when\` holds in this rule's family
-      // (the fork's word, a constant here: await-yield-fork.ts).
-      const gatedOff = [...a.prefixOps.values()].some((o) => o.when !== undefined && (rule.ctx! & o.when.mask) !== o.when.val);
-      e.emit(gatedOff
-        ? `      let info = PREFIX_BY_T[tkT[pos]]; if (info && info.when !== undefined && (${rule.ctx} & info.when.mask) !== info.when.val) info = null;`
+      // A gated operator (`await`) exists only where its \`when\` holds over the word in force.
+      const gated = [...a.prefixOps.values()].some((o) => o.when !== undefined);
+      e.emit(gated
+        ? `      let info = PREFIX_BY_T[tkT[pos]]; if (info && info.when !== undefined && (ctx & info.when.mask) !== info.when.val) info = null;`
         : `      const info = PREFIX_BY_T[tkT[pos]];`);
       e.emit(`      if (info) {`);
       e.emit(`        scPush(~((pos << 2) | 2));`);
@@ -2479,6 +2498,8 @@ function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
 // bp > 0: the rule read at an operator's level (atLevel): no memo (it is keyed by position only),
 // the enclosing frame's no-in context kept, the recovery cycle refusal as for any entry.
 function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number, bp = 0) {
+  const cx = ctx & RULE_OBS[rid];
+  idx += cx;
   const mySup = suppressNext;
   suppressNext = 0;
   const capped = parseLimit >= 0 || bp !== 0;
@@ -2687,6 +2708,7 @@ function runParse(entryRule?: string) {
   cap = tokN;
   suppressNext = 0;
   suppressCur = 0;
+  ctx = 0;
   scn = 0;
   const entry = entryRule ?? ENTRY;
   if (tokN === 0) {
@@ -2800,7 +2822,7 @@ function adoptSeek(q: number, rid: number) {
       adoptHitP = id; adoptHitKid = cs + lo; adoptHitBase = base;
       let xid = e, xb = cb;
       for (;;) {
-        if (rowOK[xid] !== 0 && rowRule[xid] === rid
+        if (rowOK[xid] !== 0 && rowRule[xid] === rid && rowCtx[xid] === (ctx & RULE_OBS[rid])
             && ((recovering ? rowRM[xid] & 2 : rowRM[xid]) === 0)
             && (q + rowExt[xid] + 2 <= adoptDmgStart || q >= adoptDmgOldEnd)) {
           return xid;
@@ -3127,7 +3149,7 @@ function runExtend(rid: number) {
     const e = kids[i];
     if (e < 0) break;
     if (pb + ktr(P, i) !== oq) break;
-    if (rowRule[e] !== rid || rowOK[e] === 0) break;
+    if (rowRule[e] !== rid || rowCtx[e] !== (ctx & RULE_OBS[rid]) || rowOK[e] === 0) break;
     if ((recovering ? rowRM[e] & 2 : rowRM[e]) !== 0) break;
     if (recovering && !barsWindowEq(nq, oq, rowExt[e])) break;
     const tl = rowTokLen[e];
@@ -3271,6 +3293,8 @@ function trySurgery(dmgA: number, dmgB: number, tokD: number, chrD: number) {
   const s0 = pos;
   maxPos = pos; frameMax = pos; scn = 0; parseLimit = -1; cap = tokN;
   suppressNext = 0; suppressCur = 0;
+  // the elements are parsed in D's word (no context marker lies between D and its rep: SURG_ELEM)
+  ctx = rowCtx[D];
   const genAt = memoGenCur;
   const fn = RULE_FN_BY_ID[elem];
   let j = Db, guard = 0;
@@ -3668,7 +3692,7 @@ function treeOf(d: Doc) {
   const kcrD = (p: number, k: number) => { const v = d.kidRel[k]; return v < 0 ? v + d.rowLen[p] + 1 : v; };
   const ktrD = (p: number, k: number) => { const v = d.kidTokRel[k]; return v < 0 ? v + d.rowTokLen[p] + 1 : v; };
   return {
-    ruleNameOf: (id: number) => RULE_DISPLAY[d.rowRule[id]],
+    ruleNameOf: (id: number) => RULE_NAMES[d.rowRule[id]],
     ruleIdOf: (id: number) => d.rowRule[id],
     lenOf: (id: number) => d.rowLen[id],
     tokLenOf: (id: number) => d.rowTokLen[id],

@@ -275,10 +275,8 @@ class CtxNode {
   // Mark the wrapped items as [Await]/[Yield] context (the ECMAScript grammar
   // parameter): inside an async function/arrow/method body await is the AwaitExpression
   // operator (no bare-identifier reading), and inside a generator body yield is the
-  // YieldExpression operator. The interpreter and the jsTarget parser read this marker
-  // through the await-yield-fork build transform (which name-forks the body-reachable rule
-  // closure); the portable targets (emit-portable.ts) parse the body with the context
-  // word set; every other consumer treats it as a transparent group. Wrap ONLY the async/generator arm's body+params; a nested
+  // YieldExpression operator. Every parser parses the body with the context word set
+  // (grammar-utils.ts ctxWordOfMode); every other consumer treats it as a transparent group. Wrap ONLY the async/generator arm's body+params; a nested
   // non-async function/arrow/class body is simply left UNwrapped (context resets).
   readonly __kind = 'ctx' as const;
   readonly mode: 'await' | 'yield' | 'asyncgen' | 'reset';
@@ -290,8 +288,8 @@ class NotNode {
   // Zero-width negative lookahead over an element, or an array (a seq, like
   // everywhere else in the rule DSL). Matches nothing; succeeds only when
   // `item` can't match. `reservable` flags the bare-identifier reserved-word guard
-  // (notReservedExpr) so a parser extends it with the context's operator words (the
-  // await-yield-fork transform per context family; the portable targets per context word).
+  // (notReservedExpr) so a parser extends it with the operator words the context word in force
+  // reserves (grammar-utils.ts CTX_WORDS).
   readonly item: Element | Element[];
   readonly reservable: boolean;
   constructor(item: Element | Element[], reservable = false) { this.item = item; this.reservable = reservable; }

@@ -23,7 +23,6 @@
 import type { CstGrammar, PrecOperator, RuleDecl, RuleExpr } from './types.ts';
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { nameRule, sanitizeIdent, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
-import { withAwaitYield } from './await-yield-fork.ts';
 
 // ── Arm step plan ──
 
@@ -55,10 +54,6 @@ interface ArmPlan {
 const J = (v: unknown) => JSON.stringify(v);
 
 export function generateCstMatch(grammar: CstGrammar): string {
-  // Same [Await]/[Yield] fork the parsers apply, so the rule-id space (ruleIdOf)
-  // agrees with the tree. Matchers/types are emitted for BASE rules only (a fork
-  // collapses to its base via RULE_CANON); no-op without ctx markers.
-  grammar = withAwaitYield(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const templateTokenNames = new Set(grammar.tokens.filter(t => t.template).map(t => t.name));
   const ruleNames = new Set(grammar.rules.map(r => r.name));
@@ -70,15 +65,7 @@ export function generateCstMatch(grammar: CstGrammar): string {
   { let next = 5; for (const t of grammar.tokens) if (!typeKind.has(t.name)) typeKind.set(t.name, next++); }
   const ruleId = new Map<string, number>(grammar.rules.map((r, i) => [r.name, i]));
   ruleId.set('$template', grammar.rules.length);
-  // canon rid per rid: a fork collapses to its base; everything else is itself. The
-  // emitted __nodeOf / dispatch switches canonicalize the CHILD's ruleIdOf through
-  // this before comparing to the (base) rid a base matcher expects.
-  const ruleCanon = grammar.rules.map(r => ruleId.get(r.canon ?? r.name)!);
-  ruleCanon.push(grammar.rules.length, grammar.rules.length + 1, grammar.rules.length + 2);   // $template/$error/$missing = self
-  // canon rid for a rule NAME: an arm that (after the fork) references a fork rule
-  // (Param$A) is matched against the BASE rid, since the child's ruleIdOf is also
-  // canonicalized to base in __nodeOf / the dispatch switches.
-  const cid = (name: string) => ruleCanon[ruleId.get(name)!];
+  const cid = (name: string) => ruleId.get(name)!;
   
 
   // Pratt / leftRec classification (mirrors the engines' classifyAlts/classifyLeftRec:
@@ -536,7 +523,6 @@ export function generateCstMatch(grammar: CstGrammar): string {
   const matcherMapEntries: string[] = [];
 
   for (const rule of grammar.rules) {
-    if (rule.canon) continue;   // a fork collapses to its base matcher/type (RULE_CANON)
     const plans = buildArms(rule);
     const tName = matchTypeName(rule.name);
     const nName = nodeType(rule.name);
@@ -603,7 +589,7 @@ export function generateCstMatch(grammar: CstGrammar): string {
       lines.push(`${pad}if (cc < 2) {`);
       lines.push(...memberIdx.map((k, i) => (restAdmit[i] === null || restAdmit[i]!.canEmpty ? pad + '  ' + tryLine(k).trim() : '')).filter(Boolean));
       lines.push(`${pad}} else if ((e1 = __SC[1]) >= 0) {`);
-      lines.push(`${pad}  switch (RULE_CANON[t.ruleIdOf(e1)]) {`);
+      lines.push(`${pad}  switch (t.ruleIdOf(e1)) {`);
       for (const r of [...nset].sort()) {
         lines.push(`${pad}    case ${cid(r)}: { // ${r}`);
         lines.push(...subTry(i => restAdmit[i]!.keys.has('n:' + r)).map(l => '    ' + l));
@@ -656,7 +642,7 @@ export function generateCstMatch(grammar: CstGrammar): string {
     for (let k = 0; k < plans.length; k++) if (admits[k].canEmpty || admits[k].keys.size === 0) disp.push(tryLine(k));
     disp.push(`  } else { const e0 = __SC[0];`);
     disp.push(`  if (e0 >= 0) {`);
-    disp.push(`    switch (RULE_CANON[t.ruleIdOf(e0)]) {`);
+    disp.push(`    switch (t.ruleIdOf(e0)) {`);
     for (const r of [...nodeRules].sort()) {
       disp.push(`      case ${cid(r)}: { // ${r}`);
       const members = plans.map((_, k) => k).filter(k => admits[k].keys.size === 0 || admits[k].keys.has('n:' + r));
@@ -760,13 +746,10 @@ export function generateCstMatch(grammar: CstGrammar): string {
   header.push(`  const e = __SC[i];`);
   header.push(`  return e < 0 && t.leafKindOf(e) === 2;`);
   header.push(`};`);
-  // canon rid table: a fork node's ruleIdOf maps to its base rid before any compare,
-  // so a base matcher accepts a forked child. Identity without ctx forks.
-  header.push(`const RULE_CANON = ${JSON.stringify(ruleCanon)};`);
   header.push(`const __nodeOf = (t: TreeAccess, cc: number, i: number, rid: number): boolean => {`);
   header.push(`  if (i >= cc) return false;`);
   header.push(`  const e = __SC[i];`);
-  header.push(`  return e >= 0 && RULE_CANON[t.ruleIdOf(e)] === rid;`);
+  header.push(`  return e >= 0 && t.ruleIdOf(e) === rid;`);
   header.push(`};`);
   header.push(``);
 
@@ -778,8 +761,7 @@ export function generateCstMatch(grammar: CstGrammar): string {
     `};`,
     `/** rule ID → matcher (the emitted parser's rowRule ids — declaration order). */`,
     `export const MATCHERS_BY_ID: ((t: TreeAccess, n: never, tb: number, src: string) => { arm: string })[] = [`,
-    // a fork's rid maps to its BASE matcher (forks emit no matcher of their own).
-    ...grammar.rules.map(r => `  match${sanitizeIdent(r.canon ?? r.name)},`),
+    ...grammar.rules.map(r => `  match${sanitizeIdent(r.name)},`),
     `];`,
   ];
 
