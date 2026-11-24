@@ -4,8 +4,9 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
@@ -767,6 +768,12 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // Recognized, an interpolated template runs its building matcher and its node is dropped.
     template: (name, hole) => `(matchTok${S}(${kidOf(ids, name)}) || ${m === 'r' ? `_drop(_n, matchTemplateW(parse${hole}W))` : `matchTemplateW(parse${hole}W)`})`,
     rule: (name) => `parse${name}${S}()`,
+    // Declared target contexts: built only in the building form (a recognized rd rule computes no form).
+    acc: (call, mask) => (m === 'w' ? `(${call} && _accK(${mask}))` : call),
+    accSep: () => (m === 'w' ? '_accS()' : 'true'),
+    target: (mask) => { if (m !== 'w') throw new Error('ts: a target() step in a recognized body'); return `(_form & ${mask}) !== 0`; },
+    accRun: (cond, f) => (m === 'w' ? `(_accIn(${f.init}) && ${cond} ? _accOut(${f.low}, ${f.last}) : _accNo())` : cond),
+    armForm: armFormTs,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
@@ -815,6 +822,10 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   return L;
 }
 const stepCond = (s: Step, ids: LexIdPlan, m: Mode): string => stepExpr(s, tsSteps(ids, m));
+// An arm's form when it won (declared-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
+const armFormTs = (f: ArmForm, pratt: boolean): string => (f.k === 'const' ? `${f.v}` : f.k === 'acc' ? '_accF' : pratt ? '(_form & -4)' : '_form');
+// The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
+const lowTs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
 
 // ParserIR.lookaheads, one function each, in recognize form (ParserIR.forms): whether the body
 // matches here; it undoes the position (a Pratt rule it runs leaves nothing behind: its node is
@@ -853,27 +864,30 @@ function rdRuleW(r: RdRule, ids: LexIdPlan): string {
 // that wins is moved down to `b` over the best it beat (candTs).
 function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
   const cn = J(r.name), w = m === 'w';
+  // A rule of the target closure (RdRule.altForm) returns its winning arm's form in _form.
+  const tf = w ? r.altForm : undefined;
+  const setForm = (i: number) => (tf && tf[i]!.k !== 'unit' ? ` _form = ${armFormTs(tf[i]!, false)};` : '');
   return {
     steps: tsSteps(ids, m),
     fn: (lines) => `function parse${r.name}${w ? 'W' : 'R'}(): boolean {\n${lines.join('\n')}\n}`,
     ind: '  ',
     ifThen: (test, then) => `if (${test}) ${then}`,
     first: (f) => firstCond(f, 't', ids),
-    accept: (i) => (w ? `{ ${finRTs(r.name, `alt${i}`, 'b', 'save')}; return true; }` : 'return true;'),
+    accept: (i) => (w ? `{ ${finRTs(r.name, `alt${i}`, 'b', 'save')};${setForm(i)} return true; }` : 'return true;'),
     open: () => (w ? '  const save = pos, b = _n;' : '  const save = pos;'),
     peekOrFail: '  const t = peek(); if (t === null) return false;',
     armJoin: ' ',
     fail: (clean) => (w ? (clean ? '  return false;' : '  back(save); _n = b;\n  return false;') : '  back(save);\n  return false;'),
-    openBest: (d) => (w ? `  const save = pos, b = _n;\n  let bestPos = save${biTs(d)};` : '  const save = pos;\n  let bestPos = save;'),
+    openBest: (d) => (w ? `  const save = pos, b = _n;\n  let bestPos = save${biTs(d)}${tf ? ', bfm = 0' : ''};` : '  const save = pos;\n  let bestPos = save;'),
     peekOpt: '  const _ft = peek();',
-    cand: (d, i, cond) => candTs(d, i, m, cond, `${finRTs(r.name, `alt${i}`, 'c', 'save')}; _keep(b, c); bestPos = pos;${markTs(d, i)}`),
+    cand: (d, i, cond) => candTs(d, i, m, cond, `${finRTs(r.name, `alt${i}`, 'c', 'save')}; _keep(b, c); bestPos = pos;${markTs(d, i)}${tf ? ` bfm = ${armFormTs(tf[i]!, false)};` : ''}`),
     guard: (g, keyed, stmt) => { const c = guardCond(g, '_ft', keyed); return ifTs(c.length && !keyed ? ['_ft !== null', ...c] : c, stmt); },
     dispatch: dispatchTsL('_ft'),
-    closeBest: w ? '  pos = bestPos;\n  return _n !== b;' : '  pos = bestPos;\n  return bestPos > save;',
+    closeBest: w ? `  pos = bestPos;${tf ? '\n  _form = bfm;' : ''}\n  return _n !== b;` : '  pos = bestPos;\n  return bestPos > save;',
     commitPeek: '  const _ft = peek();',
     guardConds: (g) => guardCond(g, '_ft', false),
     commit: (i, conds, cond, undo, nullable) => commitTs(conds, w
-      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `alt${i}`, 'b', 's')}; return true; }${undo ? ' back(s); _n = b;' : ''} }`
+      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `alt${i}`, 'b', 's')};${setForm(i)} return true; }${undo ? ' back(s); _n = b;' : ''} }`
       : `{ ${undo ? 'const s = pos; ' : ''}if (${cond}${nullable ? ' && pos > s' : ''}) return true;${undo ? ' back(s);' : ''} }`, 'return false;'),
     commitFail: '{ return false; }',
     commitSw: commitSwTs('_ft'),
@@ -974,7 +988,8 @@ function tsPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
   const rec = <T extends { lid: number }>(xs: T[], v: (x: T) => string | number) => `{ ${xs.map((x) => `${x.lid}: ${v(x)}`).join(', ')} }`;
   const set = <T extends { lid: number; tgt: boolean }>(xs: T[]) => `new Set<number>([${xs.filter((x) => x.tgt).map((x) => x.lid).join(', ')}])`;
-  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.tgt}, noUnary: ${b.noUnary} }`)};
+  const ctx = r.binForm !== undefined;
+  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean${ctx ? '; ctx: number; acc: number' : ''} }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${b.tgt}, noUnary: ${b.noUnary}${ctx ? `, ctx: ${b.ctx ?? 0}, acc: ${b.acc ?? 0}` : ''} }`)};
 const ${r.name}_PRE: Record<number, number> = ${rec(ops.pre, (p) => p.rbp)};
 const ${r.name}_PRE_FORM: Record<number, number> = ${rec(ops.pre, (p) => p.form)};
 const ${r.name}_PRE_TGT = ${set(ops.pre)};
@@ -994,6 +1009,12 @@ const NUD_FAIL_TS = '{ return nudNone(); }';
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const cn = J(r.name);
   const d = r.nudDispatch;
+  // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
+  const fm = (i: number) => (r.nudForm ? armFormTs(r.nudForm[i]!, true) : '0');
+  const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
+  const lf = (f: string) => lowTs(ir, f);
+  // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${r.binary.some((b) => b.accLeft) ? ' | (form & info.acc)' : ''}` : '1';
   // A NUD arm that won: its node at slot c finished (`fin`), _keep moves it over the best it beat.
   const won = (i: number, fin: string, form: string, tail: boolean, capped: string) =>
     `${fin === 'finR' ? finRTs(r.name, `nud${i}`, 'c', 'save') : finPTs(r.name, `nud${i}`, 'c')}; _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
@@ -1008,9 +1029,9 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     nudGuard: (g, keyed) => guardCond(g, 't', keyed),
     beats: (i, end) => beatsTs(d, end, i),
     leafEnd: 'save + 1',
-    nudLeaf: (i) => `{ const c = _n; leafSlotW(tok_kind(t), t); pos++; ${won(i, 'finP', '0', false, 'false')} back(save); }`,
-    nudTpl: (i, hole) => `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const c = _n; if (matchTemplateW(parse${hole}W) && ${beatsTs(d, 'pos', i)}) { ${won(i, 'finP', '0', false, 'false')} } else _n = c; back(save); }`,
-    nudSeq: (i, cond, tail, cap) => candTs(d, i, 'w', cond, won(i, 'finR', '0', tail, capTs(cap))),
+    nudLeaf: (i) => `{ const c = _n; leafSlotW(tok_kind(t), t); pos++; ${won(i, 'finP', fm(i), false, 'false')} back(save); }`,
+    nudTpl: (i, hole) => `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const c = _n; if (matchTemplateW(parse${hole}W) && ${beatsTs(d, 'pos', i)}) { ${won(i, 'finP', fm(i), false, 'false')} } else _n = c; back(save); }`,
+    nudSeq: (i, cond, tail, cap) => candTs(d, i, 'w', cond, won(i, 'finR', fm(i), tail, capTs(cap))),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `  { const pbp = ${r.name}_PRE[t.lid];
@@ -1019,7 +1040,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       leafSlotW('$operator', t);
       pos++;
       if (${rsCall(r.name, 'operand', `${r.name}_bpW(pbp)`)}) {
-        if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
+        if (${lf('_form')} !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
         if (${beatsTs(d, 'pos', i)}) { ${won(i, 'finP', `${r.name}_PRE_FORM[t.lid]!`, true, 'false')} } else _n = c;
       } else _n = c;
       back(save);
@@ -1027,15 +1048,15 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     dispatch: dispatchTsL('t'),
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, `nud${i}`, 'b')}; _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
-    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')};${cap === 'tail' ? '' : ` _capped = ${capTs(cap)};`} _form = 0; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
+    commitLeaf: (i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, `nud${i}`, 'b')}; _form = ${fm(i)}; _tail = false; return true; }`, NUD_FAIL_TS, true),
+    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')};${cap === 'tail' ? '' : ` _capped = ${capTs(cap)};`} _form = ${fm(i)}; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
     commitPrefix: (i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
     if (pbp !== undefined) {
       const save = pos, b = _n;
       leafSlotW('$operator', t);
       pos++;
       if (${rsCall(r.name, 'operand', `${r.name}_bpW(pbp)`)}) {
-        if (_form !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
+        if (${lf('_form')} !== 0 && ${r.name}_PRE_TGT.has(t.lid)) { back(save); _n = b; _capped = false; return false; }
         ${finPTs(r.name, `nud${i}`, 'b')}; _form = ${r.name}_PRE_FORM[t.lid]!; _tail = true; _capped = false; return true;
       }
       back(save); _n = b;
@@ -1066,28 +1087,28 @@ ${cases.map((c) => `      case ${c.key}:\n${c.arms.map((a) => `      ${a}`).join
     }`,
     postfixToks: (kids) => `    switch (t.kid) {
 ${kids.map((k) => `      case ${k}:
-        if (!tailClosed) { leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, postKey(k), 'b')}; form = 0; continue ledLoop; }
+        if (!tailClosed) { leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, postKey(k), 'b')}; form = ${postTokForm(k)}; continue ledLoop; }
         break;`).join('\n')}
     }`,
     postfixTpl: (hole) => `
-    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { if (matchTemplateW(parse${hole}W)) { ${finPTs(r.name, ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0', 'b')}; form = 0; continue ledLoop; } }`,
+    if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { if (matchTemplateW(parse${hole}W)) { ${finPTs(r.name, ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0', 'b')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue ledLoop; } }`,
     postfixOp: `    const post = ${r.name}_POST[t.lid];
     if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
-      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) { _n = b; return false; }
-      leafSlotW('$operator', t); pos++; ${finPTs(r.name, 'postop', 'b')}; tailClosed = true; form = 1; continue;
+      if (${lf('form')} !== 0 && ${r.name}_POST_TGT.has(t.lid)) { _n = b; return false; }
+      leafSlotW('$operator', t); pos++; ${finPTs(r.name, 'postop', 'b')}; tailClosed = true; form = ${r.postForm ?? 1}; continue;
     }`,
     binary: `    const opLid = _opLid(t);
     const info = ${r.name}_BIN[opLid];
     if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && form !== 0 || info.noUnary && form === 2) { _n = b; return false; }
+    if (info.tgt && ${lf('form')} !== 0 || info.noUnary && ${lf('form')} === 2${r.binForm ? ' || (form & info.ctx) !== info.ctx' : ''}) { _n = b; return false; }
     const ledSave = pos;
     opLeafW(t, opLid);
     pos += _opN;${rsOf(r.name) ? `
     { const lv = ${(() => { const bn = rsOf(r.name)!.bin; return 'fn' in bn ? `${bn.fn}(b, 0, 0)` : J(bn.c); })()}; ${rsCheck(r.name, 'lv', 'ledSave').replace(/\}$/, ' _opLid(t); opLeafW(t, opLid); pos += _opN; }')} }` : ''}
     if (!${rsCall(r.name, 'right', `${r.name}_bpW(info.rbp)`)}) { back(ledSave); _n = b + 1; break; }
     ${finPTs(r.name, 'bin', 'b')};
-    if (_capped) { _form = 1; return true; }
-    form = 1; tailClosed = true;
+    if (_capped) { _form = ${binF}; return true; }
+    form = ${binF}; tailClosed = true;
   }`,
     entry: `${tsPrattOpTables(r, ids)}
 function parse${r.name}W(): boolean {
@@ -1159,6 +1180,19 @@ ${sites.flatMap((st, i) => st.map((c, k) => `    case ${i * 4 + k}: return ${c};
 }
 ${shared.rebindFamily(ir, 'free')}
 ${shared.rebindFamily(ir, 'methods')}`;
+}
+// Declared target contexts (declared-targets.ts): the open container's accumulator `_acc` (its pass
+// bits and the last bits of a child that must stay final), the enclosing ones' on `_accSt`, and
+// `_accF`, the form of the container arm that just matched.
+function targetRuntimeTs(t: TargetsIR): string {
+  return `let _acc = 0, _accF = 0;
+const _accSt: number[] = [];
+function _accIn(init: number): boolean { _accSt.push(_acc); _acc = init; return true; }
+function _accOut(low: number, last: number): boolean { const p = _acc & ${t.passes}; _accF = p | low | ((p << 1) & last); _acc = _accSt.pop()!; return true; }
+function _accNo(): boolean { _acc = _accSt.pop()!; return false; }
+function _accK(m: number): boolean { _acc = (_acc & ~((_acc >> 1) & ${t.passes}) & (_form | ~m) & ${t.passes}) | (_form & (m << 1)); return true; }
+function _accS(): boolean { _acc &= ~((_acc >> 1) & ${t.passes}); return true; }
+`;
 }
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const reuse = ir.reuse;
@@ -1878,6 +1912,7 @@ function emitAstRdAltSteps(
       case 'look':
       case 'ahead':
       case 'aheadCtx':
+      case 'target':
       case 'sameLine': return false;
     }
   };
@@ -1894,6 +1929,7 @@ function emitAstRdAltSteps(
   const emitSteps = (xs: Step[], sink: string): string =>
     xs.length ? xs.map((x) => emitStep(x, sink)).join(' && ') : 'true';
   const emitStep = (s: Step, sink: string): string => {
+    if (s.t === 'target') throw new Error('ts typed AST: declared target contexts not printed yet');
     ctx.step[s.t]++;
     switch (s.t) {
       case 'lit':
@@ -3090,6 +3126,7 @@ function emitShapeCoverageExport(cov: ShapeEmitCtx): string {
 }
 
 function emitShapeAstAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): string {
+  if (ir.targets) throw new Error('ts typed AST: declared target contexts are not printed in the typed-AST form yet');
   const cov = newShapeEmitCtx('(aggregate)', ir.lookaheads);
   const fns = shapeIR.rules.map((sir: ShapeIRRule) => {
     const r = ir.rules.find((x) => x.name === sir.name);
@@ -3446,7 +3483,7 @@ let maxLook = 0;
 let peekEnd = 0;
 let _capped = false;
 let _form = 0;   // assignment-target form of the node the last _nud/_bp call returned
-let _tail = false;   // whether the node the last _nud call returned closes the access tail
+${ir.targets ? targetRuntimeTs(ir.targets) : ''}let _tail = false;   // whether the node the last _nud call returned closes the access tail
 // A NUD that matched nothing, from its commit switch: the state its frame leaves then.
 function nudNone(): boolean { _capped = false; _form = 0; _tail = false; return false; }
 // Indices into the grammar's suppress sets (ParserIR.suppressSets; 0 = none): the set a \`suppress\`

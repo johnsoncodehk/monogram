@@ -244,8 +244,11 @@ function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], ow
   }
 }
 
-for (const p of await prepareAll(selectedCases().filter((c) => ECMASCRIPT.has(c.grammar)))) {
-  if (!ECMASCRIPT.has(p.c.grammar)) continue;
+// Beyond ECMAScript, the grammars whose plan has a recovery encoding of its own (a capped prefix's
+// cap on a REC_N_SEQ entry: recovery-family.ts riNudOf), on their lists.
+const RECOVERY_GRAMMARS = new Set([...ECMASCRIPT, 'cappedcalc']);
+for (const p of await prepareAll(selectedCases().filter((c) => RECOVERY_GRAMMARS.has(c.grammar)))) {
+  if (!RECOVERY_GRAMMARS.has(p.c.grammar)) continue;
   const { c, grammar, runners, oracleOut, tokenize } = p;
   recoveryClass(c, grammar, runners, oracleOut, [...parityCorpus(p).map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
 }
