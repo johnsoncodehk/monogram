@@ -2979,6 +2979,34 @@ export function ruleIdOf(plan: ArenaIdPlan, rule: string): number {
 export type LexFirstBytes = { bytes: number[]; nonAscii: boolean };
 
 /** Conservative FIRST-byte analysis for a punct literal. */
+/** The punctuators as DATA: one candidate table read by ONE site in the lexer loop, not one
+ *  generated test-and-emit per punctuator. Why: in a lexer loop with an inlined emit per
+ *  punctuator, adding one punctuator changed register allocation across the whole function (one
+ *  more site spilled the input length: docs/MEASUREMENT.md "Large functions at the edge of the
+ *  register budget"); with the table, the loop's code does not depend on the punctuator set.
+ *  `at[b]` (b < 128) = [start, count] into `cands`, the punctuators that begin with byte b in
+ *  their declared order (longest first, as ParserIR.puncts lists them); a candidate matches where
+ *  `(w & mask) == word`, w being the next four bytes little-endian (zero past the input's end).
+ *  A punctuator whose first character is not ASCII, or that is longer than four bytes, stays
+ *  generated code (`coded`). */
+export type PunctTable = { at: Array<[number, number]>; cands: Array<{ text: string; word: number; mask: number; len: number; lid: number }>; coded: string[] };
+export function punctTable(puncts: readonly string[], ids: LexIdPlan): PunctTable {
+  const ascii = (p: string) => p.length >= 1 && p.length <= 4 && [...p].every((ch) => ch.charCodeAt(0) < 128);
+  const coded = puncts.filter((p) => !ascii(p));
+  const at: Array<[number, number]> = [];
+  const cands: PunctTable['cands'] = [];
+  for (let b = 0; b < 128; b++) {
+    const start = cands.length;
+    for (const p of puncts) {
+      if (!ascii(p) || p.charCodeAt(0) !== b) continue;
+      let word = 0, mask = 0;
+      for (let i = 0; i < p.length; i++) { word |= p.charCodeAt(i) << (8 * i); mask |= 0xff << (8 * i); }
+      cands.push({ text: p, word: word >>> 0, mask: mask >>> 0, len: p.length, lid: lidOf(ids, p) });
+    }
+    at.push([start, cands.length - start]);
+  }
+  return { at, cands, coded };
+}
 export function punctFirstBytes(value: string): LexFirstBytes | null {
   if (value.length === 0) return null;
   const c = value.charCodeAt(0);

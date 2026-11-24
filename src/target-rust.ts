@@ -13,7 +13,7 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, punctTable, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -399,7 +399,7 @@ function rustMatchLabels(bytes: number[]): string {
 
 function buildLexCandidates(
   ir: ParserIR, shared: SharedAlgorithms, stateful: boolean, ids: LexIdPlan, rxTok: string | undefined,
-  punctLine: (p: string) => string, errAt: string,
+  punctLine: (p: string) => string, errAt: string, coded: readonly string[],
 ): { codes: string[]; firsts: (LexFirstBytes | null)[] } {
   const identLike = new Set(ir.identLike);
   const codes: string[] = [];
@@ -408,7 +408,8 @@ function buildLexCandidates(
     codes.push(scanTok(ir, t, shared, stateful, ids, rxTok, identLike, errAt));
     firsts.push(lexTokFirstBytes(t));
   }
-  for (const p of ir.puncts) {
+  // only the punctuators the table cannot hold are code (emit-portable punctTable)
+  for (const p of coded) {
     codes.push(punctLine(p));
     firsts.push(punctFirstBytes(p));
   }
@@ -418,7 +419,7 @@ function buildLexCandidates(
 /** Shared first-byte dispatch for all lexFrom variants in this target. */
 // `armHead`: code that runs first in the arm of one ASCII byte (and nowhere else), for a test that
 // only that byte can pass.
-function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string, armHead: { byte: number; code: string } | null = null, moreHeads: Map<number, string> = new Map()): string {
+function renderLexByteDispatchRust(codes: string[], firsts: (LexFirstBytes | null)[], indent: string, specialAsciiArms: string, nonAsciiWsCheck: string, punctSite: string, armHead: { byte: number; code: string } | null = null, moreHeads: Map<number, string> = new Map()): string {
   const { arms, fallbackIndices } = buildLexDispatchPlan(firsts);
   const fallback = fallbackIndices.map((i) => codes[i]).join('\n');
   let matchArms = specialAsciiArms;
@@ -438,6 +439,7 @@ ${indent}        } else {
 ${indent}        match b[pos] {
 ${matchArms}${indent}        _ => {}
 ${indent}        }
+${punctSite}
 ${indent}        }`;
 }
 
@@ -447,7 +449,7 @@ ${indent}        }`;
 // speculation (lexed as code to its verdict, then rewound: docs/REGIONS.md). A lexer error while a
 // signature is undecided is its verdict (the head was an element): the loop head rewinds.
 function elementLexerRust(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms, p: {
-  head: string; scans: string; tplFn: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[]; specialArms: string; nonAscii: string;
+  head: string; scans: string; tplFn: string; lexCodes: string[]; lexFirsts: (LexFirstBytes | null)[]; specialArms: string; nonAscii: string; punctSite: string;
   tplCloseTest: string; tplOpenPreCheck: string; closeByte: number | null; uniIdentOrPanic: string; pavHot: string; lexStacks: string; takeStk: (f: string) => string;
 }): string {
   const el = ir.elements!, rx = ir.regexCtx, tpl = ir.tpl, sig = el.signature, raw = el.rawText.length > 0, dirs = !!el.directives;
@@ -583,7 +585,7 @@ ${sig ? '            if op == 2 { st.spec_begin(&mut sp, pos); bound = 0; }\n' :
   place(el.tagOpen, entry);
   place(el.holeClose, holeClose);
   if (tpl) { if (p.closeByte !== null) place(tpl.interpClose, p.tplCloseTest); else pre += p.tplCloseTest; pre += p.tplOpenPreCheck; }
-  const cascade = renderLexByteDispatchRust(p.lexCodes, p.lexFirsts, '        ', p.specialArms, p.nonAscii, null, heads);
+  const cascade = renderLexByteDispatchRust(p.lexCodes, p.lexFirsts, '        ', p.specialArms, p.nonAscii, p.punctSite, null, heads);
   const frameStep = `        if let Some(&fr) = st.template_stack.last() { if fr & 3 == 2 {
             let after_eq = st.acc.last().map_or(false, |t| t.lid == _LID_EQ);
             let (fe, fk, fl, ft, fp, fa, fla) = ${shared.elementFn('frame')}(src, pos as isize, fr as isize, st.tag_angle, after_eq, st.la_end${dirs ? ', st.paren_head.len() as isize' : ''});
@@ -801,11 +803,29 @@ function lexer(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   };
   const punctLine = (p: string) =>
     `        if ${startByteEq('pos', p)} { ${braceStep(p)}${stateful ? `st.emit(pos, pos + ${tlen(p)}, 0, ${lidOf(ids, p)});` : `toks.push(mk_tok(pos, pos + ${tlen(p)}, pending_nl, 0, ${lidOf(ids, p)})); pending_nl = false;`} pos += ${tlen(p)}; continue; }`;
-  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt);
+  // The punctuators as data (emit-portable punctTable): one site after the byte dispatch, which an
+  // arm leaves when its scanners matched nothing.
+  const pt = punctTable(ir.puncts, ids);
+  const { codes: lexCodes, firsts: lexFirsts } = buildLexCandidates(ir, shared, stateful, ids, rx?.regexToken, punctLine, errAt, pt.coded);
+  const ptBrace = pt.cands.filter((c) => braceSteps.has(c.text)).map((c) => `if plid == ${c.lid} { ${braceStep(c.text)}} `).join('');
+  const punctSite = `        { let (pl, plid) = _punct(b, pos); if pl != 0 { ${ptBrace}${stateful ? 'st.emit(pos, pos + pl, 0, plid);' : 'toks.push(mk_tok(pos, pos + pl, pending_nl, 0, plid)); pending_nl = false;'} pos += pl; continue; } }`;
+  const punctTables = `static _PUNCT_AT: [(u8, u8); 128] = [${pt.at.map(([a, k]) => `(${a}, ${k})`).join(', ')}];
+static _PUNCT: [(u32, u32, u8, u16); ${pt.cands.length}] = [${pt.cands.map((c) => `(${c.word}, ${c.mask}, ${c.len}, ${c.lid})`).join(', ')}];
+/// The punctuator at pos (b[pos] < 128): its length and lid, (0, 0) if none (emit-portable punctTable).
+#[inline(always)]
+fn _punct(b: &[u8], pos: usize) -> (usize, u16) {
+    let (s, k) = _PUNCT_AT[(b[pos] & 127) as usize];
+    if k == 0 { return (0, 0); }
+    let w = if pos + 4 <= b.len() { u32::from_le_bytes([b[pos], b[pos + 1], b[pos + 2], b[pos + 3]]) } else { let mut w = 0u32; let mut i = 0; while pos + i < b.len() { w |= (b[pos + i] as u32) << (8 * i); i += 1; } w };
+    let (mut i, e) = (s as usize, s as usize + k as usize);
+    while i < e { let (v, m, l, lid) = _PUNCT[i]; if w & m == v { return (l as usize, lid); } i += 1; }
+    (0, 0)
+}
+`;
   // Where no candidate can begin at a non-ASCII byte, the byte is whitespace, an identifier or an
   // error: one cold call decides, so the dispatch loop holds no Unicode code (register layout).
   const nonAsciiCold = !nlRs && !!ir.identToken && buildLexDispatchPlan(lexFirsts).fallbackIndices.length === 0;
-  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck,
+  const cascade = renderLexByteDispatchRust(lexCodes, lexFirsts, '        ', `${wsNlArms}${tplOpenArm}`, nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck, punctSite,
     closeByte !== null ? { byte: closeByte, code: tplCloseTest } : null);
   // Struct fields / emit hooks / init are assembled per-feature so a grammar can have regex,
   // templates, or both share one LexState. Rx bookkeeping is fully integerized (lid/kid bit tables).
@@ -875,7 +895,7 @@ ${shared.uniIdent(ir) ? `#[inline(never)] fn ${shared.uniIdent(ir)}(s: &str, p: 
     e
 }
 ` : ''}`;
-  const rxConsts = `${RS_LEX_ERR}${lexUtf8Helpers}${rxBitTables}${tplLidConsts}${nlRs ? nlRs.consts : ''}`;
+  const rxConsts = `${RS_LEX_ERR}${lexUtf8Helpers}${punctTables}${rxBitTables}${tplLidConsts}${nlRs ? nlRs.consts : ''}`;
   const pavHot = rx ? rsLidAny(ids, rx.postfixAfterValue, 'lid') : 'false';
   // The span itself is the shared family's scanner; this reads which delimiter ended it.
   // (interp, end), or the span's lexer error: (false, q) with q < 0 (_lex_tpl_err).
@@ -1022,7 +1042,7 @@ ${nlWs}${tplDispatch}${cascade}
 ${uniIdentOrPanic}`;
   if (el) {
     return elementLexerRust(ir, ids, shared, {
-      head: `${renderIdTablesRust(ids)}${rxConsts}`, scans, tplFn, lexCodes, lexFirsts, specialArms: `${wsNlArms}${tplOpenArm}`,
+      head: `${renderIdTablesRust(ids)}${rxConsts}`, scans, tplFn, lexCodes, lexFirsts, specialArms: `${wsNlArms}${tplOpenArm}`, punctSite,
       nonAscii: nonAsciiCold ? nonAsciiColdCall : nonAsciiWsCheck, tplCloseTest, tplOpenPreCheck, closeByte, uniIdentOrPanic, pavHot, lexStacks, takeStk,
     });
   }
