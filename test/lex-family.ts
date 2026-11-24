@@ -315,7 +315,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const f = join(dir, `regex${mod++}.ts`);
     // The escape check's two target routines, as stubs that pass every escape: the scanner's end
     // is the regex's either way (whether an escape is valid is portable-targets' corpus).
-    const stubs = (gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
+    const stubs = (tsTarget.shared.uniClass(gir) ? `function ${tsTarget.shared.uniClass(gir)}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${toks.map((t) => tsTarget.shared.scanner(t.name)).join(', ')} };\n`);
     const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
     for (const t of toks) {
@@ -401,7 +401,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     // the TS target returns the opens step's second value in a module slot (tsSlotted in src/targets/target-ts.ts)
     const opens = e.entry === 'operand' && (e.head || e.signature) ? [EL_OPENS_FN, `${EL_OPENS_FN}_r1`] : [];
     const f = join(dir, `el${mod++}.ts`);
-    const stubs = (gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
+    const stubs = (tsTarget.shared.uniClass(gir) ? `function ${tsTarget.shared.uniClass(gir)}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${[...region.map((n) => scannerName(n)), ...opens].join(', ')} };\n`);
     const m = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;
     for (const name of region) {
@@ -620,7 +620,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const plan = lexLookPlan(gir);
     const withEnd = new Set(plan.arms.flatMap((a) => a.cands.filter((c) => c.readEnd).map((c) => c.tok!)));
     const f = join(dir, `reads${mod++}.ts`);
-    const stubs = (gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
+    const stubs = (tsTarget.shared.uniClass(gir) ? `function ${tsTarget.shared.uniClass(gir)}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
     const exps = [...toks.map((t) => tsTarget.shared.scanner(t.name)), ...[...withEnd].map(readEndName)];
     writeFileSync(f, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${exps.join(', ')} };\n`);
     const scan = await import(pathToFileURL(f).href) as Record<string, (s: string, p: number) => number>;

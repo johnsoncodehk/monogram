@@ -8,7 +8,7 @@ import type { Lowering } from '../ir/algo-ir.ts';
 import type { EmitOptions, Target } from './target.ts';
 import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, recoveryTables } from '../ir/parser-ir.ts';
 import type { Grammar, TokenPattern } from '../grammar/types.ts';
-import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, tplSpanStrict, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from '../ir/lex-family.ts';
+import { lexScanFamily, EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, tplSpanStrict, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from '../ir/lex-family.ts';
 import { RELEX_EDITS, emitRelexFamily, relexEditsArgs } from '../ir/relex-family.ts';
 import { emitReuseFamily } from '../ir/reuse-family.ts';
 import { emitRecoveryFamily } from '../ir/recovery-family.ts';
@@ -54,8 +54,8 @@ export interface SharedAlgorithms {
   // (lex-family tplSpanStrict): `strict` says whether it does, and `call` passes it only then.
   tplSpan(tpl: { escapeValid: TokenPattern | null }): { strict: boolean; call(s: string, p: string, strict: string): string };
   // The name the target prints the identifier escape check's Unicode identifier class under
-  // (lex-family.ts), `(cp) -> int`.
-  uniClass(): string;
+  // (lex-family.ts UNI_CLASS), `(cp) -> int`; null when no scanner checks an escape, so the target prints none.
+  uniClass(ir: ParserIR): string | null;
   // The name it prints the Unicode IdentifierName scanner under (lex-family.ts UNI_IDENT),
   // `(s, p) -> int`: the end, or -1; null when the scanners do not call it (no identifier-like
   // token has a prefix), so the target prints none.
@@ -123,7 +123,7 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
       const strict = tplSpanStrict(tpl);
       return { strict, call: (s, p, st) => lowering().expr.call(lowering().ident(TPL_SPAN), strict ? [s, p, st] : [s, p]) };
     },
-    uniClass: () => lowering().ident(UNI_CLASS),
+    uniClass: (ir) => (lexScanFamily(ir).fns.some((f) => f.name === UNI_CLASS) ? lowering().ident(UNI_CLASS) : null),
     uniIdent: (ir) => (hasUniPrefix(ir) ? lowering().ident(UNI_IDENT) : null),
     shapePlan: planShape,
     shapeFamily: (plan) => {
