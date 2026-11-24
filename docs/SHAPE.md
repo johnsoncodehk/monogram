@@ -64,14 +64,19 @@ export default defineShape(grammar, {
 ```js
 evaluateShape(shape, parse("let x = -(1 + y);"), "let x = -(1 + y);")
 // =>
-{ "kind": "Program", "start": 0, "end": 17, "fields": { "body": [
-  { "kind": "Let", "start": 0, "end": 17, "fields": { "name": "x", "init":
-    { "kind": "Neg", "start": 8, "end": 16, "fields": { "operand":
-      { "kind": "Add", "start": 10, "end": 15, "fields": {
-        "left": { "kind": "Num", "start": 10, "end": 11, "fields": { "value": 1 } },
-        "right": { "kind": "Name", "start": 14, "end": 15, "fields": { "name": "y" } } } } } } } } ] } }
+{ "kind": "Program", "start": 0, "end": 17, "body": [
+  { "kind": "Let", "start": 0, "end": 17, "name": "x", "init":
+    { "kind": "Neg", "start": 8, "end": 16, "operand":
+      { "kind": "Add", "start": 10, "end": 15,
+        "left": { "kind": "Num", "start": 10, "end": 11, "value": 1 },
+        "right": { "kind": "Name", "start": 14, "end": 15, "name": "y" } } } } ] }
 ```
 <!-- shape-example-value:end -->
+
+A node is ONE flat object: its kind and span under the shape's node keys, then its fields in the
+term's order (an absent one left out). The keys default to `kind`, `start`, `end`; a shape declares
+its own with `node: { kind, start, end }` (ESTree: `node: { kind: 'type' }`, so the value IS an
+ESTree node), and a node term with a field of one of those names is a load error.
 
 (`parse` is the interpreter's: `createParser(grammar).parse(src)` from `src/gen-parser.ts`. The
 parenthesised `1 + y` passes through: the Add node spans `1 + y`, not its parentheses.)

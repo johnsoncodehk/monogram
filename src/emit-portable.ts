@@ -447,7 +447,7 @@ export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefin
 export type NudRef =
   | { kind: 'tok'; index: number }       // nudToks[index]
   | { kind: 'bracket'; index: number }   // nudBrackets[index]
-  | { kind: 'seq'; index: number }       // nudSeqs[index]
+  | { kind: 'seq'; index: number; capBp?: number }   // nudSeqs[index]; capBp: a capped prefix operator's arm (`op $` at its rbp), a candidate only when minBp < capBp
   | { kind: 'capped'; index: number }    // nudCapped[index] — a candidate only when minBp < capBp
   | { kind: 'prefix' };                  // the prefix-operator arm (`prefix $`), every op of `prefix`
 export type Bracket = { first: string; steps: Step[] };          // a literal-led sequence (grouping/array; LED call/index)
@@ -633,6 +633,9 @@ export type ParserIR = {
   shared: Step[];              // the steps printed once and called from each site, indexed by Step.share (see shareSteps)
   forms: Forms;                // which rules and shared steps are printed in building and in recognize form (see Forms)
   reuse: ReusePlan | null;     // how incremental reuse cuts the entry rule into top-level entries (see ReusePlan); null: no reuse
+  /** The tokens that can begin a top-level entry of a reuse plan A (FIRST over concrete symbols of
+   *  its rules), where total parsing's fallback resumes; null: none known. */
+  entrySync: FirstSig;
   suppressSets: string[][];    // the connector sets `suppress` steps disable, indexed by Step.set; [0] is the empty set
   regexCtx: RegexCtx | null;   // null unless the grammar has a regex token with context
   tpl: TplCfg | null;          // null unless the grammar has a template token
@@ -934,6 +937,9 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       // interpolated template, wherever it stands.
       case 'ref': return tokenNames.has(e.name) ? { t: 'tok', name: e.name, ...(e.hole !== undefined ? { hole: e.hole } : {}) } : { t: 'rule', name: e.name };
       case 'group': {
+        // atLevel(op, R): the Pratt rule R called at op's level (the chain-rhs operand's step).
+        const lvl = a.atLevelBp(e);
+        if (lvl !== null) return { t: 'ruleBp', name: (e.body as { name: string }).name, bp: lvl };
         const ss = altSteps(e.body);
         if (e.ctxMode) return ctxOf(e.ctxMode, ss);                                 // [Await]/[Yield] context
         if (e.suppress && e.suppress.length) return suppressOf(e.suppress, ss);   // no-`in` context
@@ -1452,7 +1458,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
               return { first: { lits: [], toks: tplArm ? [k, '$templateHead'] : [k] }, lead: [], runtime: false, nullable: false, clean: true, ...(tplArm ? { frameAt: ['$templateHead'] } : {}) };
             }
             case 'bracket': { const b = r.nudBrackets[n.index]!; return { first: { lits: [b.first], toks: [] }, lead: [], runtime: false, nullable: nullableList(b.steps), clean: listFailsClean(b.steps) }; }
-            case 'seq': { const g = r.nudSeqGuard[n.index]!; const st = guardedSteps(g, r.nudSeqs[n.index]!); return { first: g?.first ?? null, lead: g?.lead ?? [], runtime: g !== null && g.second !== null, nullable: nullableList(st), clean: listFailsClean(st) }; }
+            case 'seq': { const g = r.nudSeqGuard[n.index]!; const st = guardedSteps(g, r.nudSeqs[n.index]!); return { first: g?.first ?? null, lead: g?.lead ?? [], runtime: n.capBp !== undefined || (g !== null && g.second !== null), nullable: nullableList(st), clean: listFailsClean(st) }; }
             case 'capped': { const g = r.nudCappedGuard[n.index]!; const st = guardedSteps(g, r.nudCapped[n.index]!.steps); return { first: g?.first ?? null, lead: g?.lead ?? [], runtime: true, nullable: nullableList(st), clean: listFailsClean(st) }; }
             case 'prefix': return { first: { lits: ops, toks: [] }, lead: [], runtime: false, nullable: false, clean: false };
           }
@@ -1469,7 +1475,13 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   const entry = findEntryRule(grammar);
   const forms = formsOf(rules, lookaheads, shared.length, entry);
   const identPrefix = Object.fromEntries(identLike.map((n) => [n, grammar.tokens.find((t) => t.name === n)?.identifierPrefix ?? '']));
-  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse: reusePlanOf(rules, entry), suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
+  const reuse = reusePlanOf(rules, entry);
+  let entrySync: FirstSig = null;
+  if (reuse?.kind === 'A' && !reuse.rules.some((r) => a.nullableRules.has(r))) {
+    const f = new Set(reuse.rules.flatMap((r) => [...concrete.first1({ type: 'ref', name: r })]));
+    entrySync = { lits: [...f].filter((x) => !x.startsWith(KIND)), toks: [...f].filter((x) => x.startsWith(KIND)).map((x) => x.slice(KIND.length)) };
+  }
+  return { grammarName: grammar.name ?? 'grammar', entry, tokens, puncts, gtComps, rules, tokenSets, ctxWords, lookaheads, shared, forms, reuse, entrySync, suppressSets, regexCtx, tpl, elements, newlineCfg, identToken, identLike, identPrefix, identClasses: identifierClassesOf(grammar.tokens) };
 }
 
 // The step lists a rule runs: an rd rule's alternatives, a Pratt rule's NUD and LED arms.
@@ -1889,7 +1901,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
       }
       case 'seq': {
         const g = r.nudSeqGuard[a.index]!;
-        return L.ifAll(L.nudGuard(g, keyed), L.nudSeq(i, cond(guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!)));
+        return L.ifAll([...(a.capBp !== undefined ? [L.capBelow(a.capBp)] : []), ...L.nudGuard(g, keyed)], L.nudSeq(i, cond(guardedSteps(g, r.nudSeqs[a.index]!)), r.nudSeqClosesTail[a.index]!, tailCap(r.nudSeqCapsFromTail[a.index]!)));
       }
       case 'capped': {
         const c = r.nudCapped[a.index]!;
@@ -1936,7 +1948,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     switch (a.kind) {
       case 'tok': return t.first ? [L.kidIs(kidOf(ids, r.nudToks[a.index]!))] : [];
       case 'bracket': return t.first ? [L.lidIs(lidOf(ids, r.nudBrackets[a.index]!.first))] : [];
-      case 'seq': return L.nudGuard(commitGuard(r.nudSeqGuard[a.index]!, t), false);
+      case 'seq': return [...(a.capBp !== undefined ? [L.capBelow(a.capBp)] : []), ...L.nudGuard(commitGuard(r.nudSeqGuard[a.index]!, t), false)];
       case 'capped': return [L.capBelow(r.nudCapped[a.index]!.capBp), ...L.nudGuard(commitGuard(r.nudCappedGuard[a.index]!, t), false)];
       case 'prefix': if (t.first) throw new Error('prattShell: a prefix arm is decided by its key'); return [];
     }
@@ -2265,7 +2277,22 @@ function buildPratt(
         if (items[0].hole !== undefined) nudTplHole = oneHole('NUD', nudTplHole, items[0].hole);
         continue;
       }
-      if (items[0].type === 'prefix') { if (!sawPrefix) { nudOrder.push({ kind: 'prefix' }); nudNames.push(names.ops!.prefix); } sawPrefix = true; continue; }
+      if (items[0].type === 'prefix') {
+        if (!sawPrefix) {
+          if ([...a.prefixOps.values()].some((info) => info.capBp === undefined)) { nudOrder.push({ kind: 'prefix' }); nudNames.push(names.ops!.prefix); }
+          // A capped prefix operator (cappedPrefix) is the sequence `op $` with its operand at the
+          // level's rbp (a ruleBp step), a candidate only below its level (capBelow): the existing
+          // steps and guard, so no target spells anything new. Its node is that sequence's.
+          for (const [op, info] of a.prefixOps) {
+            if (info.capBp === undefined) continue;
+            const arm: RuleExpr = { type: 'seq', items: [{ type: 'literal', value: op }, { type: 'ref', name }] };
+            nudOrder.push({ kind: 'seq', index: nudSeqs.length, capBp: info.capBp }); nudNames.push(names.ops!.prefix);
+            nudSeqGuard.push(altGuard(arm, nudWritten));
+            nudSeqs.push([{ t: 'lit', value: op, ttype: litTtype(op) }, { t: 'ruleBp', name, bp: info.rbp }]);
+          }
+        }
+        sawPrefix = true; continue;
+      }
       // A capExpr (arrow function): an assignment-level group{capBelow}.
       if (items.length === 1 && items[0].type === 'group' && items[0].capBelow !== undefined) {
         const capBp = a.nudCapOf(items[0]);
@@ -2279,7 +2306,7 @@ function buildPratt(
       if (items[0].type === 'literal') { nudOrder.push({ kind: 'bracket', index: nudBrackets.length }); nudNames.push(armName(alt)); nudBrackets.push({ first: items[0].value, steps: items.map((it) => stepOfPratt(it)) }); nudWritten.push(alt); continue; }
       // A single transparent group (no suppress, no context) unwraps to its body (an explicit grouping).
       let nudItems = items;
-      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress && !items[0].ctxMode) {
+      if (items.length === 1 && items[0].type === 'group' && !items[0].suppress && !items[0].ctxMode && items[0].atLevel === undefined) {
         nudItems = items[0].body.type === 'seq' ? items[0].body.items : [items[0].body];
       }
       nudOrder.push({ kind: 'seq', index: nudSeqs.length }); nudNames.push(armName(alt));
@@ -2326,6 +2353,7 @@ function buildPratt(
   function stepOfPratt(e: RuleExpr): Step { return named(e, prattNode(e)); }
   function prattNode(e: RuleExpr): Step {
     if (e.type === 'ref' && e.name === name) return { t: 'rule', name };
+    if (e.type === 'group' && e.atLevel !== undefined) return stepOf(e);   // a ruleBp step (atLevel)
     if (e.type === 'seq') return { t: 'seq', steps: e.items.map(stepOfPratt) };
     if (e.type === 'sameLine') return { t: 'sameLine' };
     if (e.type === 'not') return (e.reservable ? reservableOf : notOf)((e.body.type === 'seq' ? e.body.items : [e.body]).map(stepOfPratt));
@@ -2342,7 +2370,7 @@ function buildPratt(
     return stepOf(e);   // names its step itself (`named` again finds the same names)
   }
   const prefix = sawPrefix
-    ? [...a.prefixOps.entries()].map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
+    ? [...a.prefixOps.entries()].filter(([, info]) => info.capBp === undefined).map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
     : [];
   const binary = sawBinary
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp, requireTarget: !!info.requireTarget, noUnaryLhs: a.noUnaryLhsOps.has(op) }))
@@ -2353,7 +2381,10 @@ function buildPratt(
   const ledForm = leds.map((l): AssignForm => a.binaryConnectors.has(l.first) ? FORM_NOT_TARGET : FORM_TARGET);
   const endsInOperand = (steps: Step[]): boolean => { const l = steps[steps.length - 1]; return l !== undefined && l.t === 'rule' && l.name === name; };
   const nudBracketClosesTail = nudBrackets.map((b) => endsInOperand(b.steps));
-  const nudSeqClosesTail = nudSeqs.map(endsInOperand);
+  // A capped prefix operator's arm (`op operand`, the operand a ruleBp step) closes the tail by its
+  // own mark, as the prefix arm does (a NUD: ledClosesTail below decides only leds).
+  const cappedSeqs = new Set(nudOrder.flatMap((a) => (a.kind === 'seq' && a.capBp !== undefined ? [a.index] : [])));
+  const nudSeqClosesTail = nudSeqs.map((st, i) => cappedSeqs.has(i) || endsInOperand(st));
   // A trailing NEGATIVE lookahead closes the tail (`Foo<T>` then no `(`); a positive one asserts that a
   // continuation follows (Python's `&t_lookahead`) and leaves it open (gen-parser.ts negativeLook).
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]; return !ledAccessTail[i] || ((last?.t === 'look' || last?.t === 'ahead' || last?.t === 'aheadCtx') && !last.is); });
@@ -2550,6 +2581,8 @@ export function lidOf(plan: LexIdPlan, text: string): number {
 
 /** Whether some led of the grammar has a re-bind (PrattRule.ledRebind): the runtime then has the
  *  one re-bind function. */
+/** The grammar has a capped prefix operator: a NUD sequence arm with a cap (NudRef.capBp). */
+export const hasCappedSeq = (ir: Pick<ParserIR, 'rules'>): boolean => ir.rules.some((r) => r.kind === 'pratt' && r.nudOrder.some((a) => a.kind === 'seq' && a.capBp !== undefined));
 export const hasRebind = (ir: Pick<ParserIR, 'rules'>): boolean => ir.rules.some((r) => r.kind === 'pratt' && r.ledRebind.some((x) => x !== null));
 /** The re-bind's brackets (the interpreter's matchMixfixLed counts `( [ {` against `) ] }`): the
  *  literal ids of those that are the grammar's literals (a text no literal has is no token's). */
@@ -3021,8 +3054,16 @@ export const REC_S_LIT = 0, REC_S_COMP = 1, REC_S_TOK = 2, REC_S_TPLTOK = 3, REC
 // A Pratt rule's NUD arms (PrattRule.nudOrder), by tag.
 export const REC_N_TOK = 0, REC_N_BRACKET = 1, REC_N_SEQ = 2, REC_N_CAPPED = 3, REC_N_PREFIX = 4;
 export type RecoveryTables = { data: number[]; ruleAt: number[] };
+// The rule names total parsing reserves (emit option `recovery`): its repair nodes. Their ids come
+// after the grammar's (ArenaIdPlan.ruleNames) in a module emitted with the option; a builder is
+// offered them through node / finish like any rule's.
+export const RESERVED_RULES = ['$error', '$missing'] as const;
+export const reservedRuleIds = (ar: ArenaIdPlan): [number, number] => [ar.ruleNames.length, ar.ruleNames.length + 1];
+// The id plan of a module emitted with the option: the reserved names after the grammar's.
+export const withReservedRules = (ar: ArenaIdPlan): ArenaIdPlan => ({ ...ar, ruleNames: [...ar.ruleNames, ...RESERVED_RULES] });
 export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
   const data: number[] = [];
+  const cappedSeq = hasCappedSeq(ir);   // REC_N_SEQ entries carry their cap (recovery-family riNudOf)
   const rid = (name: string) => ruleIdOf(ar, name);
   const lid = (text: string) => { const l = lidOf(ids, text); if (l === 0) throw new Error(`recoveryTables: ${JSON.stringify(text)} has no lid`); return l; };
   // A cell is an int or a reference to a record already appended (-1: none), held relative.
@@ -3103,7 +3144,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
       switch (a.kind) {
         case 'tok': return [REC_N_TOK, kidOf(ids, r.nudToks[a.index]!), r.nudTplHole !== undefined && ir.tpl !== null && r.nudToks[a.index] === ir.tpl.token ? 1 : 0];
         case 'bracket': return [REC_N_BRACKET, lid(r.nudBrackets[a.index]!.first), ref(list(r.nudBrackets[a.index]!.steps)), r.nudBracketClosesTail[a.index] ? 1 : 0, r.nudBracketCapsFromTail[a.index] ? 1 : 0];
-        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0, r.nudSeqCapsFromTail[a.index] ? 1 : 0]; }
+        case 'seq': { const g = r.nudSeqGuard[a.index]!; return [REC_N_SEQ, ref(guard(g)), ref(list(skip(g, r.nudSeqs[a.index]!))), r.nudSeqClosesTail[a.index] ? 1 : 0, r.nudSeqCapsFromTail[a.index] ? 1 : 0, ...(cappedSeq ? [a.capBp ?? -1] : [])]; }
         case 'capped': { const g = r.nudCappedGuard[a.index]!, c = r.nudCapped[a.index]!; return [REC_N_CAPPED, ref(guard(g)), ref(list(skip(g, c.steps))), c.capBp]; }
         case 'prefix': return [REC_N_PREFIX];
       }
@@ -3129,12 +3170,27 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
     return emit([...head, ...sections.flat()]);
   }
   const n = ar.ruleNames.length;
-  data.push(n, ir.tpl ? kidOf(ids, '$templateHead') : -1, ...Array.from({ length: n }, () => -1));
+  data.push(n, ir.tpl ? kidOf(ids, '$templateHead') : -1, ...Array.from({ length: n }, () => -1), -1);
   const ruleAt = Array.from({ length: n }, () => -1);
   for (const r of ir.rules) {
     const at = r.kind === 'rd' ? rd(r) : pratt(r);
     ruleAt[rid(r.name)] = at;
     data[2 + rid(r.name)] = at;
   }
+  // The trailer ([2 + N] holds its index): the reserved rule ids, the entry rule, the top-level
+  // element and the FIRST signature that can begin one (recovery-family.ts riTotal).
+  const deref = (c: number): number => (data[c]! < 0 ? -1 : c - data[c]!);
+  let el = -1;
+  if (ir.reuse?.kind === 'A') {
+    const rec = ruleAt[rid(ir.entry)]!;
+    const lst = deref(rec + 4);
+    let star = deref(lst + 1);
+    while (data[star] === REC_S_SHARED) star = deref(star + 3);
+    // A plan whose entry the table holds otherwise (a guarded alternative) recovers the whole input.
+    if (data[rec] === REC_RD && data[rec + 2] === 1 && data[lst] === 1 && data[star] === REC_S_STAR) el = deref(star + 2);
+  }
+  const sync = ir.entrySync === null ? -1 : firstSig({ lits: ir.entrySync.lits.filter((l) => lidOf(ids, l) > 0), toks: ir.entrySync.toks });
+  const [errId, missId] = reservedRuleIds(ar);
+  data[2 + n] = emit([errId, missId, rid(ir.entry), ref(el), ref(sync)]);
   return { data, ruleAt };
 }
