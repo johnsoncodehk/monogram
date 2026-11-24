@@ -146,6 +146,12 @@ export function createParser(grammar: CstGrammar) {
   function selfRefName(e: RuleExpr | undefined, ruleName: string): boolean {
     return !!e && e.type === 'ref' && e.name === ruleName;
   }
+  // An operand of this rule read at an operator's level (`atLevel(op, $)`): a NUD ending in one is
+  // PREFIX-SHAPED (the type assertion `<T>e`, a capped prefix `not e`): its node closes the tail and
+  // has the prefix-unary form (not a target, no noUnaryLhs left operand), as emit-portable derives.
+  function selfAtLevel(e: RuleExpr | undefined, ruleName: string): boolean {
+    return !!e && e.type === 'group' && e.atLevel !== undefined && selfRefName(e.body, ruleName);
+  }
   type MixfixInfo = { openLit: string; sepLit: string };
   // A continuation `<lit L1> $self <lit L2> …` whose inner `$self` operand can
   // over-consume the `L2` the operator needs (e.g. ternary `? $ : $`, conditional
@@ -605,12 +611,15 @@ export function createParser(grammar: CstGrammar) {
       return node;
     }
 
+    // The nodes a prefix-shaped NUD built (selfAtLevel): their form is the prefix-unary one.
+    const unaryNodes = new WeakSet<CstNode>();
     // Assignment-target shape test (ECMAScript AssignmentTargetType): a node is NOT a valid
     // LHS target iff its outermost form is a prefix-op (prefix-unary OR prefix-update `++x`)
     // — head child is an `$operator` leaf in prefixOps — or a postfix-update (`x++`) — tail
     // child is an `$operator` leaf in postfixOpValues. A parenthesized cover / member /
     // element / call / non-null (`!`) tail has no `$operator` leaf at head or tail → passes.
     const notAssignTarget = (node: CstNode): boolean => {
+      if (unaryNodes.has(node)) return true;
       const cs = node.children;
       if (cs.length === 0) return false;
       const head = cs[0];
@@ -705,6 +714,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && info.requireTarget && notAssignTarget(rhs)) return null;
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                if (info.capBp !== undefined) unaryNodes.add(lhs);
                 bestNudPos = pos;
                 nudClosed = true;
                 capped = false;   // a prefix NUD is never capped
@@ -720,10 +730,13 @@ export function createParser(grammar: CstGrammar) {
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
           bestNudPos = pos;
-          nudClosed = selfRefName(items[items.length - 1], rule.name);
+          const endsSelf = selfRefName(items[items.length - 1], rule.name);
+          const unary = selfAtLevel(items[items.length - 1], rule.name);
+          nudClosed = endsSelf || unary;
+          if (unary) unaryNodes.add(lhs);
           // The LONGEST match wins; record whether it is capped: a capped arm, or one whose
           // trailing self operand returned capped (`...() => {}`: CAP PROPAGATION, below).
-          capped = capBp !== null || (nudClosed && _prattCapped);
+          capped = capBp !== null || (endsSelf && _prattCapped);
         }
       }
       if (!lhs) return null;
@@ -840,6 +853,7 @@ export function createParser(grammar: CstGrammar) {
             // identifier splitting the statement). `(-x) ** y` is unaffected: lhs is then
             // a parenthesized node, not a prefix node.
             if (noUnaryLhsOps.has(tokKey) && 'children' in lhs) {
+              if (unaryNodes.has(lhs)) return null;
               const head = lhs.children[0];
               if (head !== undefined && 'tokenType' in head && head.tokenType === '$operator'
                   && prefixOps.has(source.slice(head.offset, head.end)) && !postfixOpValues.has(source.slice(head.offset, head.end))) {
