@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  treesitter-queries.ts — every generated tree-sitter query file compiles against its grammar.
+//  tree-sitter-queries.ts — every generated tree-sitter query file compiles against its grammar.
 //  For each tree-sitter/<lang>/ package, loads the wasm built from it and compiles every
 //  queries/*.scm with web-tree-sitter's Query: a query naming a node type or field the grammar
 //  does not have, or a malformed pattern, throws. Before this gate only typescript's
-//  highlights.scm was compiled (by test/treesitter-bench.ts); the other grammars' queries were
+//  highlights.scm was compiled (by test/tree-sitter-bench.ts); the other grammars' queries were
 //  committed unchecked. Needs every wasm built (CI `treesitter` job builds them all).
-//  Run: node test/treesitter-queries.ts
+//  Run: node test/tree-sitter-queries.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 

@@ -144,7 +144,7 @@ if (yaml) {
   for (const s of accept) check(`yaml accepts ${JSON.stringify(s)} (interpreter + emitted)`, iOk(s) && eOk(s));
   for (const s of reject) check(`yaml rejects ${JSON.stringify(s)} (interpreter + emitted)`, !iOk(s) && !eOk(s));
 
-  // gen-tm's flow detector reads FlowMapEntry's TOP-LEVEL literals (it does not descend into an
+  // gen-textmate's flow detector reads FlowMapEntry's TOP-LEVEL literals (it does not descend into an
   // alt or a ref) for the key/value separator, so the rewrite must keep a top-level `:`.
   const topLits = (e: RuleExpr, out: string[]): string[] => {
     if (e.type === 'literal') out.push(e.value);
@@ -153,7 +153,7 @@ if (yaml) {
     return out;
   };
   const fme = yaml.rules.find((r: any) => r.name === 'FlowMapEntry');
-  check('yaml FlowMapEntry keeps `:` as its first top-level literal (gen-tm flow separator)', topLits(fme.body, [])[0] === ':');
+  check('yaml FlowMapEntry keeps `:` as its first top-level literal (gen-textmate flow separator)', topLits(fme.body, [])[0] === ':');
 }
 
 console.log(`\n${ok}/${ok + fail} nullable-rule checks pass${fail ? '' : ' ✓'}`);

@@ -8,7 +8,7 @@
 // otherwise go unnoticed) and prints, per grammar, the tuples to add to its
 // `treeSitterConflicts` and the declared tuples tree-sitter reports as unnecessary.
 //
-// Run after a grammar change that makes `npm run gate:treesitter` fail to generate:
+// Run after a grammar change that makes `npm run gate:tree-sitter` fail to generate:
 //   node test/collect-conflicts.ts
 // then update the named grammar's `treeSitterConflicts` (a JSX-only tuple belongs to the
 // JSX layer in javascriptreact.ts) and re-run `npm run gen`.
@@ -50,7 +50,7 @@ for (const lang of langs) {
       const m = out.match(/Add a conflict for these rules:\s*([^\n]+)/);
       if (!m) {
         // Not a conflict — e.g. yaml's generated grammar.js is not loadable by
-        // tree-sitter (a pre-existing gen-treesitter regex-emission issue, and yaml's
+        // tree-sitter (a pre-existing gen-tree-sitter regex-emission issue, and yaml's
         // tree-sitter is neither built nor gated). Skip it rather than dump a trace.
         const why = /Failed to load grammar|SyntaxError/.test(out) ? 'grammar.js not loadable' : 'unparseable generate error';
         console.error(`[${lang}] skipped — ${why}`);

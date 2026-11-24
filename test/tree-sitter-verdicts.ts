@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  treesitter-verdicts.ts — the derived tree-sitter grammars against the interpreter (createParser)
+//  tree-sitter-verdicts.ts — the derived tree-sitter grammars against the interpreter (createParser)
 //  on the same inputs (CI `treesitter` job, after the wasms are built; never in the `test` job's loop).
 //  One check over a list of corpora per grammar: the synthetic ones below (JSX, issue cases, reserved
 //  words, line breaks, lookaheads, comments, contextual keywords) and the REAL-CODE ones, pinned
 //  checkouts CI clones: TypeScript's own src/ at TS_REPO_SHA (typescript) and test262's syntax tests at
 //  test/test262.sha (javascript; the files the interpreter accepts).
-//  Every disagreement is pinned in test/treesitter-record.txt with its class: an input where tree-sitter
+//  Every disagreement is pinned in test/tree-sitter-record.txt with its class: an input where tree-sitter
 //  reports an ERROR / MISSING node and the interpreter accepts (a defect), one tree-sitter accepts and
 //  the interpreter rejects (an over-acceptance), a line-break input split into other statements. The
 //  check fails on any movement in either direction, a fix included (re-record it: --write, and say
@@ -13,7 +13,7 @@
 //  debugging (docs/HIGHLIGHTER-EVIDENCE.md, "tree-sitter"); --write keeps the recorded classes and
 //  gives a new entry `unclassified`.
 //  Build the wasms first (CI does): cd tree-sitter/<g> && npx tree-sitter generate && npx tree-sitter build --wasm .
-//  Run: node test/treesitter-verdicts.ts [--write]   (appends the tables to $GITHUB_STEP_SUMMARY when set)
+//  Run: node test/tree-sitter-verdicts.ts [--write]   (appends the tables to $GITHUB_STEP_SUMMARY when set)
 // ─────────────────────────────────────────────────────────────────────────────
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -30,7 +30,7 @@ import { tests as issueTests } from './issue-cases.ts';
 const UNIQUE_ISSUE_INPUTS = new Set(['/\\cJ/', '/[a\\-b]/g', 'const re = /foo/v;', 'with (obj) { x; }', 'import defer * as ns from "x";',
   'new Map</* comment */string, IArgs>()', 'if (a instanceof B & c) {}']);
 const issueInputs = issueTests.map(t => t.input).filter(i => UNIQUE_ISSUE_INPUTS.has(i));
-if (issueInputs.length !== UNIQUE_ISSUE_INPUTS.size) throw new Error(`treesitter-verdicts: ${UNIQUE_ISSUE_INPUTS.size - issueInputs.length} of the kept issue cases are no longer in test/issue-cases.ts`);
+if (issueInputs.length !== UNIQUE_ISSUE_INPUTS.size) throw new Error(`tree-sitter-verdicts: ${UNIQUE_ISSUE_INPUTS.size - issueInputs.length} of the kept issue cases are no longer in test/issue-cases.ts`);
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -345,7 +345,7 @@ function errorNodes(root: any): number {
 // files by class (see spanClass); `brackets`: both accept an operator pair, but tree-sitter's expression
 // spans are not the interpreter's (a wrong tree without an ERROR). A class is the first cause (by delta debugging the input, see
 // docs/HIGHLIGHTER-EVIDENCE.md, "tree-sitter"), kept across re-records; a new entry is `unclassified`.
-const RECORD = join(ROOT, 'test/treesitter-record.txt');
+const RECORD = join(ROOT, 'test/tree-sitter-record.txt');
 const WRITE = process.argv.includes('--write');
 const key = (g: string, corpus: string, dir: string, input: string) => `${g} | ${corpus} | ${dir} | ${input}`;
 const recorded = new Map<string, string>();   // key → class
@@ -451,17 +451,17 @@ console.log(table + '\n\n' + classTable + '\n\n' + spanTable);
 // A moved entry is printed as its record line (`grammar | corpus | direction | class | input`).
 const asLine = (k: string, cls: string) => { const [g, corpus, dir, ...rest] = k.split(' | '); return [g, corpus, dir, cls, rest.join(' | ')].join(' | '); };
 const moved = [...entering.map(k => `  + ${asLine(k, found.get(k)!)}`), ...leaving.map(k => `  - ${asLine(k, recorded.get(k)!)}`)];
-if (moved.length) console.log(`\nAgainst test/treesitter-record.txt (+ new disagreement, - one that no longer holds):\n${moved.join('\n')}`);
+if (moved.length) console.log(`\nAgainst test/tree-sitter-record.txt (+ new disagreement, - one that no longer holds):\n${moved.join('\n')}`);
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\n### tree-sitter verdicts against the interpreter\n\n${table}\n\n${classTable}\n\n${spanTable}\n` +
     (moved.length ? `\n<details><summary>${moved.length} change(s) against the record</summary>\n\n${moved.map(d => '- `' + d.trim().replace(/`/g, "'") + '`').join('\n')}\n</details>\n` : ''));
 }
 if (WRITE && !notRun) {
   const lines = [...found].map(([k, cls]) => asLine(k, cls)).sort();
-  writeFileSync(RECORD, `# tree-sitter against the interpreter: every disagreement (test/treesitter-verdicts.ts --write)\n# grammar | corpus | rejects (tree-sitter ERROR, interpreter accepts) or accepts (the reverse) | class | input\n${lines.join('\n')}\n`);
+  writeFileSync(RECORD, `# tree-sitter against the interpreter: every disagreement (test/tree-sitter-verdicts.ts --write)\n# grammar | corpus | rejects (tree-sitter ERROR, interpreter accepts) or accepts (the reverse) | class | input\n${lines.join('\n')}\n`);
   console.log(`wrote ${RECORD} (${lines.length} entries)`);
 } else if (moved.length) {
-  console.error('✗ the verdicts moved against the record: fix it, or re-record with node test/treesitter-verdicts.ts --write and say why');
+  console.error('✗ the verdicts moved against the record: fix it, or re-record with node test/tree-sitter-verdicts.ts --write and say why');
   process.exitCode = 1;
 }
 if (notRun) process.exit(1);

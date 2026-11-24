@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  html-treesitter.ts — gates the DERIVED tree-sitter HTML grammar. Loads the wasm built
+//  html-tree-sitter.ts — gates the DERIVED tree-sitter HTML grammar. Loads the wasm built
 //  from tree-sitter/html/grammar.js (+ src/scanner.c), parses well-formed HTML, and checks
 //    1. NO ERROR nodes (the GLR parser accepts it),
 //    2. TREE-EQUIVALENCE — the element tree (tag names + nesting) matches parse5,
@@ -9,7 +9,7 @@
 //  Build the wasm first:
 //    cd tree-sitter/html && npx tree-sitter generate && npx tree-sitter build --wasm .
 //
-//  Run: node test/html-treesitter.ts
+//  Run: node test/html-tree-sitter.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { existsSync } from 'node:fs';
 import { parseFragment } from 'parse5';

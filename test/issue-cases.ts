@@ -7,7 +7,7 @@ export interface Check { text: string; scope: string; }
 // `monoGap`: an honest reported bug the DERIVED grammar does NOT solve yet (only-official, or
 // both-miss). It still appears in the README cross-language comparison table (graded honestly by
 // test/issue-table.ts), but the Monogram-measurement consumers SKIP it — the self-test
-// (test/test-issues.ts) and the accuracy benches (test/scope-gap.ts, test/treesitter-bench.ts)
+// (test/test-issues.ts) and the accuracy benches (test/scope-gap.ts, test/tree-sitter-bench.ts)
 // gate Monogram's KNOWN-GOOD corpus, not the full honest comparison universe, so a case Monogram
 // gets wrong must not fail them.
 export interface TestCase { label: string; input: string; checks: Check[]; monoGap?: boolean; }
@@ -649,7 +649,7 @@ export const tests: TestCase[] = [
   // identifier-list and a `{Constraint}` brace form — both of which Monogram mirrors exactly)
   // never match it; the official leaves the whole `[Output=Value]` as one bare
   // `comment.block.documentation` blob, `Output` unscoped. Monogram's DERIVED, extensible JSDoc
-  // sub-grammar adds a dedicated bracket-default pattern (gen-tm `generateJsdocPatterns`): the
+  // sub-grammar adds a dedicated bracket-default pattern (gen-textmate `generateJsdocPatterns`): the
   // `[`/`]` get the `@param [opt=default]` square-bracket scopes, `=` is the assignment operator,
   // and the declared param NAME (and its default) become `entity.name.type.jsdoc`. So Monogram
   // colors `Output` as a type name while the official still misses it → an only-Monogram win
@@ -746,7 +746,7 @@ export const tests: TestCase[] = [
   // `import type from "./type"` is a DEFAULT import whose binding is named `type` (tsc:
   // isTypeOnly=false, importClause.name=`type`) — so `type` should be a variable. Monogram's
   // PARSER already distinguishes it (the CFG admits `type` as the default binding), and the
-  // DERIVED highlighter now scopes it variable.other too: gen-tm emits an `import-default-binding`
+  // DERIVED highlighter now scopes it variable.other too: gen-textmate emits an `import-default-binding`
   // rule — the identifier directly after an import keyword that is immediately followed by the
   // module-source connector (or a `,`) is a bound name, exactly like a `const` binding. All three
   // ingredients are read from the grammar, not hardcoded: the import keyword(s) (scope

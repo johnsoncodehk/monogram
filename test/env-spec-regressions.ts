@@ -7,8 +7,8 @@
 // Run with: node test/env-spec-regressions.ts
 import { createParser } from '../src/interpreter.ts';
 import { alt, defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy, notPrecededBy } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
-import { generateTreeSitter } from '../src/gen-treesitter.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
+import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
 
 let ok = 0;
 let fail = 0;

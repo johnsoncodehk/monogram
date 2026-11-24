@@ -12,7 +12,7 @@
 //
 //  Sources (pinned, vendored):
 //   • tree-sitter grammar : node_modules/@vscode/tree-sitter-wasm (recent ABI)
-//   • tree-sitter query   : test/vendor/treesitter-typescript-highlights.scm
+//   • tree-sitter query   : test/vendor/tree-sitter-typescript-highlights.scm
 //                           (official tree-sitter-javascript ecma base + typescript additions)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ function tsCaptureToFamily(name: string): Family | undefined {
 
 // tree-sitter needs an async one-time init (WASM runtime + grammar + query).
 const TS_WASM = 'node_modules/@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm';
-const TS_QUERY = 'test/vendor/treesitter-typescript-highlights.scm';
+const TS_QUERY = 'test/vendor/tree-sitter-typescript-highlights.scm';
 let tsParser: any = null;
 let tsQuery: any = null;
 
@@ -117,7 +117,7 @@ function tsFamiliesWith(parser: any, query: any, code: string): Span[] {
 /** The winning capture name of each captured node (same last-pattern-wins rule as the families). */
 export interface CaptureSpan extends Span { capture: string; node: string }   // node: the captured node's type (`ident`, or the anonymous keyword text)
 
-export function treesitterFamilies(code: string): Span[] {
+export function treeSitterFamilies(code: string): Span[] {
   if (!tsParser || !tsQuery) throw new Error('call loadTreeSitter() first');
   return tsFamiliesWith(tsParser, tsQuery, code);
 }
@@ -142,11 +142,11 @@ export async function loadMonogramTreeSitter(wasmPath: string, queryPath: string
     return false;
   }
 }
-export function monogramTreesitterFamilies(code: string): Span[] {
+export function monogramTreeSitterFamilies(code: string): Span[] {
   if (!mtsParser || !mtsQuery) throw new Error('call loadMonogramTreeSitter() first');
   return tsFamiliesWith(mtsParser, mtsQuery, code);
 }
-export function monogramTreesitterCaptures(code: string): CaptureSpan[] {
+export function monogramTreeSitterCaptures(code: string): CaptureSpan[] {
   if (!mtsParser || !mtsQuery) throw new Error('call loadMonogramTreeSitter() first');
   return tsCapturesWith(mtsParser, mtsQuery, code);
 }
@@ -155,7 +155,7 @@ export function monogramTreesitterCaptures(code: string): CaptureSpan[] {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const code = 'const x: NS.Foo = bar(Baz); function g(p: number){ return p; } class C { m(): void {} } /* c */ const re = /ab/g;';
   const ts = await loadTreeSitter();
-  const tk = ts ? treesitterFamilies(code) : [];
+  const tk = ts ? treeSitterFamilies(code) : [];
   console.log('token'.padEnd(12) + 'tree-sitter');
   console.log('─'.repeat(24));
   for (const m of code.matchAll(/[A-Za-z_$][\w$]*|\/ab\/g/g)) {

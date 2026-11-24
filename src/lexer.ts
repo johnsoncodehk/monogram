@@ -495,7 +495,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     if (markup.tagOpenAfter) emit(`const LX_TAG_OPEN_AFTER = new RegExp(${J('[' + markup.tagOpenAfter + ']')});`);
     if (markup.unquotedValueToken) {
       // Bounds an unquoted attribute value: everything except whitespace, the attribute quotes,
-      // the tag delimiters, the assign char and a backtick (mirrors gen-tm's value pattern).
+      // the tag delimiters, the assign char and a backtick (mirrors gen-textmate's value pattern).
       const ccEscape = (s: string) => s.replace(/[\[\]\\^-]/g, '\\$&');
       const quotes = markup.attributeQuotes ?? ['"', "'"];
       emit(`const LX_UNQUOTED = new RegExp(${J('[^\\s' + ccEscape(quotes.join('') + markup.tagOpen + markup.tagClose + (markup.attributeAssign ?? '=') + '`') + ']+')}, 'y');`);

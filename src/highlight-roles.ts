@@ -2,7 +2,7 @@
 // highlighter's vocabulary. TextMate's scope inference (`classifyToken`, the comment / quote scope
 // conventions), Monarch's token names (`scopeToMonarch`, `classifyTokenScope`) and tree-sitter's
 // highlight captures (`scopeToCapture`, `tokenCapture`). Moved here unchanged from
-// src/highlight-facts.ts, src/gen-monarch.ts and src/gen-treesitter.ts; where the three disagree
+// src/highlight-facts.ts, src/gen-monarch.ts and src/gen-tree-sitter.ts; where the three disagree
 // (numbers: TextMate `constant.numeric.decimal`, Monarch float / integer; a regex token) the
 // disagreement is theirs, kept as it was, and now visible side by side.
 import type { Grammar, TokenDecl } from './types.ts';
@@ -69,7 +69,7 @@ export function classifyToken(token: TokenDecl, opts?: { explicitScope?: boolean
 
 // ── TextMate-scope → Monarch-token mapping ──
 //
-// gen-tm already INFERS a TextMate scope for every construct. Monarch uses a
+// gen-textmate already INFERS a TextMate scope for every construct. Monarch uses a
 // flatter, theme-oriented vocabulary (keyword, type.identifier, number.hex,
 // delimiter.*, …). We map the inferred TM scope to its closest Monarch token so
 // BOTH highlighters agree on roles while each speaks its engine's idiom. Driven
@@ -117,10 +117,10 @@ export function scopeToMonarch(scope: string): string {
   return 'identifier';
 }
 
-// ── Token classification (parallels gen-tm.classifyToken) ──
+// ── Token classification (parallels gen-textmate.classifyToken) ──
 //
 // Resolve the highlight role of a *declared token* from its pattern + flags +
-// any `@scope` override. Same inference gen-tm performs → consistent roles.
+// any `@scope` override. Same inference gen-textmate performs → consistent roles.
 export function classifyTokenScope(token: TokenDecl): string {
   if (token.scope) return token.scope;
   if (token.flags.includes('skip')) {
@@ -142,7 +142,7 @@ export function classifyTokenScope(token: TokenDecl): string {
 
 /**
  * Map a TextMate scope (the same scopes the DSL `scopes` section uses, and the
- * same ones gen-tm.ts infers) to a tree-sitter highlight capture name.
+ * same ones gen-textmate.ts infers) to a tree-sitter highlight capture name.
  * Falls back conservatively. Language-agnostic: keyed on scope PREFIX families,
  * not on specific keywords.
  */
@@ -210,7 +210,7 @@ export function scopeToCapture(scope: string): string | null {
 /**
  * Infer the capture for a token (by its classification), independent of the
  * `scopes` section — for numbers/strings/comments that don't appear there.
- * Mirrors gen-tm.ts's classifyToken families but emits captures.
+ * Mirrors gen-textmate.ts's classifyToken families but emits captures.
  */
 export function tokenCapture(token: Grammar['tokens'][number]): string | null {
   if (token.scope) {

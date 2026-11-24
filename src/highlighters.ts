@@ -2,9 +2,9 @@
 // tree-sitter's highlight queries. `src/cli.ts` writes what each renders. No construct is under
 // the shared context IR yet; Monarch lists what it declines (gen-monarch monarchRefusals).
 import { defineHighlighter } from './define-highlighter.ts';
-import { generateTmLanguage, generateMarkupInjection, generateAliasGrammar, generateContributes } from './gen-tm.ts';
+import { generateTmLanguage, generateMarkupInjection, generateAliasGrammar, generateContributes } from './gen-textmate.ts';
 import { generateMonarch, monarchRefusals } from './gen-monarch.ts';
-import { generateTreeSitter } from './gen-treesitter.ts';
+import { generateTreeSitter } from './gen-tree-sitter.ts';
 import type { Grammar } from './types.ts';
 
 const json = (v: unknown) => JSON.stringify(v, null, 2) + '\n';

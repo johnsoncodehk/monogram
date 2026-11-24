@@ -295,11 +295,11 @@ jobs:
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
           fi
           # tree-sitter/** (the generated packages), the tree-sitter gates themselves, or this workflow;
-          # AND the other side of the comparison: treesitter-verdicts compares tree-sitter's trees with the
+          # AND the other side of the comparison: tree-sitter-verdicts compares tree-sitter's trees with the
           # INTERPRETER's, so a grammar file (root *.ts) or the interpreter (its parser, lexer and the
           # grammar helpers it reads) changing moves the record even when tree-sitter/** is byte-identical
           # (2026-11-24: a change to how `yield` is read left the record stale on master for two landings).
-          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(treesitter-|[a-z]+-treesitter\.ts)|^\.github/workflows/ci\.yml$|^[a-z]+\.ts$|^src/(interpreter|lexer|api|types|grammar-utils|grammar-analysis|grammar-names)\.ts$'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(tree-sitter-|[a-z]+-tree-sitter\.ts)|^\.github/workflows/ci\.yml$|^[a-z]+\.ts$|^src/(interpreter|lexer|api|types|grammar-utils|grammar-analysis|grammar-names)\.ts$'; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "tree-sitter inputs changed — running the gate"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"; echo "no tree-sitter input change — skipping generate/build/bench"
@@ -441,9 +441,9 @@ jobs:
       # indentation scanner compiles + links and runs a corpus-free verdict gate against the
       # interpreter; its accuracy bench needs the yaml-test-suite checkout, so it runs in the
       # readme-bench workflow.
-      # tsx / js / jsx are built too: their queries are compiled against them (treesitter-queries)
-      # and every TS / JS dialect parses its corpora against the interpreter (treesitter-verdicts).
-      # The real-code corpora of treesitter-verdicts: TypeScript's own src/ at TS_REPO_SHA and test262's
+      # tsx / js / jsx are built too: their queries are compiled against them (tree-sitter-queries)
+      # and every TS / JS dialect parses its corpora against the interpreter (tree-sitter-verdicts).
+      # The real-code corpora of tree-sitter-verdicts: TypeScript's own src/ at TS_REPO_SHA and test262's
       # syntax tests at test/test262.sha, the pins the test job's conformance gates clone.
       - name: Clone the pinned real-code corpora (TypeScript src, test262)
         if: steps.changed.outputs.value == 'true'
@@ -468,11 +468,11 @@ jobs:
           for g in typescript typescriptreact javascript javascriptreact html yaml; do
             [ -f "tree-sitter/$g/tree-sitter-$g.wasm" ] || ( cd "tree-sitter/$g" && npx tree-sitter build --wasm . )
           done
-          node test/treesitter-bench.ts
-          node test/html-treesitter.ts
-          node test/yaml-treesitter.ts
-          node test/treesitter-queries.ts
-          node test/treesitter-verdicts.ts
+          node test/tree-sitter-bench.ts
+          node test/html-tree-sitter.ts
+          node test/yaml-tree-sitter.ts
+          node test/tree-sitter-queries.ts
+          node test/tree-sitter-verdicts.ts
       # The wasms, for attributing a disagreement locally (delta debugging needs the built parser; the
       # dev box has no wasm toolchain).
       - name: Upload the wasms

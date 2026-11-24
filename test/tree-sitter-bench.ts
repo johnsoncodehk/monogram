@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  treesitter-bench.ts — the tree-sitter accuracy GATE (CI-runnable).
+//  tree-sitter-bench.ts — the tree-sitter accuracy GATE (CI-runnable).
 //
 //  Monogram's derived tree-sitter highlighter is the strongest thesis proof: the
 //  SAME grammar that drives the parser also drives a real GLR parser + query, and
@@ -15,13 +15,13 @@
 //
 //  Gate: Monogram ≥ FLOOR and Monogram ≥ official. Build the wasm first:
 //    cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm
-//    MONOGRAM_TS_WASM=tree-sitter/typescript/tree-sitter-typescript.wasm node test/treesitter-bench.ts
+//    MONOGRAM_TS_WASM=tree-sitter/typescript/tree-sitter-typescript.wasm node test/tree-sitter-bench.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import ts from 'tsc-oracle';
 import { existsSync } from 'node:fs';
 import { oracle } from './oracle.ts';
 import { ROLE_SPEC, roleFamily, acceptableFamilies } from './scope-roles.ts';
-import { loadTreeSitter, treesitterFamilies, loadMonogramTreeSitter, monogramTreesitterFamilies, monogramTreesitterCaptures, familyAt, type Span } from './highlight-engines.ts';
+import { loadTreeSitter, treeSitterFamilies, loadMonogramTreeSitter, monogramTreeSitterFamilies, monogramTreeSitterCaptures, familyAt, type Span } from './highlight-engines.ts';
 import { tests as issueTests, multiLineTests as issueMultiLine } from './issue-cases.ts';
 
 const WASM = process.env.MONOGRAM_TS_WASM ?? 'tree-sitter/typescript/tree-sitter-typescript.wasm';
@@ -61,8 +61,8 @@ function score(spansOf: (code: string) => Span[]): { correct: number; total: num
   return { correct, total };
 }
 
-const mono = score(monogramTreesitterFamilies);
-const off = score(treesitterFamilies);
+const mono = score(monogramTreeSitterFamilies);
+const off = score(treeSitterFamilies);
 const pct = (x: { correct: number; total: number }) => (x.correct / x.total) * 100;
 const monoPct = pct(mono), offPct = pct(off);
 
@@ -97,7 +97,7 @@ console.log('── tree-sitter word roles (winning capture per word, and its no
 for (const r of WORD_ROLES) {
   const at = r.code.indexOf(r.word);
   const end = at + r.word.length;
-  const hit = monogramTreesitterCaptures(r.code).filter((s) => s.start === at && s.end === end).at(-1);
+  const hit = monogramTreeSitterCaptures(r.code).filter((s) => s.start === at && s.end === end).at(-1);
   const got = hit ? `${hit.node} @${hit.capture}` : '(none)';
   const want = `${r.node} @${r.capture}`;
   const ok = got === want;

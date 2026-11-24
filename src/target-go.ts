@@ -2798,7 +2798,7 @@ function emitBuilderAddonGo(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, share
   const slimDropIds = slimDropIdList.join(', ');
   // Selection: *CstBuilder parses with the direct engine (parseWithCst); other Builders use the
   // builder engine parserW. Why two engines: measured 2026-11-22 on 7fe75f9 (measure-profile,
-  // Go Callgrind instructions per reuse parse, checker.ts / gen-tm.ts / typescript.d.ts /
+  // Go Callgrind instructions per reuse parse, checker.ts / gen-textmate.ts / typescript.d.ts /
   // dense-semi.ts), routing *CstBuilder through parserW costs +34.6% / +32.7% / +32.7% / +42.4%
   // (interface Builder), and still +25.2% / +23.3% / +22.0% / +26.9% with parserW's builder
   // field typed *CstBuilder (no interface: the bound of any devirtualisation). A generic
@@ -3195,7 +3195,7 @@ const goLoweringFor = (rv: string, rt: string): Lowering => ({
   charSet: (name, rs, cold) => cold ? `var ${name} = [2]uint64{${unitMask(rs, 0)}, ${unitMask(rs, 64)}}`
     : `var ${name} = [256]bool{${rs.flatMap(([lo, hi]) => Array.from({ length: hi - lo + 1 }, (_, k) => `${lo + k}: true`)).join(', ')}}`,
   // A byte loop: Rust's four-bytes-per-round shape measured slower here (measure-targets, PR #138:
-  // go-reuse +2.9% to +3.8% on acorn / checker / gen-tm), the compiler keeps the loop tight already.
+  // go-reuse +2.9% to +3.8% on acorn / checker / gen-textmate), the compiler keeps the loop tight already.
   runEndFn: `// lexRunEnd is the end of the run of bytes in set from i: the first j >= i at which s ends or s[j] is not in it.
 func lexRunEnd(s string, i int, set *[256]bool) int {
 \tfor i < len(s) && set[s[i]] {

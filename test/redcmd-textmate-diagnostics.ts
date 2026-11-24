@@ -1,4 +1,4 @@
-// redcmd-tm-diagnostics.ts -- focused CLI guard for the RedCMD TextMate diagnostics that
+// redcmd-textmate-diagnostics.ts -- focused CLI guard for the RedCMD TextMate diagnostics that
 // reported issue #12 (`TextMate(include)` / `TextMate(dead)`) plus the TextMate 2.0
 // Onigmo regex compatibility diagnostic. The upstream extension is VS Code-bound, so this
 // test mirrors the relevant JSON-data subset and fingerprints the vendored source that

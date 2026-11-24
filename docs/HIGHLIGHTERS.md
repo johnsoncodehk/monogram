@@ -33,6 +33,6 @@ back ends share is what is KNOWN about the grammar, not an algorithm:
   to what every engine can do.
 
 The check that the back ends tell the same story is the agreement record
-(`node test/monarch-dialect.ts --agreement`, test/tm-monarch-agreement.json): TextMate's and
+(`node test/monarch-dialect.ts --agreement`, test/textmate-monarch-agreement.json): TextMate's and
 Monarch's tokens over the same real code, every disagreement counted by class, each class with who
 is wrong by the grammar.

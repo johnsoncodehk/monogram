@@ -4,7 +4,7 @@
 //  official's `repository` KEY NAMES — the public API other grammars `#include` by name
 //  (`source.ts#type`, `source.js#qstring-double`, `text.html.basic#tag`, …) — must also
 //  resolve in Monogram's grammar. The `canonicalRepoNames` 限制器 (see typescript.ts /
-//  javascript.ts / html.ts) makes gen-tm emit those official names NATIVELY for every
+//  javascript.ts / html.ts) makes gen-textmate emit those official names NATIVELY for every
 //  construct Monogram genuinely has. This bench reports, per grammar:
 //
 //    • OVERALL match %  = |Mono ∩ Official| / |Official|  — how much of the official repo

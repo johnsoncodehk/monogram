@@ -971,7 +971,7 @@ class Walker {
 // span as a witness in `GenInput.tokens`. A re-parse-and-drop net keeps only injections that still parse.
 
 // The comment delimiters + the witness expectation, discovered GENERICALLY from the grammar config — the
-// SAME comment-classification gen-tm uses (`flags.includes('skip')` OR a `comment.`-prefixed scope), so
+// SAME comment-classification gen-textmate uses (`flags.includes('skip')` OR a `comment.`-prefixed scope), so
 // the set of `names` is exactly the tokens the highlighter paints with a `comment.*` scope. `mode` selects
 // the injection geometry (block delimiters sit mid-line; a line comment is end-of-line only). `names` lets
 // the judge filter the witnesses back out of `tokens`. Returns null when the grammar declares no comment.
@@ -983,9 +983,9 @@ export interface CommentSpec {
   mode: 'token-stream' | 'indent' | 'markup';
 }
 export function commentSpec(grammar: Grammar): CommentSpec | null {
-  // every token the highlighter scopes as a comment (gen-tm's exact rule: a skip token, or an explicit
+  // every token the highlighter scopes as a comment (gen-textmate's exact rule: a skip token, or an explicit
   // comment.* scope). A skip token with NO `.scope` (TS/JS `BlockComment`/`LineComment`) is INCLUDED —
-  // gen-tm classifies it `comment.block`/`comment.line` from its flags, so the highlighter paints it.
+  // gen-textmate classifies it `comment.block`/`comment.line` from its flags, so the highlighter paints it.
   const isCommentTok = (t: TokenDecl) => t.flags.includes('skip') || (t.scope?.startsWith('comment.') ?? false);
   const names = new Set(grammar.tokens.filter(isCommentTok).map((t) => t.name));
   if (!names.size) return null;

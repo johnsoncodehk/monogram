@@ -81,7 +81,7 @@ const Tag = token(seq('!', altPattern(seq('<', star(noneOf('>')), '>'), star(non
 // indicator needs a PRECEDING space (§6.6, the same rule the Comment token's `notPrecededBy` guard
 // applies), so a GLUED `#` (`%YAML 1.1#…`) is NOT a comment and makes the lookahead FAIL: the line
 // then matches no directive token and the highlighter scopes the whole malformed line as a directive
-// (gen-tm `#directive-malformed`) instead of leaving the glued `#…` stray (monogram#12 #8).
+// (gen-textmate `#directive-malformed`) instead of leaving the glued `#…` stray (monogram#12 #8).
 const YamlDirective = token(seq('%YAML', plus(hspace), plus(digit), '.', plus(digit), followedBy(altPattern(seq(star(hspace), altPattern('\r', '\n', end())), seq(plus(hspace), '#')))), { scope: 'keyword.other.directive', blockOnly: true });
 // Directive (`%TAG …`, unknown `%FOO …`): runs to EOL but stops before a ` #` trailing comment — a
 // `#` is a comment indicator only after whitespace, so a glued `#` (`%YAML 1.1#x`) stays part of
@@ -255,7 +255,7 @@ const ContentNode = rule(() => [alt(BlockSequence, ExplicitMapping, EmptyKeyMapp
 //
 // The anchor/tag prefix is written INLINE as `opt(Anchor), opt(Tag)` (with a second tag-first
 // `[Tag, Anchor]` branch for `!!t &a`) rather than via the `Property` rule, and the content is an
-// INLINE `alt(…)`: gen-tm's explicit-key prefix detector recognises a node prefix as an
+// INLINE `alt(…)`: gen-textmate's explicit-key prefix detector recognises a node prefix as an
 // `opt(token)` standing before an `alt` in the SAME sequence, which it cannot see through a rule
 // ref. Keeping the inline shape here lets `? &a key` / `? !!t key` keep highlighting the key.
 // A rule may not derive the empty string (defineGrammar rejects it), so the first branch REQUIRES
@@ -497,7 +497,7 @@ const SeqItem = rule(() => [['-', opt(Value)]]);
 // (`{? foo :,}` trailing-empty; FRK4 / DFF7) is `opt(FlowNode)` at the use site.
 const FlowNode = rule(() => [[opt(Property), alt(FlowMapping, FlowSequence, Alias, Scalar)], Property]);
 // The EXPLICIT-key half of a flow entry (`? key`). Factored into its own rule so the `?` literal is
-// NOT a top-level literal of FlowMapEntry — gen-tm's flow detector takes the FIRST single-char
+// NOT a top-level literal of FlowMapEntry — gen-textmate's flow detector takes the FIRST single-char
 // punctuation in the entry rule as the key/value separator, and a top-level `?` would be picked
 // ahead of the real `:` and mis-derive every flow `:`-based pattern. Behind a ref, the `?` is
 // hidden and the detector correctly sees `:`.
@@ -508,7 +508,7 @@ const FlowExplicit = rule(() => [['?', opt(FlowNode)]]);
 // entry between commas, `{a,,b}`, stays a reject). Inside a flow MAPPING the implicit key need NOT be
 // single-line (`{foo\n: bar}` / `{ key\n : value }` are valid — every `{…}` member is a pair, so a
 // multi-line key is unambiguous; yaml-test-suite 4MUZ / VJP3), so the `:` may sit on the next line.
-// Kept a single SEQ whose trailing `opt(':', …)` is a TOP-LEVEL literal so the gen-tm flow
+// Kept a single SEQ whose trailing `opt(':', …)` is a TOP-LEVEL literal so the gen-textmate flow
 // detector still sees `:` as the separator. The empty-key arm ends in `not(':')`: without it the
 // trailing `opt(':', …)` would take a SECOND value and accept `{: a : b}`.
 const FlowMapEntry = rule(() => [
@@ -556,7 +556,7 @@ const InlineDocNode = rule(() => [
 // so this rule never matches purely empty — a rule whose only match is empty returns null
 // (parseNonRec requires forward progress) and would break the enclosing `many`. The EMPTY document
 // body (`---` then nothing, e.g. `---\n---`) is handled by the `opt(ExplicitDocBody)` at the call
-// site. Kept a RULE (not an inline `alt`) so gen-tm's explicit-key prefix detection — which scans
+// site. Kept a RULE (not an inline `alt`) so gen-textmate's explicit-key prefix detection — which scans
 // for an `opt(token)` followed LATER IN THE SAME SEQ by an `alt` — does not mistake this body's
 // alternation for YAML's anchor/tag node-prefix (a `ref` is opaque to that scan).
 // A DIRECTIVE may NOT appear inside a `---` document body — it heads a NEW document and so only
@@ -622,7 +622,7 @@ const indent: IndentConfig = {
   // SPECIFIC scopes for the flow structural punctuation `{ } [ ] ,` (the TextMate / maintained-RedCMD
   // convention), keyed by the OPEN bracket. A `{…}` is a MAPPING, a `[…]` a SEQUENCE — these are
   // YAML-flavoured names (a JS `{}` is an "object", a `[]` an "array"), so they belong in the grammar,
-  // not the agnostic engine; gen-tm only threads them onto the flow region's begin/end/separator
+  // not the agnostic engine; gen-textmate only threads them onto the flow region's begin/end/separator
   // captures and appends the `.yaml` suffix. Without this every flow bracket/comma was a generic
   // `punctuation.yaml` (graded only FAMILY); declaring them makes the flowPunct role grade EXACT and
   // gives bracket-pair colourisers the begin/end pairing. The `:` key/value separator and `?`
@@ -678,7 +678,7 @@ export default defineGrammar({
   // absorbs this once the states are declared; these are the fixpoint of `tree-sitter generate`'s
   // analysis (`node test/collect-conflicts.ts`) minus the tuples it reports as unnecessary. The
   // singleton self-conflicts also keep their repetition tails out of static `prec.right` (an empty-key
-  // `:` line or `{ : }` must stay reachable — test/yaml-treesitter.ts).
+  // `:` line or `{ : }` must stay reachable — test/yaml-tree-sitter.ts).
   treeSitterConflicts: [
     ['stream', 'node'], ['empty_key_mapping'], ['explicit_entry'], ['next_doc'],
     ['stream', 'next_doc'], ['node'], ['scalar', 'doc_fold'], ['explicit_mapping'],

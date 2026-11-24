@@ -1,4 +1,4 @@
-// tm-highlight-guards.ts — focused regression guards for TextMate-highlighter disambiguations
+// textmate-highlight-guards.ts — focused regression guards for TextMate-highlighter disambiguations
 // that COMPILE cleanly (so the RedCMD/Onigmo guard passes) yet can silently mean the wrong
 // thing. These were two green regressions in PR #13 (fixed 2026-06-07); kept here because the
 // scope-gap corpus does not contain `<operator> !/re/` or multi-line generic calls, so neither
