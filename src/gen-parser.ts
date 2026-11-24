@@ -3,7 +3,7 @@ import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
-import { targetWalker } from './target-walk.ts';
+import { targetWalker } from './declared-targets-cst.ts';
 
 // ── CST output ──
 
@@ -62,7 +62,7 @@ export function createParser(grammar: CstGrammar) {
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     firstSets, exprFirst, exprSecond,
   } = analyzeGrammar(grammar);
-  // Declared target contexts (target-walk.ts): the predicate as a walk over the CST; absent, nothing is recorded.
+  // Declared target contexts (declared-targets-cst.ts): the predicate as a walk over the CST; absent, nothing is recorded.
   const tw = grammar.targets && Object.keys(grammar.targets).length ? targetWalker(grammar, ruleByName.values(), tokenNames) : null;
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)

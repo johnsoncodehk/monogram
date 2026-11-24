@@ -1,6 +1,6 @@
 // DECLARED ASSIGNMENT-TARGET CONTEXTS (CstGrammar.targets) in the interpreter (gen-parser.ts): the
 // predicate as a WALK over the CST, the reference the portable engine's synthesized form
-// (target-contexts.ts) is held to by the parity gates. A node passes context `ctx` iff its arm is
+// (declared-targets.ts) is held to by the parity gates. A node passes context `ctx` iff its arm is
 // one of the context's leaves, or one of its containers whose children at the named field (every
 // rule child: 'all'; a binary node's left operand: 'left') all pass, a child whose arm is a `last`
 // arm of the context being the final such child with no ',' after it; a node of a unit arm (one

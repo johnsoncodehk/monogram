@@ -23,7 +23,7 @@
 // parser. This is enough to derive a real JavaScript-subset parser (test/fixtures/minijs.ts).
 import type { CstGrammar, IdentifierClasses, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { identifierClassesOf } from './uni-ident.ts';
-import { planTargets, type ArmForm } from './target-contexts.ts';
+import { planTargets, type ArmForm } from './declared-targets.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
@@ -125,13 +125,13 @@ export type Step = StepOp & {
   inh?: { k: number; v: ShapeInhVal }[]; threadInit?: { k: number; v: ShapeInhVal }; thread?: { k: number; next: string };
 };
 type StepOp =
-  | { t: 'lit'; value: string; ttype: '$keyword' | '$punct'; accSep?: true }   // match a literal by text; accSep: a container's ',' after which no `last` child may stand (target-contexts.ts)
+  | { t: 'lit'; value: string; ttype: '$keyword' | '$punct'; accSep?: true }   // match a literal by text; accSep: a container's ',' after which no `last` child may stand (declared-targets.ts)
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
-  | { t: 'rule'; name: string; acc?: number }                  // call a rule, append its node; acc: a container's child (target-contexts.ts): the pass bits its form must have
+  | { t: 'rule'; name: string; acc?: number }                  // call a rule, append its node; acc: a container's child (declared-targets.ts): the pass bits its form must have
   | { t: 'ruleBp'; name: string; bp: number; acc?: number }     // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
   | { t: 'star'; step: Step; guard?: number; clean?: true; leaves?: true; share?: number }                   // repeat inner 0+
   | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; leaves?: true; share?: number }                 // optional sub-sequence
-  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number; accSep?: true }   // accSep: as a lit step's, for each delimiter (target-contexts.ts)     // elem (delim elem)*
+  | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number; accSep?: true }   // accSep: as a lit step's, for each delimiter (declared-targets.ts)     // elem (delim elem)*
   | { t: 'altlit'; opts: Lit[] }                                // inline alternation of literals (fast path)
   | { t: 'alt'; branches: Step[][]; branchNames?: string[]; firsts?: FirstSig[]; predictive?: boolean; clean?: boolean[]; share?: number }            // inline alternation of sub-sequences (backtracking unless predictive); clean: parallel to branches, the branch fails clean (Step.clean) so its frame takes no mark
   | { t: 'look'; id: number; is: boolean }                     // zero-width: whether ParserIR.lookaheads[id] matches here (is) or does not (!is)
@@ -139,7 +139,7 @@ type StepOp =
   | { t: 'aheadCtx'; set: number; is: boolean }                 // zero-width: the `ahead` test of tokenSets[set] plus the operator words of the context in force (ParserIR.ctxWords)
   | { t: 'seq'; steps: Step[]; share?: number }                 // a grouped sub-sequence (e.g. a star body `(',' Expr)`)
   | { t: 'sameLine' }                                           // zero-width: the next token is on the same line (no preceding newline)
-  | { t: 'target'; ctx: string; mask?: number }                // zero-width: the node just returned passes target context ctx (its pass bit: mask; target-contexts.ts)
+  | { t: 'target'; ctx: string; mask?: number }                // zero-width: the node just returned passes target context ctx (its pass bit: mask; declared-targets.ts)
   | { t: 'suppress'; set: number; steps: Step[]; share?: number }  // parse the body with the LED connectors of ParserIR.suppressSets[set] disabled (no-`in` context)
   | { t: 'ctx'; ctx: Ctx; steps: Step[]; share?: number };      // parse the body in [Await]/[Yield] context `ctx`, then put back the one in force
 export type Alt = Step[];
@@ -212,7 +212,7 @@ export type RdRule = {
   altGuard: Guard[];        // parallel to alts: when each one is a candidate at all
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
-  altForm?: ArmForm[];      // parallel to alts: each one's form, present iff the rule is in the target closure (target-contexts.ts)
+  altForm?: ArmForm[];      // parallel to alts: each one's form, present iff the rule is in the target closure (declared-targets.ts)
   clean: boolean;           // every alternative fails clean (Step.clean): the PREDICTIVE / SINGLE form's entry takes no builder checkpoint and its failure undoes nothing
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
@@ -484,7 +484,7 @@ export type PrattRule = {
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
   prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
-  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; needCtx?: number; accLeft?: number }>;   // needCtx: targetOps: the pass bit the left operand must have; accLeft: the pass bits the node takes from its left operand (target-contexts.ts)  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; needCtx?: number; accLeft?: number }>;   // needCtx: targetOps: the pass bit the left operand must have; accLeft: the pass bits the node takes from its left operand (declared-targets.ts)  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledNames: string[];                                 // parallel to leds: each arm's name
   ledLeftNames: string[];                             // parallel to leds: the name of its left operand (the self `$`; derived: `left`)
@@ -494,7 +494,7 @@ export type PrattRule = {
   ledNotLeftLeaf: Array<string[] | null>;             // parallel to leds: skip this led when the left node's head-leaf text is in this set (`void.x` etc.)
   ledSuppressedIn: number[][];                        // parallel to leds: the ParserIR.suppressSets that hold its connector — the led is tried only while the set in force is none of them
   ledForm: number[];                                  // parallel to leds: the built node's form (a binary-connector led, `a < T >`/`a as T`, is not a target; with target contexts, plus its leaf bits)
-  // Present iff the grammar declares target contexts (target-contexts.ts): each NUD arm's form
+  // Present iff the grammar declares target contexts (declared-targets.ts): each NUD arm's form
   // (parallel to nudOrder), a postfix token arm's, the binary node's (its leaf bits; accLeft: the
   // pass bits it takes from its left operand), the postfix operator node's, a prefix node's leaf bits.
   nudForm?: ArmForm[];
@@ -531,7 +531,7 @@ export type PrattRule = {
 // `++x`) is also refused as a noUnaryLhs left operand; every other node is a target.
 export const FORM_TARGET = 0, FORM_NOT_TARGET = 1, FORM_UNARY = 2;
 export type AssignForm = typeof FORM_TARGET | typeof FORM_NOT_TARGET | typeof FORM_UNARY;
-// A grammar that declares target contexts (CstGrammar.targets; target-contexts.ts) widens the form
+// A grammar that declares target contexts (CstGrammar.targets; declared-targets.ts) widens the form
 // to a BITMASK, one byte in every target: FORM_LOW masks today's meaning above; context i has a
 // PASS bit (its node passes the context) and a LAST bit (its node is a `last` arm of it). A grammar
 // without contexts never sets a bit above FORM_LOW, and its printed parser tests the form as before.
@@ -669,7 +669,7 @@ export type ParserIR = {
   identPrefix: Record<string, string>;
   /** The Unicode identifier characters of the identifier token (uni-ident.ts identifierClassesOf). */
   identClasses: IdentifierClasses;
-  /** The declared target contexts (target-contexts.ts); absent when the grammar declares none. */
+  /** The declared target contexts (declared-targets.ts); absent when the grammar declares none. */
   targets?: TargetsIR;
 };
 // passes: every context's pass bit; lastCtx: the pass bits of the contexts that have `last` arms.
@@ -969,7 +969,7 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
       }
       case 'not': return e.reservable ? reservableOf(altSteps(e.body)) : notOf(altSteps(e.body));   // zero-width negative lookahead
       case 'sameLine': return { t: 'sameLine' };                  // zero-width no-newline assertion
-      case 'target': return { t: 'target', ctx: e.ctx };          // zero-width declared target check (target-contexts.ts)
+      case 'target': return { t: 'target', ctx: e.ctx };          // zero-width declared target check (declared-targets.ts)
       case 'seq': return { t: 'seq', steps: e.items.map(stepOf) };  // grouped sub-sequence (star/sep body)
       case 'sep': return { t: 'sep', elem: stepOf(e.element), delim: e.delimiter };
       case 'quantifier':
@@ -1579,7 +1579,7 @@ export type StepLowering = {
   template(name: string, hole: string): string;  // the template kind `name`: its token, or an interpolated template whose holes `hole` parses (a building form, recognized or not: its node is dropped when recognizing)
   rule(name: string): string;
   ruleBp(name: string, bp: number): string;      // only a Pratt rule is called at a binding power
-  // Declared target contexts (target-contexts.ts; absent: the target does not print them): a
+  // Declared target contexts (declared-targets.ts; absent: the target does not print them): a
   // container's child call `call` whose form must have the pass bits `mask`; the call that clears a
   // pending `last` child (after a ',', or before a sep element), returning true; the test of the
   // pass bit `mask` on the form of the node just returned.
@@ -1624,7 +1624,7 @@ export function stepExpr(s: Step, L: StepLowering): string {
   if ((s.tag !== undefined || s.mark !== undefined || s.inh !== undefined || s.threadInit !== undefined) && L.shaped) return L.shaped(s, stepBody(s, L));
   return stepBody(s, L);
 }
-// A target-context step (target-contexts.ts) printed by a target that does not print them yet.
+// A target-context step (declared-targets.ts) printed by a target that does not print them yet.
 function need<F>(f: F | undefined, what: string): F {
   if (f === undefined) throw new Error(`portable: this target does not print declared target contexts yet (step ${what})`);
   return f;

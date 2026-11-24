@@ -21,6 +21,19 @@
 // at a named child or a target step reads, and the unit arms' rules of those, transitively; a
 // Pratt rule always computes one. A grammar that declares no context gets none of this: the plan
 // is absent and every printer prints what it printed before.
+//
+// EVERY READER AND WRITER OF THE FORM'S LOW BITS (FORM_LOW), the one list to extend when a new
+// mechanism writes FORM_TARGET / FORM_NOT_TARGET / FORM_UNARY or tests them: with contexts
+// declared a reader compares `form & 3` (target-ts.ts lowTs, target-go.ts lowGo, target-rust.ts
+// lowRs), a writer ORs the arm's leaf / last bits in (ArmForm, PrattRule.ledForm / postForm /
+// binForm / preLeaf). Readers: the prefix operand's requireTarget test (nudPrefix, commitPrefix),
+// the postfix operator's (postfixOp), the binary operator's requireTarget and noUnaryLhs tests
+// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`), the
+// prefix node (PrattOpTables pre.form), every led (ledForm), a postfix token / template arm
+// (postfixTokForm), the postfix operator node (postForm), the binary node (binForm), an rd rule of
+// the closure (altForm). Not yet: the recovery encoding (recoveryTables refuses contexts) and the
+// typed-AST forms (they refuse them by name). The interpreter computes the predicate as a CST walk
+// (declared-targets-cst.ts), not from these bits.
 import type { CstGrammar } from './types.ts';
 import type { RuleIR, Step, RdRule, PrattRule, TargetsIR } from './emit-portable.ts';
 import { formPass, formLast, FORM_MAX_CONTEXTS } from './emit-portable.ts';

@@ -12,7 +12,7 @@
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
-import type { ArmForm } from './target-contexts.ts';
+import type { ArmForm } from './declared-targets.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
@@ -1178,7 +1178,7 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    // Declared target contexts (target-contexts.ts): computed only in the building form (a
+    // Declared target contexts (declared-targets.ts): computed only in the building form (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
     // `acc_no` returns false, so the arm fails as its steps did.
     acc: (call, mask) => (r ? call : `(${call} && ${recv}.acc_k(${mask}))`),
@@ -1233,7 +1233,7 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
   return L;
 }
 const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, rsSteps(ids, 'self', false));
-// An arm's form when it won (target-contexts.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (declared-targets.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormRs = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'self.acc_f' : pratt ? '(self.form & !3)' : 'self.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
 const lowRs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
@@ -1483,7 +1483,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const ops = prattOpTables(r, ids);
   const ctxT = r.binForm !== undefined;
   const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}${ctxT ? `, ${b.ctx ?? 0}, ${b.acc ?? 0}` : ''}))`).join(', ');
-  // Each arm's form (target-contexts.ts; without target contexts every one but the prefix arm's is 0).
+  // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : '0');
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowRs(ir, f);

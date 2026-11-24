@@ -10,7 +10,7 @@
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
-import type { ArmForm } from './target-contexts.ts';
+import type { ArmForm } from './declared-targets.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
@@ -165,7 +165,7 @@ const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; 
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
 const markSuffixGo = (mk: MarkForm, f: GoForm): string => (mk === 'none' ? 'C' : mk === 'leaves' && f !== 'R' ? 'L' : '');
-// An arm's form when it won (target-contexts.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (declared-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormGo = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'p.accF' : pratt ? '(p.form &^ 3)' : 'p.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
 const lowGo = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
@@ -198,7 +198,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
-    // Declared target contexts (target-contexts.ts): computed only in the building forms (a
+    // Declared target contexts (declared-targets.ts): computed only in the building forms (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
     // `accNo` returns false, so the arm fails as its steps did.
     acc: (call, mask) => (f === 'R' ? call : `(${call} && p.accK(${mask}))`),
@@ -1405,7 +1405,7 @@ ${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('
   };
 };
 
-// A Pratt rule's forms (target-contexts.ts; without target contexts every arm's but the prefix
+// A Pratt rule's forms (declared-targets.ts; without target contexts every arm's but the prefix
 // arm's is 0, a postfix or binary node's 1): each NUD arm's (fm), a postfix token arm's, the
 // template postfix's, the postfix operator node's, the binary node's (not a target, its leaf bits,
 // and those its left operand passes: info.acc); lf masks the low bits; ctx is targetOps' test.

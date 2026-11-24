@@ -6,7 +6,7 @@
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
 import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
-import type { ArmForm } from './target-contexts.ts';
+import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
@@ -807,7 +807,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
   return L;
 }
 const stepCond = (s: Step, ids: LexIdPlan, m: Mode): string => stepExpr(s, tsSteps(ids, m));
-// An arm's form when it won (target-contexts.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (declared-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormTs = (f: ArmForm, pratt: boolean): string => (f.k === 'const' ? `${f.v}` : f.k === 'acc' ? '_accF' : pratt ? '(_form & -4)' : '_form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
 const lowTs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
@@ -994,7 +994,7 @@ const NUD_FAIL_TS = '{ return nudNone(); }';
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const cn = J(r.name);
   const d = r.nudDispatch;
-  // Each arm's form (target-contexts.ts; without target contexts every one but the prefix arm's is 0).
+  // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormTs(r.nudForm[i]!, true) : '0');
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowTs(ir, f);
@@ -1165,7 +1165,7 @@ ${sites.flatMap((st, i) => st.map((c, k) => `    case ${i * 4 + k}: return ${c};
 ${shared.rebindFamily(ir, 'free')}
 ${shared.rebindFamily(ir, 'methods')}`;
 }
-// Declared target contexts (target-contexts.ts): the open container's accumulator `_acc` (its pass
+// Declared target contexts (declared-targets.ts): the open container's accumulator `_acc` (its pass
 // bits and the last bits of a child that must stay final), the enclosing ones' on `_accSt`, and
 // `_accF`, the form of the container arm that just matched.
 function targetRuntimeTs(t: TargetsIR): string {
