@@ -5,9 +5,9 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
-import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
+import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
 import type { CstGrammar } from './types.ts';
 import type {
@@ -780,6 +780,8 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // Declared target contexts: built only in the building form (a recognized rd rule computes no form).
     acc: (call, mask) => (m === 'w' ? `(${call} && _accK(${mask}))` : call),
     accSep: () => (m === 'w' ? '_accS()' : 'true'),
+    // A demand twin's Pratt child (DemandIR): the position is read before the call (arguments run left to right).
+    dfix: (call) => `_dfix(pos, ${call})`,
     target: (mask) => { if (m !== 'w') throw new Error('ts: a target() step in a recognized body'); return `(_form & ${mask}) !== 0`; },
     accRun: (cond, f) => (m === 'w' ? `_accEnd(_accSwap(${f.init}), ${cond}, ${f.low}, ${f.last})` : cond),
     armForm: armFormTs,
@@ -883,21 +885,21 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
     ind: '  ',
     ifThen: (test, then) => `if (${test}) ${then}`,
     first: (f) => firstCond(f, 't', ids),
-    accept: (i) => (w ? `{ ${finRTs(r.name, `alt${i}`, 'b', 'save')};${setForm(i)} return true; }` : 'return true;'),
+    accept: (i) => (w ? `{ ${finRTs(r.twinOf ?? r.name, `alt${i}`, 'b', 'save')};${setForm(i)} return true; }` : 'return true;'),
     open: () => (w ? '  const save = pos, b = _n;' : '  const save = pos;'),
     peekOrFail: '  const t = peek(); if (t === null) return false;',
     armJoin: ' ',
     fail: (clean) => (w ? (clean ? '  return false;' : '  back(save); _n = b;\n  return false;') : '  back(save);\n  return false;'),
     openBest: (d) => (w ? `  const save = pos, b = _n;\n  let bestPos = save${biTs(d)}${tf ? ', bfm = 0' : ''};` : '  const save = pos;\n  let bestPos = save;'),
     peekOpt: '  const _ft = peek();',
-    cand: (d, i, cond) => candTs(d, i, m, cond, `${finRTs(r.name, `alt${i}`, 'c', 'save')}; _keep(b, c); bestPos = pos;${markTs(d, i)}${tf ? ` bfm = ${armFormTs(tf[i]!, false)};` : ''}`),
+    cand: (d, i, cond) => candTs(d, i, m, cond, `${finRTs(r.twinOf ?? r.name, `alt${i}`, 'c', 'save')}; _keep(b, c); bestPos = pos;${markTs(d, i)}${tf ? ` bfm = ${armFormTs(tf[i]!, false)};` : ''}`),
     guard: (g, keyed, stmt) => { const c = guardCond(g, '_ft', keyed); return ifTs(c.length && !keyed ? ['_ft !== null', ...c] : c, stmt); },
     dispatch: dispatchTsL('_ft'),
     closeBest: w ? `  pos = bestPos;${tf ? '\n  _form = bfm;' : ''}\n  return _n !== b;` : '  pos = bestPos;\n  return bestPos > save;',
     commitPeek: '  const _ft = peek();',
     guardConds: (g) => guardCond(g, '_ft', false),
     commit: (i, conds, cond, undo, nullable) => commitTs(conds, w
-      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `alt${i}`, 'b', 's')};${setForm(i)} return true; }${undo ? ' back(s); _n = b;' : ''} }`
+      ? `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.twinOf ?? r.name, `alt${i}`, 'b', 's')};${setForm(i)} return true; }${undo ? ' back(s); _n = b;' : ''} }`
       : `{ ${undo ? 'const s = pos; ' : ''}if (${cond}${nullable ? ' && pos > s' : ''}) return true;${undo ? ' back(s);' : ''} }`, 'return false;'),
     commitFail: '{ return false; }',
     commitSw: commitSwTs('_ft'),
@@ -1026,9 +1028,13 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   // The operators a target context reads (emit-portable binLeftOps) are a switch behind the table's
   // test bit: every other operator tests what it did without contexts and its node's form is a constant.
   const leftOps = binLeftOps(prattOpTables(r, ids));
+  // The demand operators of this rule (DemandIR.ops): their node is ASSIGNED, and a left operand
+  // with a twin number goes to the cold `<rule>_demand` (demandFnsTs).
+  const D = ir.targets?.demand;
+  const dem = demandLids(r, ids, D);
   const tgtFail = `(${leftOps.map((o) => `opLid === ${o.lid} ? ${o.ctx ? `(form & ${o.ctx}) !== ${o.ctx}` : 'false'} : `).join('')}${lf('form')} !== 0)`;
   const keep = leftOps.filter((o) => o.acc);
-  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (info.tgt ? ${keep.map((o) => `opLid === ${o.lid} ? form & ${o.acc} : `).join('')}0 : 0)` : ''}` : '1';
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (info.tgt ? ${keep.map((o) => `opLid === ${o.lid} ? form & ${o.acc} : `).join('')}0 : 0)` : ''}` : dem.length ? `(info.tgt && (${dem.map((l) => `opLid === ${l}`).join(' || ')}) ? ${1 | D!.assigned} : 1)` : '1';
   // A NUD arm that won: its node at slot c finished (`fin`), _keep moves it over the best it beat.
   const won = (i: number, fin: string, form: string, tail: boolean, capped: string) =>
     `${fin === 'finR' ? finRTs(r.name, `nud${i}`, 'c', 'save') : finPTs(r.name, `nud${i}`, 'c')}; _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
@@ -1114,7 +1120,7 @@ ${kids.map((k) => `      case ${k}:
     binary: `    const opLid = _opLid(t);
     const info = ${r.name}_BIN[opLid];
     if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && ${leftOps.length ? tgtFail : `${lf('form')} !== 0`} || info.noUnary && ${lf('form')} === 2) { _n = b; return false; }
+    if (info.tgt && ${leftOps.length ? tgtFail : dem.length ? `(${lf('form')} !== 0 || (form & ${D!.defer}) !== 0 && !${r.name}_demand(opLid, form, p0, pos))` : `${lf('form')} !== 0`} || info.noUnary && ${lf('form')} === 2) { _n = b; return false; }
     const ledSave = pos;
     opLeafW(t, opLid);
     pos += _opN;${rsOf(r.name) ? `
@@ -1132,7 +1138,7 @@ function parse${r.name}W(): boolean {
   return r;
 }`,
     bpOpen: (label) => `function ${r.name}_bpW(minBp: number): boolean {
-  const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : ''}
+  const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : dem.length ? ' const p0 = pos;' : ''}
   if (!${r.name}_nudW(minBp)) return false;
   let form = _form;
   if (_capped) return true;   // an assignment-level arrow admits no led
@@ -1205,6 +1211,46 @@ function _accEnd(prev: number, ok: boolean, low: number, last: number): boolean 
 function _accK(m: number): boolean { _acc = (_acc & ~((_acc >> 1) & ${t.passes}) & (_form | ~m) & ${t.passes}) | (_form & (m << 1)); return true; }
 function _accS(): boolean { _acc &= ~((_acc >> 1) & ${t.passes}); return true; }
 `;
+}
+// The demand form of a target context (emit-portable.ts DemandIR): the twins (each container arm's
+// accumulating steps, `_twin<k>`; the closure's rd rules, `parse<rule>__twinW`), `_dfix` (a twin's
+// Pratt child: its form read as the eager plan's), `_twinForm` (twin k over p0..stop by
+// reparseFrom, src/reparse-family.ts: its form, 0 when it fails), and per rule the cold
+// `<rule>_demand` its demand operators reach on a left operand with a twin number.
+function demandFnsTs(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
+  const D = ir.targets?.demand;
+  if (!D) return '';
+  const S = tsSteps(ids, 'w');
+  const twinOf = (f: string) => `((${f} >> ${DEFER_SHIFT}) & 7) - 1`;
+  return `
+let _rpAt = -1, _rpN = 0, _rpOver = 0, rpMark_r1 = 0, rpMark_r2 = 0, rpMark_r3 = 0;
+export function demandRestarts(): { restarts: number; overBound: number } { return { restarts: _rpN, overBound: _rpOver }; }
+function rpMark(): number { rpMark_r1 = _n; return pos; }
+function rpReset(p: number, s: number, _c: number, _e: number): void { back(p); _n = s; }
+function rpPos(): number { return pos; }
+function rpAt(): number { return _rpAt; }
+function rpSetAt(p: number): void { _rpAt = p; }
+function rpCount(over: boolean): void { _rpN++; if (over) _rpOver++; }
+function rpTwin(k: number): boolean {
+  switch (k) {
+${D.twins.map((t) => `    case ${t.k}: return _twin${t.k}();`).join('\n')}
+  }
+  return false;
+}
+${D.twins.map((t) => `// twin of arm ${t.arm} of ${t.rule}\nfunction _twin${t.k}(): boolean { return ${demandTwinCond(t, S)}; }`).join('\n')}
+${D.rd.map((r) => rdRuleW(r, ids)).join('\n')}
+${shared.reparseFamily()}
+function _twinForm(k: number, p0: number, stop: number): number { return reparseFrom(p0, stop, k) ? _accF : 0; }
+function _dfix(p: number, ok: boolean): boolean {
+  if (!ok) return false;
+  const f = _form;
+  _form = (f & ${D.assigned}) !== 0 ? ${D.pass} : (f & ${D.defer}) !== 0 ? _twinForm(${twinOf('f')}, p, pos) : _capped ? 0 : (f & 3) === 0 ? ${D.pass} : 0;
+  return true;
+}
+${ir.rules.filter((r): r is PrattRule => r.kind === 'pratt' && demandLids(r, ids, D).length > 0).map((r) => `function ${r.name}_demand(op: number, form: number, p0: number, stop: number): boolean {
+  if (${demandLids(r, ids, D).map((l) => `op !== ${l}`).join(' && ')}) return true;
+  return (_twinForm(${twinOf('form')}, p0, stop) & ${D.pass}) !== 0;
+}`).join('\n')}`;
 }
 function engineRuntime(ir: ParserIR, ids: LexIdPlan): string {
   const reuse = ir.reuse;
@@ -3287,7 +3333,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
   intTable: (name, packed) => `const _TABS_${name} = ${J(packed)};\nlet _tab_${name}: number[] = [];`,
   stmt: {
     comment: (text) => [`// ${text}`],
-    let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}: ${cx.type(s.ty, 'local')} = ${s.r.c};`],
+    let: (cx, s) => [`${s.reassigned ? 'let' : 'const'} ${s.id}${s.infer ? '' : `: ${cx.type(s.ty, 'local')}`} = ${s.r.c};`],
     set: (id, val) => [`${id} = ${val};`],
     if: (s) => {
       const head = `if (${s.c})`;
@@ -3524,7 +3570,7 @@ function lookEnd(): number { return peekEnd > maxLook ? peekEnd : maxLook; }
 function lookReset(): void { maxLook = 0; peekEnd = 0; }
 ${tokenSetRuntime(ir, ids)}
 ${gtRuntime(ir, ids)}
-${engineRuntime(ir, ids)}${rebindRuntimeTs(ir, ids, shared)}
+${engineRuntime(ir, ids)}${rebindRuntimeTs(ir, ids, shared)}${demandFnsTs(ir, ids, shared)}
 // Library entry. tokenize(src) is the lexer alone: fresh Token objects the caller owns, and no
 // parser state touched. parse(src) lexes and parses; the CST is plain objects, independent of
 // any later call. No I/O — see emitRunner() for the stdin → JSON wrapper.
@@ -3563,13 +3609,18 @@ ${liftedFns(ids)}`;
 // valid input is runW's parse alone); the recovery family decides the diagnostic and its words.
 // The interpreter's engine (src/recovery-family.ts ENGINE_EXTERNS) over this module's parse state:
 // each a call of what the native functions do. The module is the engine, so they are module
-// functions; the native dispatch by id is a switch over the plan's ids (ParserIR.forms says which
-// functions exist in building form).
+// functions; the native dispatch by id is a switch over the plan's ids or a table of the functions,
+// the shorter (ParserIR.forms says which functions exist in building form).
 function recoveryEngineTs(ir: ParserIR): string {
   const ids = buildLexIdPlan(ir), ar = buildArenaIdPlan(ir, ids);
-  const sw = (on: string, cases: [number, string][]) => `switch (${on}) {${cases.map(([k, c]) => ` case ${k}: return ${c};`).join('')} }\n  throw new Error('recovery: no native function ' + ${on});`;
-  const build = ir.rules.filter((r) => ir.forms.buildRules.includes(r.name));
-  const holes = ir.tpl ? tplHoleRules(ir) : [];
+  // The native dispatch (recovery-family.ts nativeCases): a switch, or a table of the functions
+  // that `use` calls as f (a hole: undefined).
+  const nc = nativeCases(ir, ar);
+  const disp = <X>(on: string, cases: [number, X][], fn: (x: X) => string, use: (f: string) => string) => {
+    const none = `\n  throw new Error('recovery: no native function ' + ${on});`;
+    return shorterDispatch(cases, fn, (cs) => `switch (${on}) {${cs.map(([k, c]) => ` case ${k}: return ${use(c)};`).join('')} }${none}`,
+      (slots) => ({ body: `const f = [${slots.map((x) => x ?? '').join(', ')}][${on}];\n  if (f !== undefined) return ${use('f')};${none}` })).body;
+  };
   return `const _RNAMES: string[] = ${J(withReservedRules(ar).ruleNames)};
 // The marks (position, children height, repair memory length) the interpreter takes, in triples;
 // the repair memory (recovery-family.ts RM_*); the offset of the node last finished; the
@@ -3590,19 +3641,19 @@ function enAhead(set: number, is: boolean): boolean { return ahead(set, is); }
 function enCtxWord(): boolean { return ctxWord(); }
 function enSecondIn(set: number): boolean { return secondIn(set); }
 function enLook(id: number): boolean {
-  ${sw('id', ir.lookaheads.map((_, i) => [i, `look${i}()`]))}
+  ${disp('id', nc.look, (i) => `look${i}`, (f) => `${f}()`)}
 }
 function enRule(r: number): boolean {
-  ${sw('r', build.map((r) => [ar.ruleNames.indexOf(r.name), `parse${r.name}W()`]))}
+  ${disp('r', nc.rule, (r) => `parse${r}W`, (f) => `${f}()`)}
 }
 function enBp(r: number, bp: number): boolean {
-  ${sw('r', build.filter((r) => r.kind === 'pratt').map((r) => [ar.ruleNames.indexOf(r.name), `${r.name}_bpW(bp)`]))}
+  ${disp('r', nc.bp, (r) => `${r}_bpW`, (f) => `${f}(bp)`)}
 }
 function enShared(i: number): boolean {
-  ${sw('i', ir.shared.flatMap((_, i): [number, string][] => (ir.forms.buildShared[i] ? [[i, `sub${i}W()`]] : [])))}
+  ${disp('i', nc.shared, (i) => `sub${i}W`, (f) => `${f}()`)}
 }
 function enTpl(hole: number): boolean {
-  ${sw('hole', holes.map((h) => [ar.ruleNames.indexOf(h), `matchTemplateW(parse${h}W)`]))}
+  ${disp('hole', nc.tpl, (h) => `parse${h}W`, (f) => `matchTemplateW(${f})`)}
 }
 function enSh(): number { return _n; }
 function enCut(h: number): void { _n = h; }

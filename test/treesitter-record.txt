@@ -194,14 +194,10 @@ typescript | TypeScript src | rejects | unclassified | src/compiler/utilities.ts
 typescript | TypeScript src | rejects | unclassified | src/harness/evaluatorImpl.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/decorators.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/dom.generated.d.ts
-typescript | TypeScript src | rejects | unclassified | src/lib/es2015.generator.d.ts
-typescript | TypeScript src | rejects | unclassified | src/lib/es2015.iterable.d.ts
-typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asyncgenerator.d.ts
-typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asynciterable.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
 typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
 typescript | TypeScript src | spans | other | files 3
-typescript | TypeScript src | spans | totals | span-equal 689 of 692, interpreter spans missing 3, extra tree-sitter spans 8
+typescript | TypeScript src | spans | totals | span-equal 693 of 696, interpreter spans missing 3, extra tree-sitter spans 8
 typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
 typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
 typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"

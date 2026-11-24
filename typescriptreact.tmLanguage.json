@@ -3183,7 +3183,7 @@
           "name": "keyword.operator.expression.as.tsx"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:keyof|is|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}\\],;>]|=(?!>)|\\b(?:keyof|is|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -3213,7 +3213,7 @@
           "name": "keyword.operator.expression.satisfies.tsx"
         }
       },
-      "end": "(?=[)}{\\],;=>]|\\b(?:keyof|is|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
+      "end": "(?=[)}\\],;>]|=(?!>)|\\b(?:keyof|is|extends|unique|as|implements|satisfies|if|else|switch|case|default|for|while|do|in|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|typeof|instanceof|new|delete|void|asserts|infer)\\b)",
       "patterns": [
         {
           "include": "#type"
@@ -4163,7 +4163,7 @@
           "include": "$self"
         }
       ],
-      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
+      "while": "^(?=\\s*(?:[<,\\[|&(...?:{\\-.!*+;]|(?:keyof|typeof|readonly|is|abstract|new|asserts|extends|infer|true|false|null|undefined|void|this|unique|in|as)\\b|//|/\\*|[>\\])}](?:\\s*[>\\])}])*\\s*(?=[<,\\[|&(...?:{\\-.!*+;=])|(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\s*\\??\\s*(?:<.*>\\s*)?\\(.*\\)\\s*:|(?!(?:if|else|switch|case|default|for|while|do|of|break|continue|return|await|yield|try|catch|finally|throw|debugger|with|import|defer|export|from|let|const|var|using|function|constructor|class|interface|type|enum|namespace|module|public|private|protected|static|override|declare|async|accessor|get|set)\\b)(?:[a-zA-Z_$$_\\p{ID_Start}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$$\\u200c\\u200d\\p{ID_Continue}]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*\\b(?!\\s*[.(])))"
     },
     "type-object": {
       "name": "meta.object-type.tsx",
