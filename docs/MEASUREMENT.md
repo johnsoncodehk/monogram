@@ -83,7 +83,11 @@ then the per-line delta keyed by source text (cgdiff.py). Lines that only exist 
 "line 0" (spills) moving against them, are codegen. A rise on a line the change did not touch,
 with identical call counts, is renumbering or register allocation.
 The remedy is the operator row (emit-portable `prattOpRow`): one masked table load per LED
-iteration, whatever the lids and however many call sites there are.
+iteration, whatever the lids and however many call sites there are. The row also carries the led
+group's dense index, so the led switch is a match on `row >> 27` (cases 1..k, a jump table) rather
+than on the lid: a first version that kept `match t.lid` there cost typescript.d.ts +0.87%, because
+LLVM had folded the small rules' binary `match` into that lid jump table and the row added a second
+dispatch.
 
 ## The harnesses
 
