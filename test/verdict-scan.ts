@@ -230,7 +230,6 @@ const CLASSES: Class[] = [
   { id: 'number-then-ident', disposition: 'lexer', note: 'a NumericLiteral directly followed by an IdentifierStart (`1.x`)', test: (r) => /(^|[ (=])1\.x/.test(r.src) },
   { id: 'regex-after-update', disposition: 'lexer', note: 'a regex after a prefix `++` / `--` read as division', test: (r) => /(\+\+|--)\/r\//.test(r.src) },
   { id: 'lt-composite', disposition: 'engine', note: '`<<` opening nested type arguments (no `<` split, the mirror of the `>` re-scan)', test: (r) => /<</.test(r.src) && !r.we },
-  { id: 'ts-assertion-operand', disposition: 'grammar', note: '`<T> $` takes its operand at bp 0, not as a UnaryExpression', test: (r) => /<T>(a|\(a\))/.test(r.src) && r.we && !r.tsc },
   { id: 'ts-type-args-commit', disposition: 'grammar', note: 'after a type reference tsc commits to `<` type arguments', test: (r) => /(as|satisfies) T <|f<T> \/=/.test(r.src) },
   { id: 'ts-new-import', disposition: 'grammar', note: 'an ImportCall is no MemberExpression', test: (r) => /new import/.test(r.src) },
   { id: 'ts-cond-in-extends', disposition: 'grammar', note: 'no unparenthesized conditional type in an extends position', test: (r) => r.grammar === 'typescript' && /extends .*extends .*\?/.test(r.src) && r.we },
