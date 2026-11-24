@@ -18,7 +18,7 @@
 
 import {
   token, rule, defineGrammar,
-  left, right, op, prefix, cappedPrefix, atLevel, capExpr,
+  left, right, op, prefix, cappedPrefix, atLevel, capExpr, arm, target, exclude,
   opt, many, many1, alt, not,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, never, notFollowedBy,
 } from './src/api.ts';
@@ -104,10 +104,6 @@ export const keywords = [
 const notKw = not(alt(...keywords));
 const NAME = () => [notKw, Name] as const;
 
-// t_lookahead: what may follow a t_primary.
-const tLookahead = alt('(', '[', '.');
-const followedByTrailer = not(not(tLookahead));
-
 // ── Expressions (python.gram "EXPRESSIONS"): ONE Pratt rule from `lambda` down to `await`.
 // python.gram's levels (expression, disjunction, conjunction, inversion, comparison, bitwise_or …)
 // are binding powers here. `not` is a CAPPED prefix (cappedPrefix): it begins an operand only at
@@ -139,19 +135,19 @@ const Expressions = rule(() => [[Expression, many(',', Expression), opt(',')]]);
 
 const AssignmentExpression = rule(() => [[...NAME(), ':=', Expression]]);
 const NamedExpression = rule(() => [AssignmentExpression, [Expression, not(':=')]]);
-const StarExpression = rule(() => [['*', BitwiseOr()], Expression]);
-const StarExpressions = rule(() => [[StarExpression, many(',', StarExpression), opt(',')]]);
-const StarNamedExpression = rule(() => [['*', BitwiseOr()], NamedExpression]);
-const StarNamedExpressions = rule(() => [[StarNamedExpression, many(',', StarNamedExpression), opt(',')]]);
+const StarExpression = rule(() => [arm('starred', '*', BitwiseOr()), Expression]);
+const StarExpressions = rule(() => [arm('exprList', StarExpression, many(',', StarExpression), opt(','))]);
+const StarNamedExpression = rule(() => [arm('starred', '*', BitwiseOr()), NamedExpression]);
+const StarNamedExpressions = rule(() => [arm('starNamedList', StarNamedExpression, many(',', StarNamedExpression), opt(','))]);
 const YieldExpr = rule(() => [['yield', 'from', Expression], ['yield', opt(StarExpressions)]]);
 
 // primary: atom and its trailers.
 const Primary = rule(($) => [
   Atom,
-  [$, '.', ...NAME()],
+  arm('attr', $, '.', ...NAME()),
   [$, Genexp],
   [$, '(', opt(Arguments), ')'],
-  [$, '[', Slices, ']'],
+  arm('subscript', $, '[', Slices, ']'),
 ]);
 const Slice = rule(() => [
   [opt(Expression), ':', opt(Expression), opt(':', opt(Expression))],
@@ -161,7 +157,7 @@ const Slices = rule(() => [[Slice, many(',', Slice), opt(',')]]);
 
 const Strings = rule(() => [[many1(alt(String_, RawString, Bytes, RawBytes))]]);
 const Atom = rule(() => [
-  [...NAME()],
+  arm('atomName', ...NAME()),
   'True', 'False', 'None', '...',
   Strings,
   Imaginary, Float, Integer,
@@ -169,14 +165,17 @@ const Atom = rule(() => [
   List, Listcomp,
   Dict, Set, Dictcomp, Setcomp,
 ]);
-const Group = rule(() => [['(', alt(YieldExpr, NamedExpression), ')']]);
-const Tuple = rule(() => [['(', opt(StarNamedExpression, ',', opt(StarNamedExpressions)), ')']]);
-const List = rule(() => [['[', opt(StarNamedExpressions), ']']]);
+const Group = rule(() => [arm('parenExpr', '(', alt(YieldExpr, NamedExpression), ')')]);
+const Tuple = rule(() => [arm('parenTuple', '(', opt(StarNamedExpression, ',', opt(StarNamedExpressions)), ')')]);
+const List = rule(() => [arm('listDisplay', '[', opt(StarNamedExpressions), ']')]);
 const Set = rule(() => [['{', StarNamedExpressions, '}']]);
 const Kvpair = rule(() => [[Expression, ':', Expression]]);
 const DoubleStarredKvpair = rule(() => [['**', BitwiseOr()], Kvpair]);
 const Dict = rule(() => [['{', opt(DoubleStarredKvpair, many(',', DoubleStarredKvpair), opt(',')), '}']]);
-const ForIfClause = rule(() => [[opt('async'), 'for', StarTargets, 'in', Disjunction(), many('if', Disjunction())]]);
+// A for head's targets: star expressions none of which reads a top-level `in` (it is the
+// head's), each read under `exclude('in')` (an exclusion holds for the one Pratt frame it enters).
+const ForTargets = rule(() => [arm('exprList', exclude('in', StarExpression), many(',', exclude('in', StarExpression)), opt(','))]);
+const ForIfClause = rule(() => [[opt('async'), 'for', ForTargets, target('star'), 'in', Disjunction(), many('if', Disjunction())]]);
 const ForIfClauses = rule(() => [[many1(ForIfClause)]]);
 const Listcomp = rule(() => [['[', NamedExpression, ForIfClauses, ']']]);
 const Setcomp = rule(() => [['{', NamedExpression, ForIfClauses, '}']]);
@@ -224,48 +223,21 @@ function paramForms(param: () => unknown[], close: string) {
 const Parameters = rule(() => paramForms(() => [...NAME(), opt(':', Expression)], ')'));
 const LambdaParameters = rule(() => paramForms(() => [...NAME()], ':'));
 
-// ── Targets (python.gram "TARGETS"). A t_primary arm holds only when another trailer follows
-// (`&t_lookahead`), so the LAST `.name` / `[…]` of a chain is the target's: `f().x = 1` assigns,
-// `f() = 1` has no derivation. An assignment statement's head is parsed as targets here and its
-// expression-statement reading as expressions: the head twice (docs/SECOND-LANGUAGE.md). ──
-const TPrimary = rule(($) => [
-  [Atom, followedByTrailer],
-  [$, '.', ...NAME(), followedByTrailer],
-  [$, '[', Slices, ']', followedByTrailer],
-  [$, Genexp, followedByTrailer],
-  [$, '(', opt(Arguments), ')', followedByTrailer],
-]);
-const SingleSubscriptAttributeTarget = rule(() => [
-  [TPrimary, '.', ...NAME(), not(tLookahead)],
-  [TPrimary, '[', Slices, ']', not(tLookahead)],
-]);
-const SingleTarget = rule(($) => [SingleSubscriptAttributeTarget, [...NAME()], ['(', $, ')']]);
-const TargetWithStarAtom = rule(() => [SingleSubscriptAttributeTarget, StarAtom]);
-const StarTarget = rule(($) => [['*', not('*'), $], TargetWithStarAtom]);
-const StarTargets = rule(() => [[StarTarget, many(',', StarTarget), opt(',')]]);
-const StarAtom = rule(() => [
-  [...NAME()],
-  ['(', TargetWithStarAtom, ')'],
-  ['(', opt(alt([StarTarget, many1(',', StarTarget), opt(',')], [StarTarget, ','])), ')'],
-  ['[', opt(StarTarget, many(',', StarTarget), opt(',')), ']'],
-]);
-const DelTarget = rule(($) => [
-  SingleSubscriptAttributeTarget,
-  [...NAME()],
-  ['(', $, ')'],
-  ['(', opt(DelTargets), ')'],
-  ['[', opt(DelTargets), ']'],
-]);
-const DelTargets = rule(() => [[DelTarget, many(',', DelTarget), opt(',')]]);
+// ── Targets (python.gram "TARGETS"). A target is parsed as an expression and checked where a
+// target is taken (`target(ctx)`, the contexts declared in `targets` below, docs/GRAMMAR.md
+// "Declared assignment-target contexts"): the head of a statement is parsed once. python.gram's
+// t_primary arms end in `&t_lookahead`, so the LAST `.name` / `[…]` of a chain is the target's:
+// here the node a chain builds is its last trailer's arm, `attr` and `subscript` are targets and a
+// call is not (`f().x = 1` assigns, `f() = 1` has no derivation). ──
 
 // ── Simple statements ──
 const AugAssign = () => alt('+=', '-=', '*=', '@=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=', '**=', '//=');
 const AnnotatedRhs = () => alt(YieldExpr, StarExpressions);
-const Assignment = rule(() => [
-  [...NAME(), ':', Expression, opt('=', AnnotatedRhs())],
-  [alt(['(', SingleTarget, ')'], SingleSubscriptAttributeTarget), ':', Expression, opt('=', AnnotatedRhs())],
-  [many1(StarTargets, '='), alt(YieldExpr, StarExpressions), not('=')],
-  [SingleTarget, AugAssign(), alt(YieldExpr, StarExpressions)],
+// The value of an assignment, and the next `=` of a chain (`a = b = c`): a value followed by `=`
+// is a target (python.gram's `(star_targets '=')+ (yield_expr | star_expressions)`).
+const AssignValue = rule(($) => [
+  YieldExpr,
+  [StarExpressions, opt('=', target('star'), $)],
 ]);
 const DottedName = rule(() => [[...NAME(), many('.', ...NAME())]]);
 const DottedAsName = rule(() => [[DottedName, opt('as', ...NAME())]]);
@@ -277,15 +249,20 @@ const ImportStmt = rule(() => [
   ['from', many(alt('.', '...')), DottedName, 'import', ImportFromTargets()],
   ['from', many1(alt('.', '...')), 'import', ImportFromTargets()],
 ]);
+// An expression statement and the assignments share their head, parsed once: `=` takes star
+// targets, an augmented assignment and an annotation a single target.
 const SimpleStmt = rule(() => [
-  Assignment,
-  StarExpressions,
+  [StarExpressions, opt(alt(
+    ['=', target('star'), AssignValue],
+    [AugAssign(), target('single'), AnnotatedRhs()],
+    [':', target('single'), Expression, opt('=', AnnotatedRhs())],
+  ))],
   ['return', opt(StarExpressions)],
   ImportStmt,
   ['raise', Expression, opt('from', Expression)],
   'raise',
   'pass',
-  ['del', DelTargets],
+  ['del', StarExpressions, target('del')],
   YieldExpr,
   ['assert', Expression, opt(',', Expression)],
   'break',
@@ -303,8 +280,8 @@ const ElseBlock = () => [Newline, 'else', ':', Block];
 const ElifStmt = rule(($) => [[Newline, 'elif', NamedExpression, ':', Block, opt(alt($, ElseBlock()))]]);
 const IfStmt = rule(() => [['if', NamedExpression, ':', Block, opt(alt(ElifStmt, ElseBlock()))]]);
 const WhileStmt = rule(() => [['while', NamedExpression, ':', Block, opt(...ElseBlock())]]);
-const ForStmt = rule(() => [[opt('async'), 'for', StarTargets, 'in', StarExpressions, ':', Block, opt(...ElseBlock())]]);
-const WithItem = rule(() => [[Expression, 'as', StarTarget, not(not(alt(',', ')', ':')))], Expression]);
+const ForStmt = rule(() => [[opt('async'), 'for', ForTargets, target('star'), 'in', StarExpressions, ':', Block, opt(...ElseBlock())]]);
+const WithItem = rule(() => [[Expression, opt('as', StarExpression, target('star'), not(not(alt(',', ')', ':'))))]]);
 const WithStmt = rule(() => [
   [opt('async'), 'with', '(', WithItem, many(',', WithItem), opt(','), ')', ':', Block],
   [opt('async'), 'with', WithItem, many(',', WithItem), ':', Block],
@@ -403,11 +380,10 @@ export default defineGrammar({
     Expression, Expressions,
     AssignmentExpression, NamedExpression, StarExpression, StarExpressions, StarNamedExpression, StarNamedExpressions, YieldExpr,
     Primary, Slice, Slices, Strings, Atom, Group, Tuple, List, Set, Kvpair, DoubleStarredKvpair, Dict,
-    ForIfClause, ForIfClauses, Listcomp, Setcomp, Dictcomp, Genexp,
+    ForTargets, ForIfClause, ForIfClauses, Listcomp, Setcomp, Dictcomp, Genexp,
     KwargOrStarred, KwargOrDoubleStarred, Kwargs, PositionalArg, Args, Arguments,
     Parameters, LambdaParameters,
-    TPrimary, SingleSubscriptAttributeTarget, SingleTarget, TargetWithStarAtom, StarTarget, StarTargets, StarAtom, DelTarget, DelTargets,
-    Assignment, DottedName, DottedAsName, ImportFromAsName, ImportStmt, SimpleStmt, SimpleStmts,
+    AssignValue, DottedName, DottedAsName, ImportFromAsName, ImportStmt, SimpleStmt, SimpleStmts,
     Block, ElifStmt, IfStmt, WhileStmt, ForStmt, WithItem, WithStmt, ExceptBlock, TryStmt, FunctionDef, ClassDef,
     LiteralPattern, Attr, PatternCaptureTarget, ClosedPattern, OrPattern, Pattern, StarPattern, MaybeSequencePattern, OpenSequencePattern,
     KeyValuePattern, MappingPattern, KeywordPattern, ClassPattern, Patterns, CaseBlock, SubjectExpr, MatchStmt,
@@ -421,4 +397,25 @@ export default defineGrammar({
   ],
   entry: File,
   indent,
+  // python.gram's three target contexts. star_targets (`=`, `for`, `with … as`, comprehensions): a
+  // name, an attribute, a subscript, and parenthesized, bracketed and bare tuples, a parenthesis
+  // and a starred target (`*a`) of them. single_target (augmented assignment, annotation): a name,
+  // an attribute, a subscript or a parenthesis of one: no tuple, so a list of exprList's is a
+  // single target only as its one child with no ',' after it (each leaf and the parenthesis are
+  // `last`). del_targets: star_targets without the star.
+  targets: {
+    star: {
+      leaves: ['atomName', 'attr', 'subscript'],
+      containers: { exprList: 'all', starNamedList: 'all', parenTuple: 'all', parenExpr: 'all', listDisplay: 'all', starred: 'all' },
+    },
+    single: {
+      leaves: ['atomName', 'attr', 'subscript'],
+      containers: { exprList: 'all', parenExpr: 'all' },
+      last: ['atomName', 'attr', 'subscript', 'parenExpr'],
+    },
+    del: {
+      leaves: ['atomName', 'attr', 'subscript'],
+      containers: { exprList: 'all', starNamedList: 'all', parenTuple: 'all', parenExpr: 'all', listDisplay: 'all' },
+    },
+  },
 });

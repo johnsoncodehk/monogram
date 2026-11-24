@@ -195,7 +195,12 @@ passes when its child passes. Two markers read a context:
 
 - `target('ctx')` after a rule reference in a sequence matches nothing and holds when the node just
   before it passes: `[Exprs, target('star'), '=', Exprs]`. The head is parsed once, as an
-  expression, and checked only where the `=` tail is taken.
+  expression, and checked only where the `=` tail is taken. Literals may stand between the two, and
+  the target may open an `opt` or a branch of an alternation whose branches all begin with
+  different literals, reading the rule reference before it: Python's statement head is one arm,
+  `[StarExpressions, opt(alt(['=', target('star'), …], [AugAssign, target('single'), …], …))]`.
+  Anywhere else (after a repetition, an `opt`, a token) the generator refuses it: what the target
+  reads must be one rule's node, with no other rule run between.
 - `targetOps('ctx', ...ops)` in a precedence level: the left operand of these infix operators must
   pass the context (ECMAScript's `=` takes a pattern; `+=` keeps `lhsTarget`).
 
