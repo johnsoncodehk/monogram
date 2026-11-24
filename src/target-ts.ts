@@ -995,7 +995,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     leafEnd: 'save + 1',
     nudLeaf: (i) => `{ const c = _n; leafSlotW(tok_kind(t), t); pos++; ${won(i, 'finP', '0', false, 'false')} back(save); }`,
     nudTpl: (i, hole) => `  if (t.kid === ${kidOf(ids, '$templateHead')}) { const c = _n; if (matchTemplateW(parse${hole}W) && ${beatsTs(d, 'pos', i)}) { ${won(i, 'finP', '0', false, 'false')} } else _n = c; back(save); }`,
-    nudSeq: (i, cond, tail, cap) => candTs(d, i, 'w', cond, won(i, 'finR', '0', tail, capTs(cap))),
+    nudSeq: (i, cond, tail, cap, form) => candTs(d, i, 'w', cond, won(i, 'finR', `${form}`, tail, capTs(cap))),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `  { const pbp = ${r.name}_PRE[t.lid];
@@ -1013,7 +1013,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, `nud${i}`, 'b')}; _form = 0; _tail = false; return true; }`, NUD_FAIL_TS, true),
-    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')};${cap === 'tail' ? '' : ` _capped = ${capTs(cap)};`} _form = 0; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
+    commitSeq: (i, conds, cond, tail, cap, undo, nullable, form) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')};${cap === 'tail' ? '' : ` _capped = ${capTs(cap)};`} _form = ${form}; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
     commitPrefix: (i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
     if (pbp !== undefined) {
       const save = pos, b = _n;
@@ -2438,7 +2438,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
         const _sk: unknown[] = [];
         const _ap: number[] = [];
         if (_shapeTxn(_sk, _ap, () => ${inner}) && pos > bestPos) {
-          ${r.nudBracketClosesTail[bi] ? 'pt = true; ' : ''}${r.nudBracketCapsFromTail[bi] ? 'pc = _capped; ' : ''}${finish}
+          ${r.nudBracketForm[bi] ? `pf = ${r.nudBracketForm[bi]}; ` : ''}${r.nudBracketClosesTail[bi] ? 'pt = true; ' : ''}${r.nudBracketCapsFromTail[bi] ? 'pc = _capped; ' : ''}${finish}
         }
         pos = save;
       }`;
@@ -2529,7 +2529,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
       } else {
         finish = `return ${keepFinish('_sk', 'save')} as ${retType};`;
       }
-      return `  { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner}) && pos > bestPos) { ${r.nudSeqClosesTail[si] ? 'pt = true; ' : ''}${r.nudSeqCapsFromTail[si] ? 'pc = _capped; ' : ''}${finish} } pos = save; }`;
+      return `  { const save = pos; const _sk: unknown[] = []; const _ap: number[] = []; if (_shapeTxn(_sk, _ap, () => ${inner}) && pos > bestPos) { ${r.nudSeqForm[si] ? `pf = ${r.nudSeqForm[si]}; ` : ''}${r.nudSeqClosesTail[si] ? 'pt = true; ' : ''}${r.nudSeqCapsFromTail[si] ? 'pc = _capped; ' : ''}${finish} } pos = save; }`;
     });
   }
 

@@ -1472,7 +1472,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             }
             self.back(save);
         }`,
-    nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = 0; bt = ${tail}; bc = ${capRs(cap)};`),
+    nudSeq: (i, cond, tail, cap, form) => candRs(d, i, cond, rid, `${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capRs(cap)};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
@@ -1489,7 +1489,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${rid}, sb, t.off as usize, save); self.form = 0; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
-    commitSeq: (_i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, cap === 'tail' ? `{ self.form = 0; self.tail = ${tail}; }` : `nud ${tail} ${capRs(cap)}`), NUD_FAIL_RS),
+    commitSeq: (_i, conds, cond, tail, cap, undo, nullable, form) => commitRs(conds, commitBodyRs(rid, cond, undo, nullable, cap === 'tail' ? `{ self.form = ${form}; self.tail = ${tail}; }` : form === 0 ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${form}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), NUD_FAIL_RS),
     commitPrefix: (_i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -4038,7 +4038,7 @@ function emitRustPrattMethod(
             let _ap_base = self.ap_stack.len();
             ${st.ok}
             if ${st.okVar} {
-                ${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${rule.nudBracketCapsFromTail[bi] ? '*pc = self.capped; ' : ''}${finish}
+                ${rule.nudBracketForm[bi] ? `*pf = ${rule.nudBracketForm[bi]}; ` : ''}${rule.nudBracketClosesTail[bi] ? '*pt = true; ' : ''}${rule.nudBracketCapsFromTail[bi] ? '*pc = self.capped; ' : ''}${finish}
                 self.ap_stack.truncate(_ap_base);
             }
             self.pos = save;
@@ -4139,7 +4139,7 @@ function emitRustPrattMethod(
                 let _ap_base = self.ap_stack.len();
                 ${st.ok}
                 if ${st.okVar} {
-                    ${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${rule.nudSeqCapsFromTail[si] ? '*pc = self.capped; ' : ''}${finish}
+                    ${rule.nudSeqForm[si] ? `*pf = ${rule.nudSeqForm[si]}; ` : ''}${rule.nudSeqClosesTail[si] ? '*pt = true; ' : ''}${rule.nudSeqCapsFromTail[si] ? '*pc = self.capped; ' : ''}${finish}
                     self.ap_stack.truncate(_ap_base);
                 }
             }

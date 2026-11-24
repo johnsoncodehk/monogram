@@ -1386,7 +1386,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => `return p.nudOk(${n}, ${tail}, ${capGo(capped)})`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable, form) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => (form === 0 ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `nr := ${n}; p.form, p.tail, p.capped = ${form}, ${tail}, ${capGo(capped)}; return nr`)), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)
 \t\tp.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++
@@ -1406,7 +1406,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
 \t\tif node >= 0 && ${beatsGo(d, 'p.pos', i)} { p.scratch = append(p.scratch, node); best = p.finish(${rid}, sb, int(p.nodes[node].Offset), int(p.nodes[node].TokStart)); ${won(i, '0', false, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capGo(capped))}`, lost),
+    nudSeq: (i, cond, tail, capped, form) => candGo(d, i, cond, `best = p.finish(${rid}, sb, p.offAt(save), save); ${won(i, `${form}`, tail, capGo(capped))}`, lost),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
@@ -1995,7 +1995,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
   const L: PrattLowering = {
     ...B,
     commitLeaf: (_i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; n := p.finishW(${rid}, sb, int(t.Off), save); p.form = 0; p.tail = false; return n, true }`, fail, true),
-    commitSeq: (_i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => `return p.nudOk(${n}, ${tail}, ${capGo(capped)})`), fail),
+    commitSeq: (_i, conds, cond, tail, capped, undo, nullable, form) => commitGo(conds, commitBodyGo(cond, undo ? undoGoWc(recv) : null, nullable, (sb, save) => `p.finishW(${rid}, ${sb}, p.offAt(${save}), ${save})`, (n) => (form === 0 ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `nr := ${n}; p.form, p.tail, p.capped = ${form}, ${tail}, ${capGo(capped)}; return nr, true`)), fail),
     commitPrefix: (_i, conds) => commitGo(conds, `if pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
@@ -2015,7 +2015,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
 \t\tif ok && ${beatsGo(d, 'p.pos', i)} { if n.present { p.scratch = append(p.scratch, n.h) }; best = p.finishW(${rid}, sb, int(n.off), int(n.tokStart)); ${won(i, '0', false, 'false')} } else { ${lost} }
 \t\tp.back(save)
 \t}`,
-    nudSeq: (i, cond, tail, capped) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, '0', tail, capGo(capped))}`, lost),
+    nudSeq: (i, cond, tail, capped, form) => candGo(d, i, cond, `best = p.finishW(${rid}, sb, p.offAt(save), save); ${won(i, `${form}`, tail, capGo(capped))}`, lost),
     nudPrefix: (i) => `\tif pbp := pre_${r.name}[t.Lid]; pbp.ok {
 \t\tp.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++
 \t\toperand, ook := p.bpW_${r.name}(pbp.rbp)
