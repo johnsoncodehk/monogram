@@ -180,11 +180,11 @@ function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
   return `
 func (p *${recv}) accSwap(init uint8) uint8 { prev := p.acc; p.acc = init; return prev }
 func (p *${recv}) accEnd(prev uint8, ok bool, low, last uint8) bool {
-\tif ok { q := p.acc & ${t.passes}; p.accF = (^q & ${t.passes}) | low | ((q << 1) & last) }
+\tif ok { q := p.acc & ${t.passes}; p.accF = q | low | ((q << 1) & last) }
 \tp.acc = prev
 \treturn ok
 }
-func (p *${recv}) accK(m uint8) bool { p.acc = (p.acc &^ ((p.acc >> 1) & ${t.passes}) &^ (p.form & m) & ${t.passes}) | (p.form & (m << 1)); return true }
+func (p *${recv}) accK(m uint8) bool { p.acc = (p.acc &^ ((p.acc >> 1) & ${t.passes}) & (p.form | ^m) & ${t.passes}) | (p.form & (m << 1)); return true }
 func (p *${recv}) accS() bool { p.acc &^= (p.acc >> 1) & ${t.passes}; return true }
 func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
 }
@@ -207,7 +207,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // expression left to right), so it is kept in the frame, not on a stack.
     acc: (call, mask) => (f === 'R' ? call : `(${call} && p.accK(${mask}))`),
     accSep: () => (f === 'R' ? 'true' : 'p.accS()'),
-    target: (mask) => { if (f === 'R') throw new Error('go: a target() step in a recognized body'); return `(p.form & ${mask}) == 0`; },
+    target: (mask) => { if (f === 'R') throw new Error('go: a target() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
     accRun: (cond, af) => (f === 'R' ? cond : `p.accEnd(p.accSwap(${af.init}), ${cond}, ${af.low}, ${af.last})`),
     armForm: armFormGo,
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
@@ -1423,7 +1423,7 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     // The operators a target context reads (emit-portable binLeftOps): a switch behind the table's
     // test bit (goBinLeft); every other operator tests what it did without contexts and its node's
     // form is a constant.
-    bin: binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? `binForm_${r.name}(info.tgt, opLid, form)` : `${r.binForm?.form ?? 1}`,
+    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(info.tgt, opLid, form)` : ''}` : '1',
     tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : `${lowGo(ir, 'form')} != 0`,
     lf: (f: string) => lowGo(ir, f),
   };
@@ -1563,24 +1563,24 @@ function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
   const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
   // The operators a target context reads (emit-portable binLeftOps), behind the table's test bit:
-  // does the left operand fail its context (binFail), the node's form, which keeps its context bits (binForm).
-  const left = binLeftOps(ops), keep = left.filter((o) => o.acc), bc = r.binForm?.form ?? 1;
+  // does the left operand fail its context (binFail), the pass bits the node keeps from it (binKeep).
+  const left = binLeftOps(ops), keep = left.filter((o) => o.acc);
   const fns = left.length === 0 ? '' : `
 func binFail_${r.name}(op uint16, form uint8) bool {
 \tswitch op {${left.map((o) => `
 \tcase ${o.lid}:
-\t\treturn ${o.ctx ? `form&${o.ctx} != 0` : 'false'}`).join('')}
+\t\treturn ${o.ctx ? `form&${o.ctx} != ${o.ctx}` : 'false'}`).join('')}
 \t}
 \treturn form&3 != 0
 }${keep.length === 0 ? '' : `
-func binForm_${r.name}(tgt bool, op uint16, form uint8) uint8 {
+func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
 \tif tgt {
 \t\tswitch op {${keep.map((o) => `
 \t\tcase ${o.lid}:
-\t\t\treturn ${bc & ~o.acc} | form&${o.acc}`).join('')}
+\t\t\treturn form & ${o.acc}`).join('')}
 \t\t}
 \t}
-\treturn ${bc}
+\treturn 0
 }`}`;
   return `var bin_${r.name} = [${ops.size}]bp{${bin}}${fns}
 var pre_${r.name} = [${ops.size}]preOp{${pre}}

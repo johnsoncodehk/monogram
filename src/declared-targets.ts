@@ -5,23 +5,17 @@
 // (a unit arm: one rule call) is its child; a `last` arm passes as a container's child only as
 // the final child with no ',' after it. The engine computes it as a SYNTHESIZED ATTRIBUTE in the
 // form it already returns from every Pratt call (`_form`, FORM_*): the low two bits keep their
-// meaning (FORM_LOW), and context i has a FAIL bit and a LAST bit above them (formCtx, formLast):
-// a leaf of every context, the common node, has no bit above FORM_LOW, so it costs what it cost
-// without contexts. So a head is parsed once and checked only where a target is taken: a
-// `target(ctx)` step tests the fail bit of the node just returned, a `targetOps` operator that of
-// its left operand. A Pratt rule whose form no context reads (no container child, target step or
-// unit arm of a reader calls it, and no operator of its own reads its left: the READ SET) keeps
-// the forms it has without contexts: its bits above FORM_LOW are never tested.
+// meaning (FORM_LOW), and context i has a PASS bit and a LAST bit above them (formPass, formLast).
+// So a head is parsed once and checked only where a target is taken: a `target(ctx)` step tests
+// the pass bit of the node just returned, a `targetOps` operator that of its left operand.
 //
 // What each arm contributes is decided here, once, for every target:
 // - a leaf arm (and every arm of no context): a constant (ArmForm 'const'); a Pratt arm keeps its
-//   low bits and adds the fail bits of the contexts it is not a leaf of (and its last bits);
-// - a container arm ('acc'): its ACCUMULATOR starts from its contexts' bits as PASS bits and every
-//   rule call at a named child (Step.acc: the contexts that child must pass) clears the bits the
-//   child's form fails; in a context with `last` arms, a ',' of the arm (Step.accSep) or a later
-//   child after a child whose form has the last bit clears that context's pass bit (a ',' that a
-//   child call follows in its sequence needs no step: that call clears it); matched, the arm's form has the
-//   fail bit of every context its accumulator does not pass;
+//   low bits and adds the pass bits of the contexts it is a leaf of (and their last bits);
+// - a container arm ('acc'): it starts from its contexts' pass bits and every rule call at a named
+//   child (Step.acc: the pass bits that child must have) clears the bits the child's form lacks;
+//   in a context with `last` arms, a ',' of the arm (Step.accSep) or a later child after a child
+//   whose form has the last bit clears that context's pass bit;
 // - a unit arm ('unit'): the form its one call returned.
 // An rd rule computes its form only when it is in the TARGET CLOSURE: the rules a container calls
 // at a named child or a target step reads, and the unit arms' rules of those, transitively; a
@@ -42,7 +36,7 @@
 // (declared-targets-cst.ts), not from these bits.
 import type { CstGrammar } from './types.ts';
 import type { RuleIR, Step, RdRule, PrattRule, TargetsIR } from './emit-portable.ts';
-import { formCtx, formLast, FORM_MAX_CONTEXTS, FORM_LOW } from './emit-portable.ts';
+import { formPass, formLast, FORM_MAX_CONTEXTS } from './emit-portable.ts';
 
 // acc: init, the bits the arm starts from (its container contexts' pass bits and its leaf bits); low,
 // its FORM_LOW bits; last, its last bits (kept where it passes).
@@ -83,7 +77,7 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
   const ir = { rules };
   if (names.length > FORM_MAX_CONTEXTS) throw new Error(`targets: ${names.length} contexts declared (${names.join(', ')}); the engine's form holds at most ${FORM_MAX_CONTEXTS}`);
   let passes = 0;
-  names.forEach((_, i) => { passes |= formCtx(i); });
+  names.forEach((_, i) => { passes |= formPass(i); });
   // arm name -> its role in every context
   const roles = new Map<string, Role>();
   const roleOf = (arm: string): Role => {
@@ -93,8 +87,8 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
   };
   names.forEach((n, i) => {
     const c = decl[n]!;
-    for (const arm of c.leaves) roleOf(arm).leaf |= formCtx(i);
-    for (const [arm, field] of Object.entries(c.containers ?? {})) { const r = roleOf(arm); r.acc |= formCtx(i); r.field.set(i, field); }
+    for (const arm of c.leaves) roleOf(arm).leaf |= formPass(i);
+    for (const [arm, field] of Object.entries(c.containers ?? {})) { const r = roleOf(arm); r.acc |= formPass(i); r.field.set(i, field); }
     for (const arm of c.last ?? []) roleOf(arm).last |= formLast(i);
     for (const arm of [...c.leaves, ...Object.keys(c.containers ?? {})]) {
       const r = roleOf(arm);
@@ -108,27 +102,21 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
     return i;
   };
   const byName = new Map(ir.rules.map((r) => [r.name, r] as const));
-  const closure = new Set<string>();   // the read set: rd rules that compute a form, Pratt rules whose form is read
-  const need = (rule: string) => { if (byName.has(rule)) closure.add(rule); };
+  const closure = new Set<string>();
+  const need = (rule: string) => { const r = byName.get(rule); if (r && r.kind === 'rd') closure.add(rule); };
 
   // The steps of a container arm: mark each rule call at a named child (and ',' where `last` reads it).
-  const lastCtx = names.reduce((m, n, i) => ((decl[n]!.last ?? []).length ? m | formCtx(i) : m), 0);
+  const lastCtx = names.reduce((m, n, i) => ((decl[n]!.last ?? []).length ? m | formPass(i) : m), 0);
   const markAcc = (rule: string, arm: string, steps: Step[], role: Role): void => {
     for (const s of walk(steps)) {
       if (s.t === 'rule' || s.t === 'ruleBp') {
         let m = 0;
-        for (const [i, field] of role.field) if (field === 'all' || field === s.field) m |= formCtx(i);
+        for (const [i, field] of role.field) if (field === 'all' || field === s.field) m |= formPass(i);
         if (m !== 0) { s.acc = m; need(s.name); }
       } else if (s.t === 'lit' && s.value === ',' && (role.acc & lastCtx) !== 0) s.accSep = true;
     }
-    // a sep's delimiter: each element after one clears a pending last child (its first, none). A
-    // sep keeps a trailing delimiter whose element failed, so an element that always begins with a
-    // child call (which clears it when it matches) clears it when it FAILS ('fail': off the path
-    // that matches), any other element before it is tried.
-    for (const s of walk(steps)) if (s.t === 'sep' && s.delim === ',' && (role.acc & lastCtx) !== 0 && [...walk([s.elem])].some((x) => (x.t === 'rule' || x.t === 'ruleBp') && x.acc !== undefined)) s.accSep = startsWithChild(s.elem) ? 'fail' : true;
-    // a ',' that a child call follows in its sequence needs no step: the call clears it (acc_k),
-    // and when the call fails the sequence fails with the ','
-    for (const list of lists(steps)) list.forEach((s, k) => { if (s.t === 'lit' && s.accSep && k + 1 < list.length && startsWithChild(list[k + 1]!)) delete s.accSep; });
+    // a sep's delimiter: each element after one clears a pending last child (its first, none)
+    for (const s of walk(steps)) if (s.t === 'sep' && s.delim === ',' && (role.acc & lastCtx) !== 0 && [...walk([s.elem])].some((x) => (x.t === 'rule' || x.t === 'ruleBp') && x.acc !== undefined)) s.accSep = true;
     for (const [i, field] of role.field) {
       if (field === 'all') continue;
       if (![...walk(steps)].some((s) => (s.t === 'rule' || s.t === 'ruleBp') && s.field === field)) {
@@ -144,14 +132,14 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
       markAcc(rule, arm, steps, role);
       return { k: 'acc', init: role.acc | role.leaf, low, last: role.last };
     }
-    if (role) return { k: 'const', v: low | (passes & ~role.leaf) | role.last };
+    if (role) return { k: 'const', v: low | role.leaf | role.last };
     const u = steps === null ? null : unitCall(steps);
     if (u !== null) return { k: 'unit' };
-    return { k: 'const', v: low | passes };
+    return { k: 'const', v: low };
   };
   // target steps: what they read is the rule just before them (checked statically)
   const markTargets = (steps: Step[]): void => {
-    for (const s of walk(steps)) if (s.t === 'target') s.mask = formCtx(ctxIndex(s.ctx));
+    for (const s of walk(steps)) if (s.t === 'target') s.mask = formPass(ctxIndex(s.ctx));
   };
 
   for (const r of ir.rules) {
@@ -185,13 +173,13 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
         let m = 0;
         for (const [i, field] of role.field) {
           if (field !== 'left') throw new Error(`targets: the binary node ${arm} of rule ${r.name} is a container only of its left operand ('left'), not ${field}`);
-          m |= formCtx(i);
+          m |= formPass(i);
         }
         return m;
       };
       const bin = roles.get(r.opNames.binary);
       if (bin) used.add(r.opNames.binary);
-      r.binForm = { form: 1 | (passes & ~(bin?.leaf ?? 0)) | (bin?.last ?? 0), accLeft: bin ? leftOf(r.opNames.binary, bin) : 0 };
+      r.binForm = { leaf: bin ? bin.leaf | bin.last : 0, accLeft: bin ? leftOf(r.opNames.binary, bin) : 0 };
       for (const b of r.binary) {
         const own = roles.get(b.op);
         if (own) { used.add(b.op); b.accLeft = leftOf(b.op, own); if (own.leaf | own.last) throw new Error(`targets: operator ${b.op} of rule ${r.name} as a leaf: name the operator form ${r.opNames.binary}`); }
@@ -199,11 +187,11 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
       const post = roles.get(r.opNames.postfix), pre = roles.get(r.opNames.prefix);
       if (post) used.add(r.opNames.postfix);
       if ((post?.acc ?? 0) !== 0 || (pre?.acc ?? 0) !== 0) throw new Error(`targets: a prefix / postfix operator form of rule ${r.name} as a container is not supported`);
-      r.postForm = 1 | (passes & ~(post?.leaf ?? 0)) | (post?.last ?? 0);
-      r.preLeaf = (passes & ~(pre?.leaf ?? 0)) | (pre?.last ?? 0);
+      r.postForm = 1 | (post ? post.leaf | post.last : 0);
+      r.preLeaf = pre ? pre.leaf | pre.last : 0;
       for (const b of r.binary) {
         const ctx = grammarOpCtx(grammar, b.op);
-        if (ctx !== undefined) b.needCtx = formCtx(ctxIndex(ctx));
+        if (ctx !== undefined) b.needCtx = formPass(ctxIndex(ctx));
         b.accLeft = (b.accLeft ?? 0) | r.binForm.accLeft;
       }
     }
@@ -223,74 +211,22 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
     }
   };
   for (const r of ir.rules) for (const b of bodies(r)) before(b);
-  for (const r of ir.rules) if (r.kind === 'pratt' && r.binary.some((b) => b.needCtx)) closure.add(r.name);
   for (let grew = true; grew;) {
     grew = false;
     for (const name of [...closure]) {
-      const r = byName.get(name)!;
-      const arms: Array<[ArmForm, Step[] | null]> = r.kind === 'rd' ? r.alts.map((alt, i) => [r.altForm![i]!, alt]) : r.nudForm!.map((f, i) => [f, prattArmSteps(r, i)]);
-      for (const [f, steps] of arms) {
-        if (f.k !== 'unit') continue;
-        const u = unitCall(steps!)!;
-        if (byName.has(u) && !closure.has(u)) { closure.add(u); grew = true; }
-      }
+      const r = byName.get(name) as RdRule;
+      r.alts.forEach((alt, i) => {
+        if (r.altForm![i]!.k !== 'unit') return;
+        const u = unitCall(alt)!;
+        const t = byName.get(u);
+        if (t && t.kind === 'rd' && !closure.has(u)) { closure.add(u); grew = true; }
+      });
     }
   }
-  for (const r of ir.rules) {
-    if (closure.has(r.name)) continue;
-    if (r.kind === 'rd') delete r.altForm;
-    else unread(r);
-  }
+  for (const r of ir.rules) if (r.kind === 'rd' && !closure.has(r.name)) delete r.altForm;
   const unknown = [...roles.keys()].filter((arm) => !used.has(arm));
   if (unknown.length) throw new Error(`targets: no arm named ${unknown.join(', ')} in the grammar`);
   return { names, passes, lastCtx };
-}
-
-/** A Pratt rule outside the read set: the forms it has without contexts (its bits above FORM_LOW
- *  are never tested; its containers still run, for their children's sake). */
-function unread(r: PrattRule): void {
-  const low = (v: number) => v & FORM_LOW;
-  r.nudForm = r.nudForm!.map((f) => (f.k === 'const' ? { k: 'const', v: low(f.v) } : f));
-  r.ledForm = r.ledForm.map(low);
-  r.postfixTokForm = r.postfixTokForm!.map(low);
-  if (r.binForm) {
-    r.binForm = { form: low(r.binForm.form), accLeft: 0 };
-    for (const b of r.binary) delete b.accLeft;
-    r.postForm = low(r.postForm!);
-    r.preLeaf = 0;
-  }
-}
-
-/** A NUD arm's own steps (parallel to nudOrder), null for a token or prefix arm. */
-function prattArmSteps(r: PrattRule, i: number): Step[] | null {
-  const n = r.nudOrder[i]!;
-  switch (n.kind) {
-    case 'bracket': return r.nudBrackets[n.index]!.steps;
-    case 'seq': return r.nudSeqs[n.index]!;
-    case 'capped': return r.nudCapped[n.index]!.steps;
-    default: return null;
-  }
-}
-
-/** Does a step always begin with a container's child call (Step.acc)? */
-function startsWithChild(s: Step): boolean {
-  if (s.t === 'rule' || s.t === 'ruleBp') return s.acc !== undefined;
-  if (s.t === 'seq') { const own = s.steps.filter((x) => !ZERO_WIDTH.has(x.t)); return own.length > 0 && startsWithChild(own[0]!); }
-  return false;
-}
-
-/** Every step list inside a step list, itself first. */
-function* lists(steps: Step[]): Generator<Step[]> {
-  yield steps;
-  for (const s of steps) {
-    switch (s.t) {
-      case 'star': yield* lists([s.step]); break;
-      case 'sep': yield* lists([s.elem]); break;
-      case 'opt': case 'seq': case 'suppress': case 'ctx': yield* lists(s.steps); break;
-      case 'alt': for (const b of s.branches) yield* lists(b); break;
-      default: break;
-    }
-  }
 }
 
 function bodies(r: RuleIR): Step[][] {

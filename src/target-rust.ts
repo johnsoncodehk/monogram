@@ -1190,7 +1190,7 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // the enclosing one kept in a local of the frame (no stack: nothing allocated per parse).
     acc: (call, mask) => (r ? call : `(${call} && ${recv}.acc_k(${mask}))`),
     accSep: () => (r ? 'true' : `${recv}.acc_s()`),
-    target: (mask) => { if (r) throw new Error('rust: a target() step in a recognized body'); return `(${recv}.form & ${mask}) == 0`; },
+    target: (mask) => { if (r) throw new Error('rust: a target() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
     accRun: (cond, af) => (r ? cond : `{ let _a = ${recv}.acc; ${recv}.acc = ${af.init}; let _r = (${cond}); if _r { ${recv}.acc_out(${af.low}, ${af.last}); } ${recv}.acc = _a; _r }`),
     armForm: armFormRs,
     // A body guard (emit-portable.ts annotateSteps): star tests it before each attempt inside an
@@ -1260,8 +1260,8 @@ function targetRuntimeRs(ir: ParserIR): string {
   const t = ir.targets;
   if (!t) return '';
   return `
-    fn acc_out(&mut self, low: u8, last: u8) { let q = self.acc & ${t.passes}; self.acc_f = (!q & ${t.passes}) | low | ((q << 1) & last); }
-    fn acc_k(&mut self, m: u8) -> bool { self.acc = (self.acc & !((self.acc >> 1) & ${t.passes}) & !(self.form & m) & ${t.passes}) | (self.form & (m << 1)); true }
+    fn acc_out(&mut self, low: u8, last: u8) { let q = self.acc & ${t.passes}; self.acc_f = q | low | ((q << 1) & last); }
+    fn acc_k(&mut self, m: u8) -> bool { self.acc = (self.acc & !((self.acc >> 1) & ${t.passes}) & (self.form | !m) & ${t.passes}) | (self.form & (m << 1)); true }
     fn acc_s(&mut self) -> bool { self.acc &= !((self.acc >> 1) & ${t.passes}); true }`;
 }
 // Over `p`: a step inside a closure or a method that took `let p = self`. `r`: in recognize form.
@@ -1504,10 +1504,9 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   // test bit: every other operator tests what it did without contexts and its node's form is a constant.
   const leftOps = binLeftOps(ops);
   const tgtFail = leftOps.length === 0 ? `${lf('form')} != 0`
-    : `match op_lid { ${leftOps.map((o) => `${o.lid} => ${o.ctx ? `(form & ${o.ctx}) != 0` : 'false'}, `).join('')}_ => ${lf('form')} != 0 }`;
+    : `match op_lid { ${leftOps.map((o) => `${o.lid} => ${o.ctx ? `(form & ${o.ctx}) != ${o.ctx}` : 'false'}, `).join('')}_ => ${lf('form')} != 0 }`;
   const keep = leftOps.filter((o) => o.acc);
-  const bc = r.binForm?.form ?? 1;
-  const binF = keep.length ? `(if tgt { match op_lid { ${keep.map((o) => `${o.lid} => ${bc & ~o.acc} | (form & ${o.acc}), `).join('')}_ => ${bc} } } else { ${bc} })` : `${bc}`;
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : '1';
   const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
   const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
   // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops

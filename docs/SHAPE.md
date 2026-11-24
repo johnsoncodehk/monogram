@@ -234,7 +234,7 @@ treatments from the spec; neither is a term the author writes:
   invocation in a valid program (nested destructuring re-parses once per nesting level); the gate
   `shape2-oracle` fails when an invocation re-parses more than once. The trigger "the left's arm is a
   spine arm" is one plan predicate per led (`Restart.spine`); the engine's assignment-target form
-  bits (`(form & formCtx(i)) == 0`: the bit is a FAIL bit) are the exact form of the same test.
+  bits (`form & formPass(i)`) are the exact form of the same test.
 
 ### Classes
 
