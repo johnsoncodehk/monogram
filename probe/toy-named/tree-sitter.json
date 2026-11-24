@@ -1,0 +1,13 @@
+{
+  "grammars": [
+    {
+      "name": "toynamed",
+      "scope": "source.toynamed",
+      "path": "."
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}

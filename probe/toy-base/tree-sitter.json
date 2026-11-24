@@ -1,0 +1,13 @@
+{
+  "grammars": [
+    {
+      "name": "toybase",
+      "scope": "source.toybase",
+      "path": "."
+    }
+  ],
+  "metadata": {
+    "version": "0.0.0",
+    "license": "MIT"
+  }
+}
