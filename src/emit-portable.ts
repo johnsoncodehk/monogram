@@ -491,7 +491,7 @@ export type PrattRule = {
   // requireTarget: the operand (prefix) / left operand (binary, postfix) must have FORM_TARGET,
   // else the whole Pratt call fails; noUnaryLhs: the left operand must not have FORM_UNARY.
   prefix: Array<{ op: string; rbp: number; requireTarget: boolean; form: AssignForm }>;  // NUD: prefix op then operand at rbp; form = the node's
-  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; needCtx?: number; accLeft?: number }>;   // needCtx: targetOps: the pass bit the left operand must have; accLeft: the pass bits the node takes from its left operand (declared-targets.ts)  // LED: infix op, bind iff lbp > minBp, rhs at rbp
+  binary: Array<{ op: string; lbp: number; rbp: number; requireTarget: boolean; noUnaryLhs: boolean; targetCtx?: true; needCtx?: number; accLeft?: number }>;   // targetCtx: a targetOps operator (it can fail the call after the NUD, as requireTarget does)   // needCtx: targetOps: the pass bit the left operand must have; accLeft: the pass bits the node takes from its left operand (declared-targets.ts)  // LED: infix op, bind iff lbp > minBp, rhs at rbp
   leds: Bracket[];                                    // LED: mixfix continuation (call/member/index), tried before operators
   ledNames: string[];                                 // parallel to leds: each arm's name
   ledLeftNames: string[];                             // parallel to leds: the name of its left operand (the self `$`; derived: `left`)
@@ -1371,12 +1371,13 @@ function buildIR(grammar: CstGrammar, facts: PortableFacts): ParserIR {
   // when no operator of it can fail the call after its NUD matched: a NUD that matches nothing
   // leaves the state as it found it (each arm's frame or commit undoes itself), a led or a binary
   // operand that fails is undone by its own block and ends the loop, so the call's only failure
-  // after its NUD is an operator whose operand must be a target (requireTarget / noUnaryLhs: a
+  // after its NUD is an operator whose operand must be a target (requireTarget / noUnaryLhs / a
+  // targetOps operator's declared context: a
   // binary or postfix operator returns with the left operand built; a prefix one in the NUD frame
   // returns with the best so far built). Not clean: such a Pratt rule's call, and any list whose
   // later step can fail after an earlier one consumed.
   const zeroWidth = (s: Step): boolean => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'target' || s.t === 'look';
-  const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
+  const cleanRules = new Set(rules.filter((r) => r.kind === 'rd' || (!r.binary.some((b) => b.requireTarget || b.noUnaryLhs || b.targetCtx) && !r.postfix.some((o) => o.requireTarget) && !r.prefix.some((o) => o.requireTarget))).map((r) => r.name));
   const failsClean = (s: Step): boolean => {
     switch (s.t) {
       case 'lit': case 'tok': case 'altlit': case 'alt': case 'star': case 'opt': case 'sep': return true;
@@ -2458,7 +2459,7 @@ function buildPratt(
     ? [...a.prefixOps.entries()].filter(([, info]) => info.capBp === undefined).map(([op, info]) => ({ op, rbp: info.rbp, requireTarget: !!info.requireTarget, form: (a.postfixOpValues.has(op) ? FORM_NOT_TARGET : FORM_UNARY) as AssignForm }))
     : [];
   const binary = sawBinary
-    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp, requireTarget: !!info.requireTarget, noUnaryLhs: a.noUnaryLhsOps.has(op) }))
+    ? [...a.opTable.entries()].filter(([, info]) => info.position === 'infix').map(([op, info]) => ({ op, lbp: info.lbp, rbp: info.rbp, requireTarget: !!info.requireTarget, noUnaryLhs: a.noUnaryLhsOps.has(op), ...(info.targetCtx !== undefined ? { targetCtx: true as const } : {}) }))
     : [];
   const postfix = sawPostfix
     ? [...a.opTable.entries()].filter(([, info]) => info.position === 'postfix').map(([op, info]) => ({ op, lbp: info.lbp, requireTarget: !!info.requireTarget }))

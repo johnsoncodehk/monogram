@@ -293,6 +293,8 @@ export function tsDoc(lib: TsLib, src: string, builder: boolean): { ok: boolean;
 export type Runner = {
   label: string;
   run: (src: string) => Outcome;
+  /** The demand re-parses so far (the TS library's demandRestarts; a grammar with a demand context). */
+  demandRestarts?: () => { restarts: number; overBound: number } | undefined;
   /** `run` over a whole corpus: one outcome per input, in order. */
   batch: (srcs: string[]) => Outcome[];
   /** The lexer alone over a whole corpus. */
@@ -539,7 +541,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     writeFileSync(`${dir}/lib.ts`, tsLibSrc + TS_LID_OF + TS_TOK_SPANS);
     const tsLib = await import(`${dir}/lib.ts`) as TsLib;
     const runners: Runner[] = [{
-      label: 'typescript', run: (src) => tsRun(tsLib, src), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)),
+      label: 'typescript', run: (src) => tsRun(tsLib, src), demandRestarts: () => (tsLib as { demandRestarts?: () => { restarts: number; overBound: number } }).demandRestarts?.(), batch: (srcs) => srcs.map((src) => tsRun(tsLib, src)), tokens: (srcs) => srcs.map((src) => tsTokens(tsLib, src)),
       doc: (srcs) => srcs.map((src) => tsDoc(tsLib, src, false) as Outcome), docBuilder: (srcs) => srcs.map((src) => tsDoc(tsLib, src, true).ok), lidOf: (texts) => texts.map((t) => tsLib.__lid_of(t)),
       edit: (json, fast) => tsEditSession(tsLib, json, fast), editBatch: (jsons, fast) => jsons.map((json) => tsEditSession(tsLib, json, fast)),
       spans: { cmd: 'node', args: [tsFile, 'tok-spans'], run: (src) => tsLib.__tok_spans(src) }, utf8Edits: false, total: (srcs) => srcs.map((src) => tsTotal(tsLib, src)),

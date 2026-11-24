@@ -338,6 +338,14 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
       console.log(`  ${c.grammar}/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
     }
     console.log(`  ${c.grammar}/${r.label}: ${acc}/${c.accept.length} accept ≡ oracle · ${rej}/${c.reject.length} reject ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
+    // A demand context's re-parses (src/reparse-family.ts): each nested one starts inside the one
+    // around it, so the work per demand operator is bounded by the nesting depth (the counter of
+    // those that do not; the fixture's nested rows exercise it).
+    const rp = r.demandRestarts?.();
+    if (rp) {
+      if (rp.overBound || !rp.restarts) { gate.failures++; console.log(`  ${c.grammar}/${r.label}: demand re-parses ${rp.restarts}, ${rp.overBound} above the bound (a nested re-parse that does not start inside the one around it)`); }
+      else console.log(`  ${c.grammar}/${r.label}: ${rp.restarts} demand re-parses, none above the bound`);
+    }
 
     if (c.grammar === 'javascript') unicodeParity(r, oracleOut);
   }
