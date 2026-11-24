@@ -3557,7 +3557,7 @@ type Edit = { start: number; end: number; text: string };
 type Doc = {
   tkK: typeof tkK; tkT: typeof tkT; tkOff: typeof tkOff; tkEnd: typeof tkEnd; tkFl: typeof tkFl; tkDp: typeof tkDp; tkPd: typeof tkPd;
   tkCap: number; tokN: number; srcLenP1: number; negFrom: number;
-  rowRule: typeof rowRule; rowLen: typeof rowLen; rowTokLen: typeof rowTokLen; rowStart: typeof rowStart; rowCount: typeof rowCount; rowExt: typeof rowExt;
+  rowRule: typeof rowRule; rowCtx: typeof rowCtx; rowLen: typeof rowLen; rowTokLen: typeof rowTokLen; rowStart: typeof rowStart; rowCount: typeof rowCount; rowExt: typeof rowExt;
   rowOK: typeof rowOK; rowKC: typeof rowKC; rowNF: typeof rowNF; rowRM: typeof rowRM; rowCapped: typeof rowCapped; absChar: typeof absChar; absTok: typeof absTok;
   rowCap: number; nodeN: number;
   kids: typeof kids; kidRel: typeof kidRel; kidTokRel: typeof kidTokRel; kidCap: number; kidN: number;
@@ -3579,7 +3579,7 @@ function makeDoc(rows = 8192): Doc {
     tkOff: new Int32Array(4096), tkEnd: new Int32Array(4096), tkFl: new Uint8Array(4096),
     tkDp: new Uint8Array(4096), tkPd: new Uint16Array(4096),
     tkCap: 4096, tokN: 0, srcLenP1: 1, negFrom: 0x7fffffff,
-    rowRule: new Uint16Array(rows), rowLen: new Int32Array(rows), rowTokLen: new Int32Array(rows),
+    rowRule: new Uint16Array(rows), rowCtx: new Uint8Array(rows), rowLen: new Int32Array(rows), rowTokLen: new Int32Array(rows),
     rowStart: new Int32Array(rows), rowCount: new Int32Array(rows), rowExt: new Int32Array(rows),
     rowOK: new Uint8Array(rows), rowKC: new Uint8Array(rows),
     rowNF: new Int32Array(rows).fill(0x7fffffff),
@@ -3602,7 +3602,7 @@ function saveDoc(d: Doc) {
   d.tkK = tkK; d.tkT = tkT; d.tkOff = tkOff; d.tkEnd = tkEnd; d.tkFl = tkFl;
   d.tkDp = tkDp; d.tkPd = tkPd; d.tkCap = tkCap; d.tokN = tokN;
   d.srcLenP1 = srcLenP1; d.negFrom = negFrom;
-  d.rowRule = rowRule; d.rowLen = rowLen; d.rowTokLen = rowTokLen; d.rowStart = rowStart;
+  d.rowRule = rowRule; d.rowCtx = rowCtx; d.rowLen = rowLen; d.rowTokLen = rowTokLen; d.rowStart = rowStart;
   d.rowCount = rowCount; d.rowExt = rowExt; d.rowOK = rowOK; d.rowKC = rowKC; d.rowNF = rowNF; d.rowRM = rowRM; d.rowCapped = rowCapped;
   d.absChar = absChar; d.absTok = absTok; d.rowCap = rowCap; d.nodeN = nodeN;
   d.kids = kids; d.kidRel = kidRel; d.kidTokRel = kidTokRel; d.kidCap = kidCap; d.kidN = kidN;
@@ -3620,7 +3620,7 @@ function loadDoc(d: Doc) {
   tkK = d.tkK; tkT = d.tkT; tkOff = d.tkOff; tkEnd = d.tkEnd; tkFl = d.tkFl;
   tkDp = d.tkDp; tkPd = d.tkPd; tkCap = d.tkCap; tokN = d.tokN;
   srcLenP1 = d.srcLenP1; negFrom = d.negFrom;
-  rowRule = d.rowRule; rowLen = d.rowLen; rowTokLen = d.rowTokLen; rowStart = d.rowStart;
+  rowRule = d.rowRule; rowCtx = d.rowCtx; rowLen = d.rowLen; rowTokLen = d.rowTokLen; rowStart = d.rowStart;
   rowCount = d.rowCount; rowExt = d.rowExt; rowOK = d.rowOK; rowKC = d.rowKC; rowNF = d.rowNF; rowRM = d.rowRM; rowCapped = d.rowCapped;
   absChar = d.absChar; absTok = d.absTok; rowCap = d.rowCap; nodeN = d.nodeN;
   kids = d.kids; kidRel = d.kidRel; kidTokRel = d.kidTokRel; kidCap = d.kidCap; kidN = d.kidN;
