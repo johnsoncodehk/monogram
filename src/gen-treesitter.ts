@@ -4349,6 +4349,10 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   if (regexSym) H.push(`    if (valid_symbols[${regexSym}] && lexer->lookahead == '/') return 2;`);
   H.push('    end = lexer->eof(lexer);');
   H.push('    cand = 0; lit = -1;');
+  // A start marker stands where the next token starts, so the node it begins starts there and not at the
+  // whitespace before it: where one is valid, the end is marked past the whitespace and comments (a
+  // line-end token returned in the same state then spans them too: the two meet only in merged states).
+  if (starts.length) H.push(`    if (${starts.map(t => `valid_symbols[${t.snake.toUpperCase()}]`).join(' || ')}) lexer->mark_end(lexer);`);
   H.push('    if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }');
   H.push('    if (lit > -10) break;');
   H.push('    if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;');

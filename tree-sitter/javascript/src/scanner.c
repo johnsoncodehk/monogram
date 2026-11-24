@@ -1597,6 +1597,7 @@ static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {
     if (valid_symbols[REGEX_LITERAL] && lexer->lookahead == '/') return 2;
     end = lexer->eof(lexer);
     cand = 0; lit = -1;
+    if (valid_symbols[_STARTS_1] || valid_symbols[_STARTS_2] || valid_symbols[_STARTS_3] || valid_symbols[_STARTS_4] || valid_symbols[_STARTS_5] || valid_symbols[_STARTS_6] || valid_symbols[_STARTS_7] || valid_symbols[_STARTS_8] || valid_symbols[_STARTS_9] || valid_symbols[_STARTS_10] || valid_symbols[_STARTS_11]) lexer->mark_end(lexer);
     if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }
     if (lit > -10) break;
     if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;
