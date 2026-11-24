@@ -1599,7 +1599,7 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
  * validate: align() also reports whether the token stream (and, with cstBuilder, the tree) equals
  * a fresh parse's, and with cstBuilder the recorded entries are checked against the old tree.
  */
-export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; builder?: Builder<H> }): { text(): string; root(): H | null; align(): Align | null; edit(edits: Edit[]): H | null } {
+export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; builder?: Builder<H> }): { text(): string; root(): H | null; align(): Align | null; lexError(): { off: number; message: string } | null; edit(edits: Edit[]): H | null } {
   const builder = opts?.builder ?? (cstBuilder as unknown as Builder<H>);
   const isCst = builder === (cstBuilder as unknown as Builder<H>);
   const validate = opts?.validate === true;
@@ -1607,12 +1607,14 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
   const shift = supportsShift ? builder.shift!.bind(builder) : null;
   let text = src;
   let [prevToks, lexErr] = scanMeta(src);
-  if (lexErr !== null) throw lexError(src, lexErr);
   let align: Align | null = null;${topReuse ? `
   let entries: EntryMeta[] = [];
   let entryHs: H[] = [];` : ''}
   let root: H | null = null;
-  {
+  // A text that does not lex: the state an edit to it leaves (no tokens, no tree; the next edit
+  // relexes it all), so the Doc reaches every later text an edit makes (edited ≡ fresh).
+  if (lexErr !== null) prevToks = [];
+  else {
     const got = parseWithMeta(src, prevToks, builder);
     root = got.root;${topReuse ? `
     entries = got.entries;
@@ -1622,6 +1624,8 @@ export function createDoc<H = Node>(src: string, opts?: { validate?: boolean; bu
     text(): string { return text; },
     root(): H | null { return root; },
     align(): Align | null { return align; },
+    // the lexer error of the current text (null when it lexes): the Doc then has no tree
+    lexError(): { off: number; message: string } | null { return lexErr === null ? null : { off: lexErr.off, message: lexError(text, lexErr).message }; },
     edit(edits: Edit[]): H | null {
       const oldText = text, oldToks = prevToks;
       let relexed = 0;

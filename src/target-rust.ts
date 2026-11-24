@@ -2007,6 +2007,7 @@ fn toks_from_meta(text: &str, meta: &[AlignMeta]) -> Vec<Tok> {
 ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
     text: String,
     toks: Vec<AlignMeta>,
+    lex_err: Option<LexError>,
     align: Option<Align>,
     validate: bool,
     b: B,
@@ -2018,9 +2019,13 @@ ${treeEqFn}${reuseFns}pub struct Doc<B: Builder = CstBuilder> {
 impl<B: Builder + Default> Doc<B> {
     /// Explicit builder (handout Doc::new(src, builder) form — Rust has no arity overload).
     pub fn new_with(text: String, b: B) -> Doc<B> {
-        let toks = match ${initToks} { (toks, None) => toks, (_, Some(e)) => panic!("{}", lex_error(&text, e).msg) };
-        let mut d = Doc { text, toks, align: None, validate: false, b, scratch: Vec::new()${docExtraInit}, root: None, baseline: 0, last_pos: 0 };
-        d.reparse_fresh();
+        // A text that does not lex: the state an edit to it leaves (no tokens, no tree; the next
+        // edit relexes it all), so the Doc reaches every later text an edit makes (edited ≡ fresh).
+        let (toks, err) = ${initToks};
+        let lexes = err.is_none();
+        let lex_err = err.map(|e| lex_error(&text, e));
+        let mut d = Doc { text, toks: if lexes { toks } else { Vec::new() }, lex_err, align: None, validate: false, b, scratch: Vec::new()${docExtraInit}, root: None, baseline: 0, last_pos: 0 };
+        if lexes { d.reparse_fresh(); }
         d
     }
     /// Convenient constructor via B::default(). Bare Doc::new(src) → CstBuilder (default type param).
@@ -2050,6 +2055,8 @@ impl<B: Builder + Default> Doc<B> {
     pub fn alignment(&self) -> Option<&Align> { self.align.as_ref() }
     pub fn builder(&self) -> &B { &self.b }
     pub fn root_handle(&self) -> Option<B::H> { self.root }
+    /// The lexer error of the current text (None when it lexes): the Doc then has no tree.
+    pub fn lex_error(&self) -> Option<&LexError> { self.lex_err.as_ref() }
     pub fn edit(&mut self, edits: &[Edit]) {
         let old_text = self.text.clone();
         let old_toks = self.toks.clone();
@@ -2057,9 +2064,10 @@ impl<B: Builder + Default> Doc<B> {
         // relex-family.ts): the text is rejected and the Doc keeps no token stream (the next edit
         // relexes it all).
         let relexed = match relex_edits(&old_text, &old_toks, edits) {
-            (text, toks, n, None) => { self.text = text; self.toks = toks; n as usize }
-            (_, _, _, Some(_)) => {
+            (text, toks, n, None) => { self.text = text; self.toks = toks; self.lex_err = None; n as usize }
+            (_, _, _, Some(e)) => {
                 self.text = apply_edits(&old_text, edits);
+                self.lex_err = Some(lex_error(&self.text, e));
                 self.toks = Vec::new();
                 self.root = None;
                 self.keep_toks(Vec::new());
