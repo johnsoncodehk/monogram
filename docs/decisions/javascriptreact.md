@@ -13,7 +13,7 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | LED connectors | 3 | 3 | 0 | 0 | 0 | 3 |
 | inline choice | 86 | 41 | 0 | 45 | 0 | 44 |
 | star | 63 | 60 | 0 | 3 | 0 | 36 |
-| opt | 90 | 57 | 0 | 33 | 0 | 54 |
+| opt | 90 | 57 | 0 | 33 | 0 | 55 |
 | sep | 45 | 7 | 0 | 38 | 0 | 0 |
 
 | finding | count |
@@ -121,8 +121,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Expr NUD / arrow: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / asyncArrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr NUD / arrowIdentifier: `alt(Block \| !{'{'} Expr)`: by attempt; takes a mark: branch 1: a call of Expr can fail after its operand (an operator that requires an assignment target)
-- Expr NUD / yield_: `alt('*' Expr \| opt(Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
-- Expr NUD / yield_: `opt(Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
+- Expr NUD / yield_: `alt(sameLine '*' Expr \| opt(sameLine Expr))`: by attempt; takes a mark: branch 0: it can fail after `'*'`
+- Expr NUD / yield_: `opt(sameLine Expr)`: by attempt; takes a mark: a call of Expr can fail after its operand (an operator that requires an assignment target)
 - Expr LED / led_paren: `sep(Expr, ',')`: by attempt
 - Expr LED / led_optChain: `alt(Ident \| PrivateField \| '(' sep(Expr, ',') ')' \| '['…`: one token; takes a mark: branch 2: it can fail after `'('`; branch 3: it can fail after `'['`
 - Expr LED / led_optChain: `sep(Expr, ',')`: by attempt
@@ -251,7 +251,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - two tokens (pairs): variable (#1) at `let` only before '['|'{'|Ident; using (#16) at `await` only before 'using'; using (#16) at `using` only before '['|'{'|Ident; decl (#17) at `async` only before 'function'; decl (#17) at `import` only before '*'|'defer'|'source'|'{'|Ident|String
   - two tokens (SECOND): variable (#1) only before '['|'{'|Ident; if_ (#2) only before '('; for_ (#3) only before '('|'await'; while_ (#4) only before '('; switch_ (#6) only before '('; try_ (#11) only before '{'; labelled (#12) only before ':'; with_ (#15) only before '('; using (#16) only before '['|'using'|'{'|Ident
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over variable (#1), labelled (#12), using (#16), decl (#17), expr (#18)
-- one token, no mark: 1 star, 2 opt
+- one token, no mark: 1 star, 1 opt
 - Stmt / variable: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
 - Stmt / variable: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Stmt / if_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
@@ -274,6 +274,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Stmt / try_: `opt('finally' Block)`: one token; takes a mark: it can fail after `'finally'`
 - Stmt / debugger_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Stmt / with_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Stmt / using: `opt('await' sameLine)`: one token; takes a mark: it can fail after `'await'`
 - Stmt / using: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
 - Stmt / using: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Stmt / expr: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
@@ -357,7 +358,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - two tokens (pairs): declaration (#0) at `await` only before 'using'; declaration (#0) at `let`, `using` only before '['|'{'|Ident
   - two tokens (SECOND): declaration (#0) only before '['|'using'|'{'|Ident
   - longest match: a candidate frame (a mark per new best) at `!`, `(`, `+`, `++`, `-`, `--`, `...`, `<` and 3 more, every token of a kind no case names, over declaration (#0), classic (#1), in_ (#2), of (#3)
-- ForHead / declaration: `alt(('let'\|'const'\|'var') ForBinding alt(many((… …)) ';…`: by attempt; takes a mark: branch 0: it can fail after `('let'\|'const'\|'var')`; branch 1: it can fail after `alt('using' \| 'await' 'using')`
+- ForHead / declaration: `alt(('let'\|'const'\|'var') ForBinding alt(many((… …)) ';…`: by attempt; takes a mark: branch 0: it can fail after `('let'\|'const'\|'var')`; branch 1: it can fail after `alt('using' \| 'await' sameLine 'using')`
 - ForHead / declaration: `alt(many((',' ForBinding)) ';' opt(Expr many((… …))) ';…`: by attempt; takes a mark: branch 0: it can fail after `many((',' ForBinding))`; branch 1: it can fail after `'in'`; branch 2: it can fail after `'of'`
 - ForHead / declaration: `many((',' ForBinding))`: one token; takes a mark: it can fail after `','`
 - ForHead / declaration: `opt(Expr many((',' Expr)))`: by attempt; takes a mark: it can fail after `Expr`
@@ -365,7 +366,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ForHead / declaration: `opt(Expr many((',' Expr)))`: by attempt; takes a mark: it can fail after `Expr`
 - ForHead / declaration: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ForHead / declaration: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- ForHead / declaration: `alt('using' \| 'await' 'using')`: one token; takes a mark: branch 1: it can fail after `'await'`
+- ForHead / declaration: `alt('using' \| 'await' sameLine 'using')`: one token; takes a mark: branch 1: it can fail after `'await'`
 - ForHead / declaration: `alt(many((',' ForBinding)) ';' opt(Expr many((… …))) ';…`: by attempt; takes a mark: branch 0: it can fail after `many((',' ForBinding))`; branch 1: it can fail after `'of'`
 - ForHead / declaration: `many((',' ForBinding))`: one token; takes a mark: it can fail after `','`
 - ForHead / declaration: `opt(Expr many((',' Expr)))`: by attempt; takes a mark: it can fail after `Expr`
@@ -393,9 +394,9 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - two tokens (pairs): declaration (#0) at `await` only before 'using'; declaration (#0) at `using` only before '['|'{'|Ident
   - two tokens (SECOND): declaration (#0) only before '['|'using'|'{'|Ident
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over declaration (#0), of (#1)
-- ForAwaitHead / declaration: `alt(('let'\|'const'\|'var') ForBinding alt('of' Expr) \| !…`: by attempt; takes a mark: branch 0: it can fail after `('let'\|'const'\|'var')`; branch 1: it can fail after `alt('using' \| 'await' 'using')`
+- ForAwaitHead / declaration: `alt(('let'\|'const'\|'var') ForBinding alt('of' Expr) \| !…`: by attempt; takes a mark: branch 0: it can fail after `('let'\|'const'\|'var')`; branch 1: it can fail after `alt('using' \| 'await' sameLine 'using')`
 - ForAwaitHead / declaration: `alt('of' Expr)`: one token; takes a mark: branch 0: it can fail after `'of'`
-- ForAwaitHead / declaration: `alt('using' \| 'await' 'using')`: one token; takes a mark: branch 1: it can fail after `'await'`
+- ForAwaitHead / declaration: `alt('using' \| 'await' sameLine 'using')`: one token; takes a mark: branch 1: it can fail after `'await'`
 - ForAwaitHead / declaration: `alt('of' Expr)`: one token; takes a mark: branch 0: it can fail after `'of'`
 
 ### SwitchCase

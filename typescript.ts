@@ -582,7 +582,7 @@ const Expr = rule($ => [
   // Without this arm the bare form only "parsed" by splitting into two statements.
   arm('asyncArrowIdentifier', capExpr('?', field('asyncKeyword', 'async'), sameLine, awaitCtx(notReservedExpr, field('parameter', Ident)), field('arrow', '=>'), awaitCtx(field('body', conciseBody(Block, $))))),
   arm('arrowIdentifier', capExpr('?', notReservedExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
-  arm('yield_', capExpr('?', 'yield', alt([field('asterisk', '*'), $], [opt($)]))),   // yield e | yield* e (delegate) | yield: an AssignmentExpression, capped as javascript.ts's
+  arm('yield_', capExpr('?', 'yield', alt(arm('star', sameLine, field('asterisk', '*'), $), arm('expr', opt(sameLine, $))))),   // yield e | yield* e (delegate) | yield: an AssignmentExpression, capped as javascript.ts's
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
   arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', field('source', $), ')'), arm('meta', '.', field('metaKeyword', alt('meta', 'defer', 'source'))), arm('typeArguments', ...typeArgsInExpr(), opt('(', sep($, ','), ')'))))),   // import(e) | import.meta | import.defer / import.source (tsc's parser reads `import.` and a name as a MetaProperty; a call after it is the call LED) | import<T>(args) (instantiation-expression; checker rejects)
@@ -740,7 +740,7 @@ const Stmt = rule($ => [
   // is `using[a] = b` (element-assignment on the identifier `using`) and stays valid, while
   // `using {a} = b` / `await using [a] = null` (no derivation — V8 + babel reject; tsc is
   // lenient on the `{` form) correctly fail. (Guards the first binding; see ForHead for for-of.)
-  arm('using', opt(field('awaitKeyword', 'await')), field('usingKeyword', 'using'), not(alt('[', '{')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
+  arm('using', opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, not(alt('[', '{')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
   Decl,
   // The JavaScript expression statement (`expressionStatement`): tsc's parseStatement also takes
   // `{` as a block and `function`, `class`, `@` and same-line `async function` as declarations
@@ -1098,7 +1098,7 @@ const Decl = rule($ => [
     ...classDecls,
     arm('other', not('static'), field('decl', $)),
     [alt('let', 'const', 'var'), Binding, many(',', Binding), asi()],
-    [opt('await'), 'using', not(alt('[', '{')), Binding, many(',', Binding), asi()],
+    [opt('await', sameLine), 'using', sameLine, not(alt('[', '{')), Binding, many(',', Binding), asi()],
   ))),
   // A leading `async` before a declaration other than a function: tsc's parser accepts it (the
   // checker rejects `async class`). `async function` MUST take the async-function arm so its

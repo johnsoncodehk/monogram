@@ -54,11 +54,15 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // other alternatives that can start as it excludes (planStartMarkers: the expression statement's,
 // the concise body's, the for heads', TypeScript's `constructor` member and module reference string):
 // js / jsx lowered +10 (lookahead1 -6, lookahead -4), ts / tsx lowered +12 (lookahead1 -8, lookahead -4).
+// `[no LineTerminator here]` after `yield` (both arms) and in the `using` / `await using` declarations
+// (the statement's, and the for heads' ForDeclaration, used by `for` and `for await`): each a `sameLine`
+// tree-sitter does not express: js / jsx lowered +8, ts / tsx lowered +10 (TypeScript's decorated
+// declaration has its own `using` arm).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 53,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
-  typescript:      { lowered: 145, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
-  javascriptreact: { lowered: 55,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
-  typescriptreact: { lowered: 147, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
+  javascript:      { lowered: 61,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
+  typescript:      { lowered: 155, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
+  javascriptreact: { lowered: 63,  vacuous: 4,  'reserved-set': 47, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
+  typescriptreact: { lowered: 157, vacuous: 60, 'reserved-set': 67, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 

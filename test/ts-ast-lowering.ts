@@ -779,7 +779,9 @@ function lowerFunctionLike(n: E, c: E[], kind: string, mods: Ast[] = []): Ast {
   for (let i = 0; i < c.length; i++) {
     if (ruleIs(c[i], 'Type') && leafIs(c[i - 1], ':')) { retT = lowerType(c[i] as E); break; }
   }
-  const kids = [...mods, ...(nameLeaf ? [ast('Identifier', off(nameLeaf), end(nameLeaf))] : []), ...params, ...(retT ? [retT] : []), ...(block !== undefined ? [lowerBlock(block)] : [])];
+  // a generator's `*` is tsc's asteriskToken child, before the name
+  const star = c.find((x) => leafIs(x, '*')) as E | undefined;
+  const kids = [...mods, ...(star ? [ast('AsteriskToken', off(star), end(star))] : []), ...(nameLeaf ? [ast('Identifier', off(nameLeaf), end(nameLeaf))] : []), ...params, ...(retT ? [retT] : []), ...(block !== undefined ? [lowerBlock(block)] : [])];
   return ast(kind, off(n), end(n), kids);
 }
 
