@@ -120,6 +120,20 @@ export function coverageReport(c: ShapeCoverage): string {
 
 /** A complete `defineShape` module for `grammar` (imported from `grammarImport`): every arm mapped
  * to its skeleton term, with its named children in a comment. It loads as it is (test/shape2-eval.ts). */
+/** Node keys no field of these terms takes: kind / start / end, each `$`-prefixed while a field has
+ * the name (a skeleton's fields are the grammar's names, and `kind` is one of them in JavaScript). */
+export function freeNodeKeys(terms: Term[]): { kind: string; start: string; end: string } {
+  const used = new Set<string>();
+  const fieldsOf = (t: unknown): void => {
+    if (t === null || typeof t !== 'object') return;
+    if ((t as Term).t === 'node') for (const k of Object.keys((t as { fields: object }).fields)) used.add(k);
+    Object.values(t).forEach(fieldsOf);
+  };
+  terms.forEach(fieldsOf);
+  const key = (k: string): string => { let x = k; while (used.has(x)) x = '$' + x; return x; };
+  return { kind: key('kind'), start: key('start'), end: key('end') };
+}
+
 export function shapeSkeleton(grammar: CstGrammar, grammarImport: string): string {
   const c = shapeCoverage(defineShape(grammar, { name: `${grammar.name ?? 'grammar'}-skeleton`, rules: {} }));
   const out = [
@@ -130,8 +144,10 @@ export function shapeSkeleton(grammar: CstGrammar, grammarImport: string): strin
     '// shape). Replace each term with your node; an arm you delete is left out (see --shape).',
     `export default defineShape(grammar, {`,
     `  name: '${grammar.name ?? 'grammar'}-shape',`,
-    '  rules: {',
   ];
+  const keys = freeNodeKeys(c.arms.map((a) => a.skeleton));
+  if (keys.kind !== 'kind' || keys.start !== 'start' || keys.end !== 'end') out.push(`  node: { kind: '${keys.kind}', start: '${keys.start}', end: '${keys.end}' },`);
+  out.push('  rules: {');
   let rule = '';
   for (const a of c.arms) {
     if (a.rule !== rule) { if (rule) out.push('    },'); out.push(`    ${a.rule}: {`); rule = a.rule; }

@@ -49,7 +49,7 @@ import type { Expr, Fn, Stmt } from './algo-ir.ts';
 import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
 import type { RuleExpr } from './types.ts';
 import { cardOf, type ArmInfo, type ScopeInfo, type Shape, type Slot } from './shape2-eval.ts';
-import type { CookFn, InhEq, Scalar, Term, ThreadEq } from './shape2-schema.ts';
+import { nodeKeysOf, type CookFn, type InhEq, type Scalar, type Term, type ThreadEq } from './shape2-schema.ts';
 
 /** One engine arm: the rule, the engine's key for it, the grammar arm (null: none maps it). */
 export type EngineArm = { id: number; rule: string; key: string; arm: string };
@@ -80,6 +80,11 @@ export type ShapePlan = {
   tagStats: { sites: number; tagged: number };
   /** How the plans' slot reads are compiled (FUSED positions; counted per compiled read site). */
   reads: ReadStats;
+  /** Child reads checked for a missing value (kept) and those whose rule builds none (dropped). */
+  needs: { kept: number; dropped: number };
+  /** The keys a node holds its kind and span under, before its fields (ShapeSpec.node): one flat
+   * object per node. */
+  nodeKeys: { kind: string; start: string; end: string };
 };
 
 /** The engine's key for each accept site of a rule: rd `alt<i>`; Pratt `nud<i>`, `led<i>`,
@@ -291,7 +296,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     reads.set(r.name, scalarInh.map((a) => a.name).filter((a) => got.has(a)));
   }
   const variants = (rule: string): string[] => (kinds.get(rule) === 'pratt' ? reads.get(rule) ?? [] : []);
-  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set() };
+  const cx: AttrCx = { inhK, synK, scalarInh, nodesAttrs, variants, synDflt: syn.map((a) => a.dflt), synSlotRead: new Set(), needRule: new Map() };
   const readStats: ReadStats = { fixed: 0, checked: 0, scan: 0, list: 0 };
   for (const r of ir.rules) {
     const view = shape.grammar.arms.get(r.name);
@@ -376,12 +381,48 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds, tagStats));
   }
   for (const k of cx.synSlotRead) syn[k]!.slotRead = true;
+  const needs = dropNeeds(fns, arms, unsupported, cx.needRule);
   fns.push(...EXTERNS, ...SPAN_FNS, ...ATTR_FNS, ...[...cooks].map(cookFn));
   return {
-    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats, reads: readStats,
+    arms, fns, cooks: [...cooks], unsupported, syn, inh: scalarInh, variantBit, variantDefault, tagStats, reads: readStats, needs, nodeKeys: nodeKeysOf(spec),
     armId: (rule, key) => { const id = ids.get(`${rule}|${key}`); if (id === undefined) throw new Error(`planShape: no engine arm ${rule} ${key}`); return id; },
     ir: { ...ir, rules: newRules, reuse: null },
   };
+}
+
+/** A rule whose arms can all be built (none unmapped or unsupported, none reading a child that may
+ * be missing, no `match` without a case) builds no missing value: a read of its node needs no check
+ * (fixpoint over the rules; a TOTAL shape drops every check). Rewrites those vNeed in place. */
+function dropNeeds(fns: Fn[], arms: EngineArm[], unsupported: Map<number, string>, needRule: Map<Expr, string | undefined>): { kept: number; dropped: number } {
+  const byName = new Map(fns.map((f) => [f.name, f]));
+  const mayMiss = new Set<string>();
+  const walk = (x: unknown, f: (e: Expr) => void): void => {
+    if (x === null || typeof x !== 'object') return;
+    if (Array.isArray(x)) { x.forEach((y) => walk(y, f)); return; }
+    if (typeof (x as Expr).k === 'string') f(x as Expr);
+    for (const y of Object.values(x)) walk(y, f);
+  };
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const a of arms) {
+      if (mayMiss.has(a.rule) || a.arm === NO_ARM) continue;
+      let miss = unsupported.has(a.id);
+      walk(byName.get(`construct${a.id}`)?.body, (e) => {
+        if (e.k === 'vMissing') miss = true;
+        if (e.k === 'vNeed' && needRule.has(e)) { const r = needRule.get(e); if (r === undefined || mayMiss.has(r)) miss = true; }
+      });
+      if (miss) { mayMiss.add(a.rule); changed = true; }
+    }
+  }
+  let kept = 0, dropped = 0;
+  for (const [e, r] of needRule) {
+    if (r === undefined || mayMiss.has(r)) { kept++; continue; }
+    const inner = (e as { e: Expr }).e;
+    for (const k of Object.keys(e)) delete (e as Record<string, unknown>)[k];
+    Object.assign(e, inner);
+    dropped++;
+  }
+  return { kept, dropped };
 }
 
 type AttrCx = {
@@ -389,6 +430,8 @@ type AttrCx = {
   nodesAttrs: Set<string>; variants: (rule: string) => string[]; synDflt: (Scalar | undefined)[];
   /** The synthesized attributes some arm reads off a child's slot (kept per slot: the rest are not). */
   synSlotRead: Set<number>;
+  /** Each child read's vNeed and the child's rule (see ArmCompiler.need). */
+  needRule: Map<Expr, string | undefined>;
 };
 /** How a plan's reads of slots are compiled: at a fixed position (fixed), a check of the one slot
  * at a fixed position (checked: an optional item, a branch, a marker), a scan of the scope's slots
@@ -619,6 +662,9 @@ class ArmCompiler {
     return call('slotValV', idx, v(m));
   }
 
+  /** A child's value read as a child (vNeed), its rule noted: the check is dropped where that
+   * rule can build no missing value (planShape's reachability pass). */
+  private need(item: Expr, slot: Slot): Expr { const e: Expr = { k: 'vNeed', e: item }; this.cx.needRule.set(e, slot.rule); return e; }
   private bindVal(e: Expr, out: Stmt[]): string { const t = this.tmp(); out.push({ k: 'let', name: t, ty: VAL as never, init: e }); return t; }
   private bindInt(e: Expr, out: Stmt[], ty: 'int' | 'idx' = 'int'): string { const t = this.tmp(); out.push({ k: 'let', name: t, ty, init: e }); return t; }
 
@@ -810,7 +856,7 @@ class ArmCompiler {
       case 'get': {
         const o = this.one(s, t.name, out);
         const item = this.childVal(v(o.idx), o.slot, out);
-        return this.ifThere(o, () => call('recGet', { k: 'vNeed', e: item }, { k: 'str', v: t.field }), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, () => call('recGet', this.need(item, o.slot), { k: 'str', v: t.field }), () => ({ k: 'vAbsent' }), out);
       }
       case 'dropLastIf': {
         const l = this.bindVal(this.val(t.list, s, out), out);
@@ -832,14 +878,14 @@ class ArmCompiler {
           out.push({ k: 'let', name: i, ty: 'idx', init: v(r.scope.lo) });
           const item = this.childVal(v(i), r.slot, out);
           out.push({ k: 'while', c: bin('lt', v(i), v(r.scope.hi)), body: [
-            { k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: { k: 'vNeed', e: item } }] },
+            { k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: this.need(item, r.slot) }] },
             { k: 'set', name: i, e: bin('add', v(i), int(1)) },
           ] });
           return { k: 'vList', e: v(l) };
         }
         const o = this.one(s, t.name, out);
         const item = this.childVal(v(o.idx), o.slot, out);
-        return this.ifThere(o, () => ({ k: 'vNeed', e: item }), () => ({ k: 'vAbsent' }), out);
+        return this.ifThere(o, () => (this.need(item, o.slot)), () => ({ k: 'vAbsent' }), out);
       }
       case 'text': {
         if (t.name === undefined) return { k: 'vText', e: call('srcText', v('off'), v('end')) };
@@ -970,7 +1016,7 @@ class ArmCompiler {
       if (r.rest.some(isListQ)) no(`a repeated child with holes inside a nested repetition (${name})`);
       const o = this.find(r, body);
       const item = this.childVal(v(o.idx), r.slot, body);
-      const e = this.ifThere(o, () => ({ k: 'vNeed', e: item }), () => ({ k: 'vConst', v: null }), body);
+      const e = this.ifThere(o, () => (this.need(item, r.slot)), () => ({ k: 'vConst', v: null }), body);
       body.push({ k: 'push', list: l, e });
     });
     return { k: 'vList', e: v(l) };
