@@ -3,7 +3,7 @@ import type { CstGrammar } from '../src/types.ts';
 import { mutationCorpus } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import { ECMASCRIPT, canon, finish, gate, parityCorpus, prepareAll, selectedCases, primaryLexMsg, type Case, type DiagRow, type Outcome, type Runner, type Total } from './portable-harness.ts';
-import { checkContract, summarize, type ContractRow } from './recovery-contract.ts';
+import { checkContract, summarize, withOperandSamples, type ContractRow } from './recovery-contract.ts';
 import { RM_MAX_BARS } from '../src/recovery-family.ts';
 import type { Tok } from './parity-corpus.ts';
 import { portableIR, type PortableFacts } from '../src/emit-portable.ts';
@@ -40,7 +40,9 @@ import { FACTS as RS_FACTS } from '../src/target-rust.ts';
 // of a recovery against a strict interpretation of the same input, P10's checkable share) are
 // printed for the TS target.
 const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
-const TOTAL_K = 3;
+// 3 -> 4 (the NUD, list and choice repairs): measured max 3.07 (typescript, `export @aa  true`: a
+// short input, where the attempts' fixed work dominates); javascript 1.11.
+const TOTAL_K = 4;
 // The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
 // is the interpreter's farthest token): it may rise, never drop below what is recorded here.
 // The mutants are drawn from the accept lists (seeded), so a list entry added or removed draws
@@ -68,23 +70,19 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // for-in has nothing left. Still run and counted; when one holds again the gate fails until it is
 // removed.
 // The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
-// typescript 'for ((async) from y);' -> 'for (() of y);' (land/recovery-stage3 merged with master
-// 1f944fcf: two accept rows added at the front of the typescript list draw another mutant set).
-// typescript + 'for (x = (y = (a in b)) declare c);' (land/shape-test262-valid: its new literals draw
-// another set): the parse supplies '=>' and 'in'; in `… =>  declare in  c` the arrow body takes `in c`.
+// typescript 'for ((async) from y);' -> 'for (() of y);' (master 1f944fcf: two accept rows added at
+// the front of the typescript list drew another mutant set). With the NUD repairs (an operand
+// supplied or an extra token before it skipped) the parse repairs these inputs another way, and
+// the greedy captures are the arrows it now builds: `for (of  y);` gets `of => y` and then 'in'
+// supplied, and `of => y in x` is again the arrow body taking the `in`. The LOOKAHEAD BYPASS of
+// stage 3 (`async { class C {}`: a supplied 'function' that the statement's
+// `[lookahead ∉ { async function }]` refuses) is repaired another way now and no longer drawn.
+// typescript + 'for (x = (y = (a in b)) declare c);' (master b8e42329, #199: its new literals draw
+// another set): the parse supplies '=>' twice and 'in'; in `… =>  declare =>  c in  x` the arrow
+// body takes the `in`. Re-measured on that merge: javascript unchanged.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
-  javascript: ['for (() of x);', 'for (() of y);'],
-  typescript: ['for (() of y);', 'for (x = (y = (a in b)) declare c);'],
-};
-// P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A negative lookahead was decided on the
-// original tokens and a supplied token makes the repaired text one it refuses: in `async { class C {}`
-// the statement's `[lookahead ∉ { async function }]` passed (the token after `async` is `{`); the
-// parse supplied 'function', '(', ')' (an async function expression) and the closing '}', and the
-// substituted `async function () { class C {} }` is refused by that lookahead (and is no
-// declaration: it has no name). Run, counted and listed like the greedy captures (the same
-// drawing: re-measured when the lists change).
-const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
-  typescript: ['async { class C {}'],
+  javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
@@ -112,9 +110,11 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
   const ascii = srcs.map((s) => /^[\x00-\x7f]*$/.test(s));
   const nRules = portableIR(grammar).rules.length;
   const lex = runners.find((r) => r.lexToks)!.lexToks!;
-  // A sample token of each kind that is no literal, for P10's `expected <Kind>` repairs.
-  const samples = new Map<string, string>();
-  for (const a of c.accept) for (const t of lex(a) ?? []) if (t.kind !== '' && t.lid === 0 && !samples.has(t.kind)) samples.set(t.kind, t.text);
+  // A sample token of each kind that is no literal, for P10's `expected <Kind>` repairs, and a
+  // minimal operand of each Pratt rule, for its `expected <Rule>` (withOperandSamples).
+  const kindSamples = new Map<string, string>();
+  for (const a of c.accept) for (const t of lex(a) ?? []) if (t.kind !== '' && t.lid === 0 && !kindSamples.has(t.kind)) kindSamples.set(t.kind, t.text);
+  const samples = withOperandSamples(portableIR(grammar), kindSamples);
   const mutantSet = new Set(mutants);
   let ref: Total[] | null = null;
   for (const r of runners) {
@@ -128,7 +128,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
       return { ...t, cst: t.cst === undefined ? undefined : canon(mapTree(JSON.parse(t.cst), u)), errors: t.errors.map(row), strict: t.strict ? row(t.strict) : null };
     }) : raw;
     let primary = 0, farEq = 0, farN = 0, firstEq = 0, firstBefore = 0, firstAfter = 0, farFirstEq = 0, farFirstBefore = 0, farFirstAfter = 0, p10Known = 0;
-    const greedy = [...(P10_GREEDY_CAPTURE[c.grammar] ?? []), ...(P10_LOOKAHEAD_BYPASS[c.grammar] ?? [])];
+    const greedy = P10_GREEDY_CAPTURE[c.grammar] ?? [];
     const bad: string[] = [];
     let acc = 0, rec = 0, lexEq = 0, maxK = 0, maxAtt = 0, maxScope = 0;
     const rows: (ContractRow | null)[] = [];
@@ -204,7 +204,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
     }
     interpCheck(c, grammar, r, srcs, own, tokenize, bad);
     if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
-    if (r.lexToks && p10Known !== greedy.length) bad.push(`P10 expected-fail: ${p10Known} of ${greedy.length} listed greedy captures and lookahead bypasses remain: remove the ones that hold now`);
+    if (r.lexToks && p10Known !== greedy.length) bad.push(`P10 expected-fail: ${p10Known} of ${greedy.length} listed greedy captures remain: remove the ones that hold now`);
     if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
     console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rec} rejected and recovered (lexer ≡ oracle ${lexEq}; strict error ≡ interpreter ${primary}, farthest ≡ its hint on ${farEq}/${farN} (counted); the first repair at the strict error ${firstEq}, before it ${firstBefore}, after it ${firstAfter}; at its farthest token ${farFirstEq}, before ${farFirstBefore}, after ${farFirstAfter}); steps ≤ ${maxK.toFixed(3)} × attempts × (tokens + 1) × rules; attempts per input ≤ ${maxAtt}, per scope ≤ ${maxScope}`);
     if (r.lexToks) console.log(summarize(`  ${c.grammar}/${r.label} on the mutants`, rows).split('\n').map((l, j) => (j ? `    ${l}` : l)).join('\n'));

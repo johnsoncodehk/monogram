@@ -282,5 +282,14 @@ say('### Emitted parser sizes (`emitParser`, bytes)');
 table(["grammar", "target", "A", "M", "Δ", "output A vs M", ...(rec ? ['record', 'M vs record'] : [])], sizeRows);
 if (rec) say(`The record is docs/emit-sizes.json of M; a size beyond ±${RECORD_TOLERANCE}% of it is listed as a regression above (a landing that changes the size on purpose re-records with \`node test/emit-size-record.ts --write\`).`);
 say();
+// The typed shape build against the CST build (run.sh phase shape; M only).
+const shapeLines = readFileSync(resultsFile, 'utf8').split('\n').filter((l) => /^(SHAPE|SHAPECOV|BUILT|MISSING) /.test(l));
+if (shapeLines.length) {
+  say('### Shape build (typed Rust AST, src/rust-shape.ts) against the CST build, M');
+  const rows = shapeLines.filter((l) => l.startsWith('SHAPE ') && / cst=/.test(l)).map((l) => { const p = l.split(/\s+/), f = kv(l); return [p[1]!, p[2]!, f.cst ?? '?', f.shape ?? '?', f.delta ?? '?']; });
+  if (rows.length) table(['input', 'mode', 'CST build Ir', 'shape build Ir', 'Δ'], rows);
+  for (const l of shapeLines.filter((x) => !(x.startsWith('SHAPE ') && / cst=/.test(x)))) say(`- \`${l.trim()}\``);
+  say();
+}
 console.log(out.join('\n'));
 if (notRun.length) { console.error('NOT RUN: ' + notRun.join('; ')); process.exit(1); }

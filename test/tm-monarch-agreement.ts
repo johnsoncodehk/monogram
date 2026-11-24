@@ -3,9 +3,11 @@
 // every place they disagree is counted by CLASS against a record (test/tm-monarch-agreement.json).
 //
 // No other check compares the two highlighters: each dialect gate grades one of them on chosen
-// rows. The failure this catches: a generator change that makes them disagree on real code (a
-// class rises, or a new one appears); a class that falls must be re-recorded, so the record says
-// what got better.
+// rows. The failure this catches: a generator change that makes them disagree MORE on real code: a
+// class rises above the record, a new class appears, or a corpus's agreement falls. A class that
+// falls passes with one line (re-record when convenient): an improvement never stops a landing;
+// the landing that makes one on purpose re-records, so the record stays its evidence. Every class
+// is compared the same way, small ones included: a fall is never a failure.
 //
 // Each non-space character gets a ROLE from each highlighter, in Monarch's token families
 // (src/highlight-roles.ts's scopeToMonarch for TextMate's scopes): TextMate's innermost scope that
@@ -36,21 +38,17 @@ const TEST262 = '/tmp/test262';
 // which highlighter is older. 'monarch' / 'textmate': that one is wrong; 'convention': no grammar
 // truth (an editor convention or a heuristic kept on purpose); 'open': not attributed yet.
 const DISPOSITION: Record<string, [string, string]> = {
-  'type -> name': ['monarch', 'Monarch has no type context after `:` / in interface bodies (the shared context IR\'s first customer)'],
+  'type -> name': ['monarch', 'Monarch has no type context after `:` / in interface bodies, nor a declaration name (`class C`): the shared context IR\'s first customer'],
   'name -> keyword  (after `.`)': ['monarch', 'a name after a member-access text is a property, never a keyword (`e.type`, `m.get`)'],
   'text -> punct': ['textmate', 'TextMate gives a bracket in a type position no scope at all'],
-  'name -> type': ['monarch', 'the capitalisation heuristic paints value names as types (`new Set`, `Error`, `Array.isArray`)'],
-  'name -> keyword': ['monarch', 'a contextual keyword used as a name (`from:`, `set:`, `const from = 1`)'],
-  'type -> keyword': ['textmate', 'a keyword literal of a type rule (`as const`, `import(…)` type, `this`) read as a type name'],
-  'keyword -> punct': ['monarch', '`void` in a type position painted as an operator'],
+  'name -> type': ['open', ''],
+  'name -> keyword': ['open', 'mixed: Monarch, a contextual keyword used as a name before a word (`import defer as ns`); TextMate, a keyword it reads as a name (`super()`, `static \\u{6F}()`, `new function`)'],
+  'keyword -> name': ['open', ''],
+  'type -> keyword': ['monarch', 'the parser reads `const` in `as const` as a type name (Type -> Ident); Monarch has no type context after `as`'],
+  'keyword -> punct': ['convention', 'TextMate: `void` in a type position is its primitive keyword (the parser reads a type name; Monarch has no type context) and the `*` of `import * as` is constant.language (the official grammar\'s convention)'],
   'name -> punct': ['monarch', 'an operator word as a property name (`s.is`, `x.delete`)'],
-  'text -> invalid': ['monarch', 'a non-ASCII identifier character (Monarch\'s identifier is ASCII: identifierClasses, `unicode: true`)'],
-  'name -> invalid': ['monarch', 'a non-ASCII identifier character (as above)'],
-  'string -> comment': ['open', 'a multi-line template literal with `${…}`: one of the two loses it'],
-  'string -> punct': ['open', 'as above'],
-  'string -> name': ['open', 'as above'],
-  'string -> keyword': ['open', 'as above'],
-  'comment -> string': ['open', 'as above'],
+  'text -> name': ['convention', 'a Unicode 15 identifier character: vscode-oniguruma\'s Unicode tables are older than V8\'s (both read \\p{ID_Start})'],
+  'text -> invalid': ['monarch', 'a non-ASCII identifier character Monarch does not read'],
   'comment -> regexp': ['convention', 'U+2028 / U+2029 end a line for the parser; TextMate is fed `\\n` lines'],
   'comment -> name': ['convention', 'as above (and a `#!` line)'],
 };
@@ -68,28 +66,52 @@ export async function agreement(): Promise<number> {
   const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith('.js') ? [join(d, e.name)] : []);
   walk(join(TEST262, 'test/language')).sort().forEach((f, i) => { if ((i + 1) % 20 === 0) js.push({ name: f, code: readFileSync(f, 'utf8') }); });
   const ts = inRepoCorpus().filter(f => !f.name.includes('#'));
-  const out: Record<string, { files: number; chars: number; agree: number; classes: Record<string, number> }> = {};
+  const out: Record<string, { files: number; chars: number; agree: number; classes: Record<string, number>; refusals: Record<string, string[]> }> = {};
   for (const [lang, files, what] of [['typescript', ts, `the pinned in-repo sources (${REPO_CORPUS_AT.slice(0, 7)})`], ['javascript', js, `every 20th test262 test/language file`]] as const) {
     const t0 = performance.now();
-    const r = await compare(lang, files);
+    const r = { ...await compare(lang, files), refusals: await refusalsOf(lang) };
     out[lang] = r;
     console.log(`${lang}: ${what}: ${files.length} files, ${r.chars} characters, agree ${r.agree.toFixed(2)}% (${Math.round(performance.now() - t0)} ms)`);
   }
   const old = existsSync(RECORD) ? JSON.parse(readFileSync(RECORD, 'utf8')) : {};
-  let bad = 0;
+  let bad = 0, fell = 0;
   for (const lang of Object.keys(out)) {
     const now = out[lang].classes, was: Record<string, number> = old[lang]?.classes ?? {};
-    for (const k of [...new Set([...Object.keys(now), ...Object.keys(was)])].sort((a, b) => (now[b] ?? 0) - (now[a] ?? 0))) {
+    const wasAgree: number | undefined = old[lang]?.agree;
+    if (wasAgree !== undefined && out[lang].agree < wasAgree) { bad++; console.log(`  ✗ AGREEMENT FELL    ${lang}: ${out[lang].agree}% (record ${wasAgree}%)`); }
+    // what fails first (a class that rose or appeared), then by size
+    const rank = (k: string) => (now[k] ?? 0) > (was[k] ?? 0) ? 0 : 1;
+    for (const k of [...new Set([...Object.keys(now), ...Object.keys(was)])].sort((a, b) => rank(a) - rank(b) || (now[b] ?? 0) - (now[a] ?? 0))) {
       const n = now[k] ?? 0, w = was[k] ?? 0;
       const [who, why] = DISPOSITION[k] ?? ['open', ''];
-      const mark = n > w ? '✗ ROSE' : n < w ? '✗ FELL (re-record)' : ' ';
-      if (n !== w) bad++;
+      const mark = n > w ? (k in was ? '✗ ROSE' : '✗ NEW') : n < w ? 'fell' : ' ';
+      if (n > w) bad++;
+      else if (n < w) fell++;
       console.log(`  ${mark.padEnd(19)} ${String(n).padStart(6)} (record ${String(w).padStart(6)})  ${k.padEnd(30)} wrong: ${who.padEnd(10)} ${why}`);
+    }
+    // the constructs a highlighter declines (src/define-highlighter.ts): recorded like a class
+    for (const [hl, now] of Object.entries(out[lang].refusals)) {
+      const was: string[] = old[lang]?.refusals?.[hl] ?? [];
+      // one-sided, as the classes: a new refusal fails, a refusal that went away passes
+      const added = now.filter(r => !was.includes(r)), gone = was.filter(r => !now.includes(r));
+      if (added.length) bad++;
+      if (gone.length) fell++;
+      console.log(`  ${(added.length ? '✗ NEW REFUSAL' : gone.length ? 'fell' : ' ').padEnd(19)} ${hl} refuses ${now.length ? now.join('; ') : 'nothing'}`);
     }
   }
   if (write) { writeFileSync(RECORD, JSON.stringify(out, null, 1) + '\n'); console.log(`wrote ${RECORD}`); return 0; }
-  if (bad) console.error(`✗ ${bad} class(es) moved from the record; if intended: node test/monarch-dialect.ts --agreement --write`);
+  if (fell) console.log(`fell: ${fell} class(es) below the record: re-record when convenient: node test/monarch-dialect.ts --agreement --write`);
+  if (bad) console.error(`✗ ${bad} class(es) rose or appeared, or an agreement fell; if intended: node test/monarch-dialect.ts --agreement --write`);
   return bad ? 1 : 0;
+}
+
+// Each registered highlighter's refusals for the grammar (`<construct>: <reason>`).
+async function refusalsOf(lang: string): Promise<Record<string, string[]>> {
+  const { registeredHighlighters, highlighterInput } = await import('../src/define-highlighter.ts');
+  await import('../src/highlighters.ts');
+  const grammar = (await import(join(ROOT, `${lang}.ts`))).default;
+  const input = highlighterInput(grammar, lang);
+  return Object.fromEntries(registeredHighlighters().map(h => [h.name, h.refusals(input).map(r => `${r.construct}: ${r.reason}`)]));
 }
 
 async function compare(lang: string, files: { name: string; code: string }[]) {

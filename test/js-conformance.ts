@@ -56,6 +56,8 @@ const validJs: string[] = [
   `const g2 = a?.[b]?.(c);`,
   `const h2 = a ** b ** c;`,
   `x ??= y; x ||= y; x &&= y; x **= 2;`,
+  // a logical assignment's right operand is an AssignmentExpression
+  `c ||= a = b; c ??= a += b; a = b &&= c;`,
   `const cond = a ? b : c ? d : e;`,
   `const cmp = a < b > c;`,
   `const t2 = tag\`a\${b}c\${d}e\`;`,
