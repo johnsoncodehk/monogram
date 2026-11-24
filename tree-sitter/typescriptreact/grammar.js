@@ -184,7 +184,10 @@ module.exports = grammar({
     [$.stmt, $._stmt_first_1],
     [$.decorator_expr, $._decorator_expr_first_1],
     [$._names_1, $._names_2],
+    [$._names_1, $._names_2, $.decl],
     [$._names_1, $._names_2, $.expr],
+    [$._names_1, $._names_2, $.param],
+    [$._names_1, $._names_2, $.type],
     [$._names_1, $.decl],
     [$._names_1, $.expr],
     [$._names_1, $.expr, $.param],
@@ -196,9 +199,12 @@ module.exports = grammar({
     [$._names_2, $._names_3],
     [$._names_2, $._names_3, $.expr],
     [$._names_3, $.expr],
+    [$._names_2, $.decl],
     [$._names_2, $.expr],
+    [$._names_2, $.param],
     [$._names_2, $.prop],
     [$._names_2, $.prop, $.type_member],
+    [$._names_2, $.type],
     [$._names_2, $.type_param],
     [$._names_7, $.export_specifier],
   ],
@@ -412,17 +418,17 @@ module.exports = grammar({
 
     template_substitution: $ => seq("${", $.expr, "}"),
 
-    _names_1: $ => prec.dynamic(-1, alias(choice("async", "default", "get", "namespace", "out", "private", "public", "set", "this", "type"), $.ident)),
+    _names_1: $ => prec.dynamic(-1, alias(choice("abstract", "accessor", "async", "declare", "default", "get", "module", "namespace", "out", "private", "public", "readonly", "set", "static", "this", "type"), $.ident)),
 
-    _names_2: $ => prec.dynamic(-1, alias(choice("async", "get", "namespace", "out", "private", "public", "set", "type"), $.ident)),
+    _names_2: $ => prec.dynamic(-1, alias(choice("abstract", "accessor", "async", "declare", "get", "module", "namespace", "out", "private", "public", "readonly", "set", "static", "type"), $.ident)),
 
-    _names_3: $ => prec.dynamic(-1, alias(choice("async", "get", "namespace", "out", "private", "public", "set", "this", "type"), $.ident)),
+    _names_3: $ => prec.dynamic(-1, alias(choice("abstract", "accessor", "async", "declare", "get", "module", "namespace", "out", "private", "public", "readonly", "set", "static", "this", "type"), $.ident)),
 
-    _names_4: $ => prec.dynamic(-1, alias(choice("async", "namespace", "out", "private", "public", "type"), $.ident)),
+    _names_4: $ => prec.dynamic(-1, alias(choice("abstract", "accessor", "async", "declare", "module", "namespace", "out", "private", "public", "readonly", "static", "type"), $.ident)),
 
     _names_5: $ => prec.dynamic(-1, alias("async", $.ident)),
 
-    _names_6: $ => prec.dynamic(-1, alias(choice("async", "out", "private", "public"), $.ident)),
+    _names_6: $ => prec.dynamic(-1, alias(choice("abstract", "accessor", "async", "declare", "out", "private", "public", "readonly", "static"), $.ident)),
 
     _names_7: $ => prec.dynamic(-1, alias("type", $.ident))
   }

@@ -1179,9 +1179,15 @@ export default defineGrammar({
   // on the first ERROR of real files, TypeScript's lib .d.ts files and this repository: `out` 28 files,
   // `set` 10, `default` 6, `this` 5, `namespace` 3, `get`, `private`, `async`, `type` 1 each; `public`
   // beside `private`), each costing parse-table size (LALR entries: async 2.4k, get / set 2.0k, out 1.8k,
-  // private / public 1.7k, default 1.6k, this 1.2k, type 1.0k, namespace 1.0k; `static` 3.1k and no file:
-  // left out). Any other keyword is the keyword wherever it is valid, as without the option.
-  treeSitterContextualNames: ['async', 'default', 'get', 'namespace', 'out', 'private', 'public', 'set', 'this', 'type'],
+  // private / public 1.7k, default 1.6k, this 1.2k, type 1.0k, namespace 1.0k). The modifier words
+  // (`abstract accessor declare module readonly static`) were the first ERROR of 12 of the 17 TypeScript
+  // src files that did not parse (`function g(accessor: A)`, `interface C { static: b }`, `module.e = e`);
+  // together they cost 71 states (10,211 -> 10,282) and 4.6% of parser.c. Any other keyword is the
+  // keyword wherever it is valid, as without the option. The list is a measured trade, not a derived set:
+  // every keyword some step reads as a name ('all', 68 words) costs far more, and the highlighters'
+  // fact (keywordNameGroups: a keyword whose followers are closed) answers another question: it holds
+  // `if` / `class` / `while` and lacks `default` / `this`.
+  treeSitterContextualNames: ['abstract', 'accessor', 'async', 'declare', 'default', 'get', 'module', 'namespace', 'out', 'private', 'public', 'readonly', 'set', 'static', 'this', 'type'],
   treeSitterConflicts: [
     // `export { a }`: an export list, or `export` + an expression statement `{ a }` (the guard against
     // a statement that starts with `{` is a dropped lookahead); with the statement's end a token of
