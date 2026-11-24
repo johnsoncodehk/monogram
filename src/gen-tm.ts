@@ -4524,6 +4524,12 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // a keyword (`getTranslationEntry`, `interfaceName`, `newThing`, `inferred`) would
     // fail the negative lookahead and tear the whole multi-line type region down,
     // dropping the tail to value mode (the type.ref miss this region exists to close).
+    // A member of a multi-line object type that is a method signature, `name(…): T` (a return
+    // type's `:` after a `)`: highlight-facts' typeContexts), continues the alias too: no
+    // statement opens with a call followed by `:`.
+    const typeOpenCloseChars = ['(', ')'].every(c => typeLiterals.has(c));
+    if (typeOpenCloseChars && facts.typeContexts.sites.some(c => c.opener === ':' && c.left.some(([n]) => n === ')')))
+      whileParts.push(`${identPattern}\\s*\\??\\s*(?:<.*>\\s*)?\\(.*\\)\\s*:`);
     if (stmtStartKeywords.size > 0) {
       const stmtAlt = [...stmtStartKeywords].map(escapeRegex).join('|');
       whileParts.push(`(?!(?:${stmtAlt})\\b)${identPattern}\\b(?!\\s*[.(])`);
@@ -5737,6 +5743,21 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     const typeKwEnd = typeKwEndParts.length > 0
       ? `(?=${typeKwEndParts.join('|')})`
       : '(?=$)';
+    // Where the keyword opens type positions (highlight-facts' typeContexts), the end leaves out
+    // what no such position's closers hold: a `{` (`x as { k: T }` is an object type) and the
+    // `=` of a type's `=>` (`x as () => void`).
+    const typeKwEndOf = (kw: string): string => {
+      // (not a word that elsewhere opens an expression: `class A extends B {`)
+      if (!facts.typeContexts.openerWords.some(w => w.word === kw && !w.ambiguous)) return typeKwEnd;
+      const sites = facts.typeContexts.sites.filter(c => c.opener === kw);
+      if (!typeKwEndEsc) return typeKwEnd;
+      const closes = (l: string) => sites.some(c => c.closers.includes(l));
+      const chars = [...typeKwEndChars].filter(ch => ch !== '{' || closes('{'));
+      const eq = chars.includes('=') && typeLiterals.has('=>') && !closes('=>');
+      const parts = [`[${chars.filter(ch => !eq || ch !== '=').map(escapeForCharClass).join('')}]`, ...eq ? ['=(?!>)'] : []];
+      if (terminatorAlt) parts.push(`\\b(?:${terminatorAlt})\\b`);
+      return `(?=${parts.join('|')})`;
+    };
 
     for (const kw of typeKws) {
       const key = `${kw}-typekw`;
@@ -5755,7 +5776,7 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
         kwScope: `${kwScope}.${langName}`,
         wordEnd: true,
         guard,
-        end: typeKwEnd,
+        end: typeKwEndOf(kw),
         patterns: [{ include: '#type-inner' }],
       });
       topPatterns.push({ include: `#${key}` });

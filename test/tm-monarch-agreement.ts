@@ -45,7 +45,7 @@ const DISPOSITION: Record<string, [string, string]> = {
   'name -> keyword  (after `.`)': ['monarch', 'a name after a member-access text is a property, never a keyword (`e.type`, `m.get`)'],
   'text -> punct': ['textmate', 'TextMate gives a bracket in a type position no scope at all'],
   'name -> type': ['open', ''],
-  'name -> type  (the parser: a type)': ['textmate', 'the interpreter reads a `@type` rule there and TextMate a variable: `(x as { steps: Step[] }).steps` (its `as` region ends at `{`), a method signature on its own line in a multi-line object type of a type alias (`  cand(d: Dispatch): string;`: the alias\'s `while` rejects a line opening with `name(`), `new Map<string, RuleExpr[]>()` after a comment line of emit-portable.ts (TextMate\'s state there)'],
+  'name -> type  (the parser: a type)': ['textmate', 'the interpreter reads a `@type` rule there and TextMate a variable: a type argument `T[]` after a name (`new Map<string, RuleExpr[]>()`, `Array<Step[]>(n)`: the generic-call lookahead\'s character class has no `[` `]`), and a member line after a member named `type` in a multi-line type alias (`  type: string;` then `  fields: FieldDecl[];`)'],
   'name -> keyword': ['open', 'mixed: Monarch, a contextual keyword used as a name before a word (`import defer as ns`); TextMate, a keyword it reads as a name (`super()`, `static \\u{6F}()`, `new function`)'],
   'keyword -> name': ['open', ''],
   'type -> keyword': ['monarch', 'the parser reads `const` in `as const` as a type name (Type -> Ident)'],
