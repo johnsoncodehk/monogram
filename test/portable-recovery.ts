@@ -121,8 +121,9 @@ const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {};
 // type\nx = 1 }` is repaired to `static export * case ( type\n ,\nx = 1 ) }` and
 // `export await using from x = y;` to `export await : using : from : x = y;`; the repaired texts
 // are rejected. Owed to the recovery lane: name each one's class (or fix it) and move it.
-// land/grammar-decorators-2's draw holds none of the three (the `export await using …` kind is the
-// grammar's `export` lookahead admitting a Stmt; it leaves with the Statement / Declaration split).
+// land/grammar-decorators-2's draw holds none of the three. The `export await using …` kind was the
+// grammar's `export` lookahead admitting a Stmt: since land/grammar-statement-declaration `export`
+// reads the declaring productions themselves, so that repair is no derivation any more.
 const P10_UNCLASSIFIED: Record<string, string[]> = {};
 const P10_EXPECTED: [string, Record<string, string[]>][] = [['greedy captures', P10_GREEDY_CAPTURE], ['lookahead bypasses', P10_LOOKAHEAD_BYPASS], ['unclassified redrawn mutants', P10_UNCLASSIFIED]];
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
