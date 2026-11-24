@@ -13,7 +13,7 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1197,6 +1197,8 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // the enclosing one kept in a local of the frame (no stack: nothing allocated per parse).
     acc: (call, mask) => (r ? call : `(${call} && ${recv}.acc_k(${mask}))`),
     accSep: () => (r ? 'true' : `${recv}.acc_s()`),
+    // A demand twin's Pratt child (DemandIR): the position before the call, then the call.
+    dfix: (call) => (r ? call : `{ let _m = ${recv}.pos as isize; let _ok = ${call}; ${recv}.dfix(_m, _ok) }`),
     target: (mask) => { if (r) throw new Error('rust: a target() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
     accRun: (cond, af) => (r ? cond : `{ let _a = ${recv}.acc; ${recv}.acc = ${af.init}; let _r = (${cond}); if _r { ${recv}.acc_out(${af.low}, ${af.last}); } ${recv}.acc = _a; _r }`),
     armForm: armFormRs,
@@ -1261,8 +1263,9 @@ const armFormRs = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `
 const lowRs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
 // Declared target contexts' state on the parser (as target-ts.ts targetRuntimeTs): the open
 // container's accumulator (an enclosing one's is a local of its arm: accRun), acc_f the form of the container arm that just matched.
-const targetFieldsRs = (ir: ParserIR): string => (ir.targets ? '\n    acc: u8,\n    acc_f: u8,' : '');
-const targetInitRs = (ir: ParserIR): string => (ir.targets ? ' acc: 0, acc_f: 0,' : '');
+// With a demand context also the re-parse in progress (its start; -1 none), the re-parses and those above the bound (src/reparse-family.ts).
+const targetFieldsRs = (ir: ParserIR): string => (ir.targets ? `\n    acc: u8,\n    acc_f: u8,${ir.targets.demand ? '\n    rp_at: isize,\n    rp_n: usize,\n    rp_over: usize,' : ''}` : '');
+const targetInitRs = (ir: ParserIR): string => (ir.targets ? ` acc: 0, acc_f: 0,${ir.targets.demand ? ' rp_at: -1, rp_n: 0, rp_over: 0,' : ''}` : '');
 function targetRuntimeRs(ir: ParserIR): string {
   const t = ir.targets;
   if (!t) return '';
@@ -1349,7 +1352,7 @@ function rdFormRs(r: RdRule) {
   return { set, best: tf ? ' let mut bfm: u8 = 0;' : '', keep: (i: number) => (tf ? ` bfm = ${armFormRs(tf[i]!, false)};` : ''), close: tf ? '\n        self.form = bfm;' : '' };
 }
 function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
-  const rid = ruleIdOf(ar, r.name);
+  const rid = ruleIdOf(ar, r.twinOf ?? r.name);
   const F = rdFormRs(r);
   const sig = `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {`;
   return ruleShell(r, ids, {
@@ -1476,6 +1479,44 @@ function rbSite(ids: LexIdPlan, steps: string[]): number {
   if (i === undefined) m.set(key, (i = m.size));
   return i;
 }
+// The demand form of a target context (emit-portable.ts DemandIR), as target-ts.ts demandFnsTs:
+// the twins, dfix, twin_form, reparse_from (src/reparse-family.ts) and its externs, and per rule
+// the cold demand_<rule>.
+function demandFnsRs(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
+  const D = ir.targets?.demand;
+  if (!D) return '';
+  const S = rsSteps(ids, 'self', false);
+  const twinOf = (f: string) => `((${f} >> ${DEFER_SHIFT}) & 7) as isize - 1`;
+  return `
+    fn rp_mark(&mut self) -> (isize, isize, isize, isize) { let m = self.mark(); (m.pos as isize, m.sb as isize, m.ck.0 as isize, m.ck.1 as isize) }
+    fn rp_reset(&mut self, p: isize, s: isize, c: isize, e: isize) { self.reset(Mark { pos: p as usize, sb: s as usize, ck: (c as usize, e as usize) }); }
+    fn rp_pos(&mut self) -> isize { self.pos as isize }
+    fn rp_at(&mut self) -> isize { self.rp_at }
+    fn rp_set_at(&mut self, p: isize) { self.rp_at = p; }
+    fn rp_count(&mut self, over: bool) { self.rp_n += 1; if over { self.rp_over += 1; } }
+    fn rp_twin(&mut self, k: isize) -> bool {
+        match k {
+${D.twins.map((t) => `            ${t.k} => self.twin${t.k}(),`).join('\n')}
+            _ => false,
+        }
+    }
+${D.twins.map((t) => `    // twin of arm ${t.arm} of ${t.rule}\n    fn twin${t.k}(&mut self) -> bool { ${demandTwinCond(t, S)} }`).join('\n')}
+${D.rd.map((r) => rdRule(r, ids, ar)).join('\n')}
+${shared.reparseFamily().split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}
+    fn twin_form(&mut self, k: isize, p0: isize, stop: isize) -> u8 { if self.reparse_from(p0, stop, k) { self.acc_f } else { 0 } }
+    fn dfix(&mut self, q: isize, ok: bool) -> bool {
+        if !ok { return false; }
+        let f = self.form;
+        self.form = if f & ${D.assigned} != 0 { ${D.pass} } else if f & ${D.defer} != 0 { let s = self.pos as isize; self.twin_form(${twinOf('f')}, q, s) } else if self.capped || f & 3 != 0 { 0 } else { ${D.pass} };
+        true
+    }
+${ir.rules.filter((r): r is PrattRule => r.kind === 'pratt' && demandLids(r, ids, D).length > 0).map((r) => `    #[cold]
+    #[inline(never)]
+    fn demand_${r.name}(&mut self, op: isize, form: isize, p0: isize, stop: isize) -> bool {
+        if ${demandLids(r, ids, D).map((l) => `op != ${l}`).join(' && ')} { return true; }
+        (self.twin_form(${twinOf('form')}, p0, stop) & ${D.pass}) != 0
+    }`).join('\n')}`;
+}
 function rebindRuntimeRs(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
   if (!hasRebind(ir)) return '';
   const sites = [...(RB_SITES.get(ids) ?? new Map<string, number>()).keys()].map((k) => JSON.parse(k) as string[]);
@@ -1513,7 +1554,11 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const tgtFail = leftOps.length === 0 ? `${lf('form')} != 0`
     : `match op_lid { ${leftOps.map((o) => `${o.lid} => ${o.ctx ? `(form & ${o.ctx}) != ${o.ctx}` : 'false'}, `).join('')}_ => ${lf('form')} != 0 }`;
   const keep = leftOps.filter((o) => o.acc);
-  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : '1';
+  // A demand operator (DemandIR): its node is ASSIGNED, a left operand with a twin number goes to
+  // the cold demand_<rule> (demandFnsRs); p0 is the left operand's mark.
+  const D = ir.targets?.demand, dem = demandLids(r, ids, D);
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : dem.length ? `(if tgt && (${dem.map((l) => `op_lid == ${l}`).join(' || ')}) { ${1 | D!.assigned} } else { 1 })` : '1';
+  const tgtDem = dem.length ? `(${lf('form')} != 0 || (form & ${D!.defer}) != 0 && !self.demand_${r.name}(op_lid as isize, form as isize, p0, self.pos as isize))` : tgtFail;
   const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
   const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
   // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops
@@ -1603,7 +1648,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     binary: `            let (op_lid, op_n, op_end) = self.op_read(t);
             let (lbp, rbp, tgt, no_unary) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
             if lbp <= min_bp { break; }
-            if tgt && ${tgtFail} || no_unary && ${lf('form')} == 2 { return None; }
+            if tgt && ${tgtDem} || no_unary && ${lf('form')} == 2 { return None; }
             let led_save = self.pos;
             let sb = self.scratch.len(); self.scratch.push(left.h);
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, op_end);
@@ -1626,7 +1671,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
     fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
-    bpOpen: () => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
+    bpOpen: () => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
         let mut left = self.${r.name}_nud(min_bp)?;
         let mut form = self.form;
         if self.capped { return Some(left); }
@@ -2543,7 +2588,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// A NUD that matched nothing, from its commit switch: the state its frame leaves then (prattRule's nudClose).
     #[inline(always)]
     #[allow(dead_code)]
-    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }${targetRuntimeRs(ir)}${rebindRuntimeRs(ir, ids, shared)}
+    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }${targetRuntimeRs(ir)}${rebindRuntimeRs(ir, ids, shared)}${demandFnsRs(ir, ids, ar, shared)}
     #[inline(always)]
     fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
     /// Undo everything since m: the position (as back), the scratch list and the builder.
