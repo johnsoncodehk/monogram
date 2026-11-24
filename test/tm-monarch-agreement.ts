@@ -29,6 +29,9 @@ import { scopeToMonarch } from '../src/highlight-roles.ts';
 import type { MonarchLanguage } from '../src/gen-monarch.ts';
 import { tokenize } from './monarch-tokenize.ts';
 import { inRepoCorpus, REPO_CORPUS_AT } from './emit-corpus.ts';
+import { createParser } from '../src/gen-parser.ts';
+import type { CstGrammar } from '../src/types.ts';
+type CstNode = { offset: number; end: number; tokenType?: string; rule?: string; children?: CstNode[] };
 
 const ROOT = join(import.meta.dirname, '..');
 const RECORD = join(ROOT, 'test/tm-monarch-agreement.json');
@@ -38,13 +41,14 @@ const TEST262 = '/tmp/test262';
 // which highlighter is older. 'monarch' / 'textmate': that one is wrong; 'convention': no grammar
 // truth (an editor convention or a heuristic kept on purpose); 'open': not attributed yet.
 const DISPOSITION: Record<string, [string, string]> = {
-  'type -> name': ['monarch', 'Monarch has no type context after `:` / in interface bodies, nor a declaration name (`class C`): the shared context IR\'s first customer'],
+  'type -> name': ['monarch', 'Monarch reads a type position only where one rule\'s text shows it (typeContexts: `as`, `satisfies`, `is`, `type A =`, `let x:`, type arguments): not yet a parameter\'s or a return type\'s `:`, interface / class members, nor a declaration name (`class C`)'],
   'name -> keyword  (after `.`)': ['monarch', 'a name after a member-access text is a property, never a keyword (`e.type`, `m.get`)'],
   'text -> punct': ['textmate', 'TextMate gives a bracket in a type position no scope at all'],
   'name -> type': ['open', ''],
+  'name -> type  (the parser: a type)': ['textmate', 'the interpreter reads a `@type` rule there and TextMate a variable: `(x as { steps: Step[] }).steps` (its `as` region ends at `{`), a method signature\'s parameter type in an object type (`type R = { f(d: Dispatch): string }`), `new Map<string, RuleExpr[]>()` after a comment line of emit-portable.ts (TextMate\'s state there)'],
   'name -> keyword': ['open', 'mixed: Monarch, a contextual keyword used as a name before a word (`import defer as ns`); TextMate, a keyword it reads as a name (`super()`, `static \\u{6F}()`, `new function`)'],
   'keyword -> name': ['open', ''],
-  'type -> keyword': ['monarch', 'the parser reads `const` in `as const` as a type name (Type -> Ident); Monarch has no type context after `as`'],
+  'type -> keyword': ['monarch', 'the parser reads `const` in `as const` as a type name (Type -> Ident)'],
   'keyword -> punct': ['convention', 'TextMate: `void` in a type position is its primitive keyword (the parser reads a type name; Monarch has no type context) and the `*` of `import * as` is constant.language (the official grammar\'s convention)'],
   'name -> punct': ['monarch', 'an operator word as a property name (`s.is`, `x.delete`)'],
   'text -> name': ['convention', 'a Unicode 15 identifier character: vscode-oniguruma\'s Unicode tables are older than V8\'s (both read \\p{ID_Start})'],
@@ -114,7 +118,29 @@ async function refusalsOf(lang: string): Promise<Record<string, string[]>> {
   return Object.fromEntries(registeredHighlighters().map(h => [h.name, h.refusals(input).map(r => `${r.construct}: ${r.reason}`)]));
 }
 
+// Per character of `src`: whether the interpreter (src/gen-parser.ts) reads it as a token whose
+// node is a `@type` rule's (a type name, not a member name inside a type); null when the file
+// does not parse.
+const parserOf = new Map<string, { parse(src: string): unknown }>();
+const grammarOf = new Map<string, CstGrammar>();
+function parsedTypes(lang: string, src: string): boolean[] | null {
+  const g = grammarOf.get(lang)!;
+  const types = new Set(g.rules.filter(r => r.flags.includes('type')).map(r => r.name));
+  let p = parserOf.get(lang);
+  if (!p) parserOf.set(lang, p = createParser(g));
+  let cst: CstNode;
+  try { cst = p.parse(src) as CstNode; } catch { return null; }
+  const at = new Array<boolean>(src.length).fill(false);
+  const walk = (n: CstNode, typeNode: boolean): void => {
+    if (n.tokenType !== undefined) { if (typeNode) for (let i = n.offset; i < n.end; i++) at[i] = true; return; }
+    for (const c of n.children ?? []) walk(c, types.has(n.rule ?? ''));
+  };
+  walk(cst, false);
+  return at;
+}
+
 async function compare(lang: string, files: { name: string; code: string }[]) {
+  grammarOf.set(lang, (await import(join(ROOT, `${lang}.ts`))).default);
   const tm = JSON.parse(readFileSync(join(ROOT, `${lang}.tmLanguage.json`), 'utf8'));
   const mon: MonarchLanguage = JSON.parse(readFileSync(join(ROOT, `${lang}.monarch.json`), 'utf8'));
   const reg = new vsctm.Registry({
@@ -156,6 +182,7 @@ async function compare(lang: string, files: { name: string; code: string }[]) {
     }
     for (const t of tokenize(mon, src)) { const role = family(t.token); for (let i = 0; i < t.text.length; i++) monAt[t.start + i] = role; }
     let last = '', lastAt = -2;
+    let inType: boolean[] | null | undefined;
     for (let i = 0; i < src.length; i++) {
       if (/\s/.test(src[i])) continue;
       chars++;
@@ -165,6 +192,9 @@ async function compare(lang: string, files: { name: string; code: string }[]) {
         let p = i; while (p > 0 && /\w/.test(src[p - 1])) p--; while (p > 0 && /[ \t]/.test(src[p - 1])) p--;
         if (src[p - 1] === '.') k += '  (after `.`)';
       }
+      // a name TextMate paints and Monarch types: which one the parser agrees with is the
+      // interpreter's reading (the token inside a `@type` rule's node)
+      if (k === 'name -> type' && (inType ??= parsedTypes(lang, src))?.[i]) k += '  (the parser: a type)';
       if (last !== k || lastAt !== i - 1) classes[k] = (classes[k] ?? 0) + 1;
       last = k; lastAt = i;
     }

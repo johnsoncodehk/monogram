@@ -621,7 +621,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const tbody = facts.typeBody;
   const typeEntryRules: MonarchRule[] = [];
   const refusals: HighlighterRefusal[] = [];
-  const refuse = (construct: string) => { if (!refusals.some(r => r.construct === construct)) refusals.push({ construct, reason: 'Monarch sees no text before a match: a type position is read only where one rule\'s text shows it, and ends at the closers' }); };
+  const refuse = (construct: string) => { if (!refusals.some(r => r.construct === construct)) refusals.push({ construct, reason: 'Monarch matches at the cursor and sees no text before it' }); };
   if (tbody) {
     const ident = IDENT;
     const tok = (lit: string, dflt = 'delimiter') => symbolToken.get(lit) ?? dflt;
@@ -712,9 +712,9 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
         ss.forEach(x => entered.add(x));
         for (const c of s.closers) {
           if (c === s.delimiter || s.conflicts.some(k => k.literal === c && k.reads === 'type')) continue;
-          if (OPEN_BRACKETS.has(c) && startsType.has(c)) refuse(`type after \`${s.opener}\` (${s.rule}): \`${c}\` begins it as its first token, ends it after one (a bracket after a union's \`|\` ends it too)`);
+          if (OPEN_BRACKETS.has(c) && startsType.has(c)) refuse(`type after \`${s.opener}\`: \`${c}\` begins it as its first token, ends it after one (a bracket after a union's \`|\` ends it too)`);
           const k = s.conflicts.find(k => k.literal === c);
-          if (k) refuse(`type after \`${s.opener}\` (${s.rule}): \`${c}\` ends it (it continues a type only inside a construct or behind a lookahead not tracked)`);
+          if (k) refuse(`type after \`${s.opener}\`: \`${c}\` ends it (it continues a type only inside a construct or behind a lookahead not tracked)`);
           out.add(c);
         }
       }
@@ -727,6 +727,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     const openerCases: Record<string, MonarchAction> = {};
     for (const { word, elsewhere, ambiguous } of openerWords) {
       const ss = sites.filter(s => s.opener === word);
+      if (ambiguous) refuse(`type after \`${word}\`: not entered (elsewhere the word is followed by an expression)`);
       if (ambiguous || !identKeywordToken.has(word)) continue;
       openerCases[word] = { token: identKeywordToken.get(word)!, next: `@${siteState(closersOf(ss, elsewhere))}` };
     }
