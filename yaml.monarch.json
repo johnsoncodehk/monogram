@@ -1,4 +1,5 @@
 {
+  "ident": "(?!)",
   "defaultToken": "invalid",
   "tokenPostfix": ".yaml",
   "ignoreCase": false,
@@ -781,7 +782,7 @@
         }
       ],
       [
-        "(?!)",
+        "@ident",
         {
           "cases": {
             "@default": {
