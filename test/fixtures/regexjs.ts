@@ -56,8 +56,8 @@ const Expr = rule(($) => [
   [$, '[', $, ']'],
 ]);
 
-const Block = rule(($) => [['{', many(Stmt), '}']]);
-const Stmt = rule(($) => [
+const Block = rule(() => [['{', many(Stmt), '}']]);
+const Stmt = rule(() => [
   Block,
   [alt('var', 'let', 'const'), Ident, opt('=', Expr), ';'],
   ['if', '(', Expr, ')', Stmt, opt('else', Stmt)],
@@ -66,7 +66,7 @@ const Stmt = rule(($) => [
   ['function', Ident, '(', opt(sep(Ident, ',')), ')', Block],
   [Expr, ';'],
 ]);
-const Program = rule(($) => [many(Stmt)]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'regexjs',

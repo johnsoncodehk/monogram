@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
-import { token, rule, defineGrammar, seq, oneOf, range, star, sep, opt, many, alt, noneOf } from '../src/api.ts';
+import { token, rule, defineGrammar, seq, oneOf, range, star, opt, many, alt, noneOf } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';

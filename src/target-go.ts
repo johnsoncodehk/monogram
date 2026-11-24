@@ -9,9 +9,9 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type AssignTargetsIR } from './parser-ir.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type Step, type LexTok, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type AssignTargetsIR } from './parser-ir.ts';
 import type { ArmForm } from './assign-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -29,13 +29,9 @@ const tlen = (text: string): number => unitLen(text, UNITS);
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.Lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.Kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
-/** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
-const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
-  isFirstGuardable(f, nAlts);
-// A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, for the engine
-// (w '') or the builder walker (w 'W').
+// A longest-match candidate's Guard (parser-ir.ts) over the buffered token t.
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
-const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] => {
+const guardCond = (g: Guard, t: string, keyed: boolean): string[] => {
   if (g === null) return [];
   const parts = keyed || g.first === null ? [] : [`inTokenSet(${g.first.id}, ${t})`];
   if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
@@ -56,8 +52,6 @@ const dispatchGoL = (t: string): DispatchLowering => ({
   sw: (by, cases) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.key}:\n${c.arms.join('\n')}`).join('\n')}\n\t}`,
   nil: (sw) => `\tif ${t} != nil {\n${sw}\n\t}`,
 });
-const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
-  dispatchWalk(d, ids, arm, dispatchGoL(t), nilable);
 // A Commit's switch (parser-ir.ts commitWalk) over the buffered token t.
 const commitSwGo = (t: string): CommitLowering => ({
   sw: (by, cases, dflt) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.keys.join(', ')}:${c.stmt ? `\n${c.stmt}` : ''}`).join('\n')}${dflt ? `\n\tdefault:\n${dflt}` : ''}\n\t}`,
@@ -115,14 +109,14 @@ const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string)
 // The Go spelling of an rd rule's shell (parser-ir.ts, ruleShell), common to its three forms.
 // PREDICTIVE arms are joined on one line: Go's semicolon insertion after a line-final `}` would
 // break `}` / `else if` across lines.
-const goRuleBase = (r: RdRule, ids: LexIdPlan, guardW: '' | 'W') => ({
+const goRuleBase = (ids: LexIdPlan) => ({
   ind: '\t',
   ifThen: (test: string, then: string) => `if ${test} ${then}`,
   first: (f: FirstSig) => firstCond(f, 't', ids),
   armJoin: ' ',
-  guard: (g: Guard, keyed: boolean, stmt: string) => { const c = guardCond(g, '_ft', guardW, keyed); return ifGo(c.length && !keyed ? ['_ft != nil', ...c] : c, stmt); },
+  guard: (g: Guard, keyed: boolean, stmt: string) => { const c = guardCond(g, '_ft', keyed); return ifGo(c.length && !keyed ? ['_ft != nil', ...c] : c, stmt); },
   dispatch: dispatchGoL('_ft'),
-  guardConds: (g: Guard) => guardCond(g, '_ft', guardW, false),
+  guardConds: (g: Guard) => guardCond(g, '_ft', false),
   commitSw: commitSwGo('_ft'),
 });
 
@@ -269,7 +263,7 @@ function sharedFnsR(ir: ParserIR, ids: LexIdPlan, e: GoEngine, onCursor: boolean
 function ruleR(r: RdRule | PrattRule, ids: LexIdPlan, e: GoEngine): string {
   if (r.kind === 'pratt') return `func (p *${e.recv}) rec${r.name}() bool { return ${e.parsed(r.name)} }`;
   return ruleShell(r, ids, {
-    ...goRuleBase(r, ids, e.w),
+    ...goRuleBase(ids),
     steps: goSteps(ids, 'R', e.recv, e),
     fn: (lines) => `func (p *${e.recv}) rec${r.name}() bool {\n${lines.join('\n')}\n}`,
     accept: () => '{ return true }',
@@ -1149,13 +1143,6 @@ function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean, dem: boolea
 \t\tif lbp <= minBp { break }
 \t\tinfoTgt, infoNoUnary, infoRbp := row&${OP_ROW.test} != 0, row&${OP_ROW.noUnary} != 0, int((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.bpMask})`;
 }
-// The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
-// its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
-function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
-  if (ids.gtComps.length === 0) return withEnd ? `\t\topLid, opN, opEnd := t.Lid, 1, t.End` : `\t\topLid, opN := t.Lid, 1`;
-  return `\t\topLid, opN, ${withEnd ? 'opEnd' : '_'} := gtOp(p.toks, p.pos)
-\t\tif ${goLeadIs(ids, 't.Lid')} { if e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e } }`;
-}
 // An entry's extent (EntryMeta.Ext): one past the furthest token its parse examined. A read past
 // the current token (secondIn, a composed '>') records into maxLook at once; a peek records only
 // peekEnd, one past its token. Between two moves back the position only grows, so the latest peek
@@ -1264,11 +1251,9 @@ func leafEnd(ts []Tok, ti uint32, tt uint8) uint32 {
 }`;
 }
 
-const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, goSteps(ids, '', 'engine', ENGINE_GO));
-
 // ParserIR.shared, one method each: the step, run against the parser's scratch list. It undoes
 // nothing: a failed step leaves what it advanced and appended for the construct around its site.
-function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function sharedFns(ir: ParserIR, ids: LexIdPlan): string {
   return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *engine) sub${id}() bool { ${walkStmts(s, goSteps(ids, '', 'engine', ENGINE_GO))} }\n` : '')).join('');
 }
 
@@ -1287,7 +1272,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const F = rdFormGo(r);
   const open = '\tsave := p.pos; sb := len(p.scratch); nb := len(p.nodes); kb := len(p.kids)';
   return ruleShell(r, ids, {
-    ...goRuleBase(r, ids, ''),
+    ...goRuleBase(ids),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
     fn: (lines) => `func (p *engine) parse${r.name}() int32 {\n${lines.join('\n')}\n}`,
     accept: (i) => `{ ${F.set(i)}return ${fin} }`,
@@ -1503,7 +1488,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     nudEnd: '}',
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, '', 'engine', ENGINE_GO),
-    nudGuard: (g, keyed) => guardCond(g, 't', '', keyed),
+    nudGuard: (g, keyed) => guardCond(g, 't', keyed),
     nudLeaf: (i) => `{ p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; best = p.finish(${rid}, sb, int(t.Off), save); ${won(i, T.fm(i), false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tnode := p.matchTemplate_${hole}()
@@ -2042,7 +2027,6 @@ const arenaMark = () => 'nb, kb = p.b.Checkpoint()';
 /** Undo to the checkpoint (Builder.Restore). */
 const arenaRestore = () => 'p.b.Restore(nb, kb)';
 
-const stepCondW = (s: Step, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string => walkExpr(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar));
 function sharedFnsW(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   return ir.shared.map((s, id) => (ir.forms.buildShared[id] ? `func (p *${recv}) sub${id}W() bool { ${walkStmts(s, goSteps(ids, 'W', recv, ENGINE_GO_W, ar))} }\n` : '')).join('');
 }
@@ -2052,7 +2036,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
   const F = rdFormGo(r);
   const open = `\tsave := p.pos; sb := len(p.scratch); ${arenaCkpt()}`;
   return ruleShell(r, ids, {
-    ...goRuleBase(r, ids, 'W'),
+    ...goRuleBase(ids),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
     fn: (lines) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {\n${lines.join('\n')}\n}`,
     accept: (i) => `{ ${F.set(i)}return ${fin}, true }`,
@@ -2197,7 +2181,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     nudEnd: '}',
     commitSw: commitSwGo('t'),
     steps: goSteps(ids, 'W', recv, ENGINE_GO_W, ar),
-    nudGuard: (g, keyed) => guardCond(g, 't', 'W', keyed),
+    nudGuard: (g, keyed) => guardCond(g, 't', keyed),
     nudLeaf: (i) => `{ p.pushLeafW(uint16(t.Kid), uint32(p.pos), t.Off, t.End); p.pos++; best = p.finishW(${rid}, sb, int(t.Off), save); ${won(i, T.fm(i), false, 'false')}; p.back(save) }`,
     nudTpl: (i, hole) => `\tif t.Kid == ${kidOf(ids, '$templateHead')} {
 \t\tn, ok := p.matchTemplateW_${hole}()
@@ -3583,7 +3567,6 @@ func ParseInterpreted(src string, b Builder, depth int) (h int32, ok bool, steps
 }
 
 function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
-  const ids = buildLexIdPlan(ir);
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 type diag struct{ Kind, Off, End, RelOff, RelEnd, Arg int }
@@ -3948,7 +3931,7 @@ func (p *engine) altLit(lids []uint16) bool {
 \treturn false
 }
 
-${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO, false)}${sharedFns(ir, ids, ar)}${sharedFnsR(ir, ids, ENGINE_GO, false)}${ruleFns}
+${matchTemplate}${lookFnsR(ir, ids, ENGINE_GO, false)}${sharedFns(ir, ids)}${sharedFnsR(ir, ids, ENGINE_GO, false)}${ruleFns}
 
 func (p *engine) writeJSON(id int32, b *strings.Builder) { writeJSONWith(p.nodes, p.kids, p.toks, id, b) }
 

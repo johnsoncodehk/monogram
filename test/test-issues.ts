@@ -29,7 +29,6 @@ const grammar = await registry.loadGrammar('source.ts');
 if (!grammar) throw new Error('Failed to load grammar');
 
 import { tests as allTests, multiLineTests as allMultiLineTests } from './issue-cases.ts';
-import type { TestCase, Check, MultiLineTest, MultiLineCheck } from './issue-cases.ts';
 
 // Gate Monogram's KNOWN-GOOD corpus: skip the honest `monoGap` cases — reported bugs the
 // DERIVED grammar does not solve yet (only-official / both-miss). They still appear in the

@@ -11,9 +11,9 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type AssignTargetsIR } from './parser-ir.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type LexTok, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type AssignTargetsIR } from './parser-ir.ts';
 import type { ArmForm } from './assign-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -23,8 +23,8 @@ import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOp
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
 import type {
-  ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape, ChoiceShape, FieldDecl,
-  FieldBind, TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape, RuleShapeAtom,
+  ShapeSpec, ShapeIR, ShapeIRRule, RuleShape, NodeShape,
+  TokenLeafPolicy, CustomShape, ParentFold, StreamType, PrattShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
 
@@ -44,9 +44,6 @@ const startByteEq = (posExpr: string, s: string): string =>
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.lid == ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid == ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
-/** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
-const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
-  isFirstGuardable(f, nAlts);
 // A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
@@ -65,8 +62,6 @@ const dispatchRsL = (t: string, opt: boolean): DispatchLowering => ({
   sw: (by, cases) => `        match ${opt ? 't' : t}.${by} {\n${cases.map((c) => `        ${c.key} => {\n${c.arms.join('\n')}\n        }`).join('\n')}\n        _ => {}\n        }`,
   nil: (sw) => `        if let Some(t) = ${t} {\n${sw}\n        }`,
 });
-const dispatchRs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, opt = false): string =>
-  dispatchWalk(d, ids, arm, dispatchRsL(t, opt), opt);
 // A match arm's keys (numeric ids), a run of three or more consecutive ones as one range pattern
 // (Rust syntax; the same arm).
 const keysRs = (keys: string[]): string => {
@@ -1267,7 +1262,6 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
   };
   return L;
 }
-const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, rsSteps(ids, 'self', false));
 // An arm's form when it won (assign-targets.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormRs = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'self.acc_f' : pratt ? '(self.form & !3)' : 'self.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
@@ -1334,7 +1328,7 @@ const rsRuleBase = (ids: LexIdPlan, recv: string) => ({
 // rule has rdRule's control flow building nothing: its longest match compares end positions only
 // (a tie only chooses which node, and none is built). A Pratt rule runs its building form and
 // drops the node (the lookahead around it undoes the builder: Forms.lookBuilds).
-function ruleR(r: RuleIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
+function ruleR(r: RuleIR, ids: LexIdPlan): string {
   if (r.kind === 'pratt') return `    fn rec_${r.name}(&mut self) -> bool { self.parse_${r.name}().is_some() }`;
   return ruleShell(r, ids, {
     ...rsRuleBase(ids, 'p'),
@@ -2158,7 +2152,7 @@ function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB
     if (r.kind === 'pratt') return prattRule(r, ir, ids, ar);
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
     return rdRule(r, ids, ar);
-  }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids, ar))].join('\n\n');
+  }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids))].join('\n\n');
   const matchTemplate = ir.tpl ? `    // interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
     // (the grammar's expression rule, or the rule a withHoles reference names).
     fn match_template(&mut self, interp: fn(&mut Parser<'a, B>) -> Option<Spanned<B::H>>) -> Option<Spanned<B::H>> {
@@ -2931,7 +2925,7 @@ ${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
 `;
 }
 
-function emitParseWithHelpers(ir: ParserIR, shapeB: boolean): string {
+function emitParseWithHelpers(ir: ParserIR): string {
   const reuse = !!ir.reuse;
   return `
 // Inlined: built in the caller's frame, so the parser is never moved.
@@ -2991,124 +2985,10 @@ pub fn slim_json_with(b: &SlimBuilder, root: i32) -> String {
 
 // ─── Shape AST codegen (SH3-1: RD full constructs + toy-scale Pratt) ──────────
 
-type RustShapeUnionMember = { variant: string; ty: string; boxed: boolean };
-type RustShapeUnion = { name: string; alias?: string; members: RustShapeUnionMember[] };
-
-function rustShapeIdent(name: string): string {
-  const out = name.replace(/[^A-Za-z0-9_]/g, '_');
-  return /^[0-9]/.test(out) ? `_${out}` : out;
-}
-
-function rustShapeUnionName(ruleName: string): string {
-  return `${rustShapeIdent(ruleName)}Shape`;
-}
-
-function rustShapeScalar(fn: string): string {
-  if (fn === 'number') return 'f64';
-  if (fn === 'boolean') return 'bool';
-  return 'String';
-}
-
-function rustShapeHint(hint: string | string[] | undefined, known?: Set<string>): string {
-  const h = Array.isArray(hint) ? hint[0] : hint;
-  if (!h || h === 'unknown') return 'AstValue';
-  if (h === 'string' || h === 'Identifier') return 'String';
-  if (h === 'number' || h === 'Number') return 'f64';
-  if (h === 'boolean' || h === 'Boolean') return 'bool';
-  const id = rustShapeIdent(h);
-  const shape = `${id}Shape`;
-  if (known?.has(id)) return id;
-  if (known?.has(shape)) return shape;
-  return 'AstValue';
-}
-
-function rustShapeFieldType(field: FieldDecl, known?: Set<string>): string {
-  let ty = field.bind === 'opText' ? 'String' : rustShapeHint(field.typeHint, known);
-  const isList = typeof field.bind === 'object' && 'from' in field.bind && field.bind.from === 'list';
-  const scalar = ty === 'String' || ty === 'f64' || ty === 'bool' || ty === 'AstValue';
-  if (isList) ty = `Vec<${ty}>`;
-  else if (!scalar) ty = `Box<${ty}>`;
-  if (field.optional) ty = `Option<${ty}>`;
-  return ty;
-}
-
 function rustLeafDropped(ttype: string, leaves: Record<string, TokenLeafPolicy>): boolean {
   return leaves[ttype]?.action === 'drop';
 }
 
-function collectRustShapeNodes(shapeIR: ShapeIR): Map<string, NodeShape> {
-  const out = new Map<string, NodeShape>();
-  const walk = (shape: RuleShape): void => {
-    if (shape.kind === 'node') out.set(shape.type, shape);
-    else if (shape.kind === 'choice') for (const arm of shape.arms) walk(arm.shape);
-    else if (shape.kind === 'pratt') {
-      for (const key of ['atom', 'group', 'nudSeq', 'nudCapped', 'prefix', 'binary', 'postfix', 'led', 'postfixTok', 'template'] as const) {
-        const slot = shape[key];
-        if (slot && typeof slot === 'object' && 'kind' in slot && slot.kind !== 'rule') walk(slot as RuleShape);
-      }
-    }
-  };
-  for (const rule of shapeIR.rules) walk(rule.shape);
-  return out;
-}
-
-function rustShapeUnions(shapeIR: ShapeIR): RustShapeUnion[] {
-  const out: RustShapeUnion[] = [];
-  const aliasesUsed = new Set<string>();
-  for (const rule of shapeIR.rules) {
-    if (rule.shape.kind === 'choice') {
-      const members: RustShapeUnionMember[] = [];
-      const seen = new Set<string>();
-      for (const arm of rule.shape.arms) {
-        const member: RustShapeUnionMember = arm.shape.kind === 'node'
-          ? { variant: rustShapeIdent(arm.shape.type), ty: rustShapeIdent(arm.shape.type), boxed: true }
-          : { variant: rustShapeIdent(arm.name), ty: 'AstValue', boxed: false };
-        if (!seen.has(member.variant)) {
-          seen.add(member.variant);
-          members.push(member);
-        }
-      }
-      let alias: string | undefined;
-      if (rule.name === 'Stmt' && !aliasesUsed.has('Statement')) {
-        alias = 'Statement';
-        aliasesUsed.add('Statement');
-      }
-      out.push({ name: rustShapeUnionName(rule.name), alias, members });
-    } else if (rule.shape.kind === 'pratt') {
-      const members: RustShapeUnionMember[] = [];
-      for (const tok of (portableRule(shapeIR, rule.name) as PrattRule).nudToks) {
-        const policy = shapeIR.leaves[tok];
-        if (policy?.action === 'leafValue') {
-          members.push({ variant: rustShapeIdent(tok), ty: rustShapeScalar(policy.fn), boxed: false });
-        }
-      }
-      for (const slot of [rule.shape.prefix, rule.shape.binary, rule.shape.postfix]) {
-        if (slot?.kind === 'node' && !members.some((m) => m.variant === rustShapeIdent(slot.type))) {
-          members.push({ variant: rustShapeIdent(slot.type), ty: rustShapeIdent(slot.type), boxed: true });
-        }
-      }
-      members.push({ variant: 'Keep', ty: 'AstValue', boxed: false });
-      let alias: string | undefined;
-      if (rule.name === 'Expr' && !aliasesUsed.has('Expression')) {
-        alias = 'Expression';
-        aliasesUsed.add('Expression');
-      }
-      out.push({
-        name: rustShapeUnionName(rule.name),
-        alias,
-        members,
-      });
-    }
-  }
-  return out;
-}
-
-let _rustShapeParserIR: ParserIR | null = null;
-function portableRule(_shapeIR: ShapeIR, name: string): RdRule | PrattRule {
-  const rule = _rustShapeParserIR?.rules.find((r) => r.name === name);
-  if (!rule) throw new Error(`shape rust emit: missing IR rule ${name}`);
-  return rule;
-}
 
 // ── Step-level FIRST pre-filters (SH3-5 O5) ────────────────────────────────
 // Per-rule leading FIRST (null = unknown/unpredictable), built once per emit.
@@ -3168,7 +3048,6 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
         return sawBranch ? 'done' : 'nullable';
       }
     }
-    return 'unknown';
   };
   const r = walkSeq(steps);
   // Fully-nullable seqs (derive ε) would succeed even when the guard rejects
@@ -3216,17 +3095,6 @@ function buildRustShapeRuleFirst(ir: ParserIR): Map<string, FirstSig> {
 }
 
 
-function rustShapeRuleType(rule: ShapeIRRule): string {
-  // Runtime is AstValue-centric (RD kids / keep / unknown). Typed structs remain for API docs + gates.
-  return 'AstValue';
-}
-
-function rustShapeSpanFields(spans: ShapeSpec['spans']): string {
-  if (spans === 'none') return '';
-  const ty = spans === 'optional' ? 'Option<usize>' : 'usize';
-  return `\n    pub off: ${ty},\n    pub end: ${ty},`;
-}
-
 /** M-A1.4-S5: streaming node completion — push the structure event and return
  *  the node's source span as the placeholder value. ledNotLeftLeaf guards read
  *  shape_head_text(left): the span text matches the tree-mode head-text for
@@ -3254,9 +3122,7 @@ function rustShapeNodeObjectExpr(
   return rustStreamFinish(J(node.type), offExpr, endExpr);
 }
 
-function emitRustShapeTypes(ir: ParserIR, shapeIR: ShapeIR): string {
-  _rustShapeParserIR = ir;
-  _rustShapeParserIR = null;
+function emitRustShapeTypes(): string {
   const lines: string[] = [
     '// ─── Shape AST runtime (arena values, SH3-6) ──────────────────────────────',
     'fn _shape_json_string(value: &str, out: &mut String) {',
@@ -3742,7 +3608,6 @@ function emitRustAstRdAltSteps(
 /** Emit the streaming structure event for a custom completion (M-A1.2/S5). */
 function rustAstCustomCall(
   fn: string,
-  ruleName: string,
   args: {
     /** Statements staging kids before the call (usually ''; kids slice borrows self.vals directly). */
     kidsPrep: string;
@@ -3922,7 +3787,7 @@ function emitRustRdMethod(
     const shape = sir.shape;
     const tries = rule.alts.map((_, ai) => ({
       altIdx: ai,
-      finish: `match ${rustAstCustomCall(shape.fn, rule.name, {
+      finish: `match ${rustAstCustomCall(shape.fn, {
         kidsPrep: '',
         kidsSlice: '&self.vals[_sk_base..]',
         altPrep: '',
@@ -3985,7 +3850,7 @@ function emitRustRdMethod(
       } else if (arm.shape.kind === 'list') {
         finish = `Some(self.shape_list_from(_sk_base))`;
       } else if (arm.shape.kind === 'custom') {
-        finish = `match ${rustAstCustomCall(arm.shape.fn, rule.name, {
+        finish = `match ${rustAstCustomCall(arm.shape.fn, {
           kidsPrep: '',
           kidsSlice: '&self.vals[_sk_base..]',
           altPrep: '',
@@ -4058,11 +3923,11 @@ function emitRustPrattMethod(
   };
 
   /** Keep finish from a stack range [baseExpr..] — emits the structure event. */
-  const keepFinish = (baseExpr: string, cstName: string, offExpr: string): string =>
+  const keepFinish = (cstName: string, offExpr: string): string =>
     rustStreamFinish(J(cstName), offExpr, `self.last_end(${offExpr})`);
 
   /** Keep finish from a borrowed slice (template helper kids) — event only. */
-  const keepFinishSlice = (kidsSlice: string, cstName: string, offExpr: string, endExpr: string): string =>
+  const keepFinishSlice = (cstName: string, offExpr: string, endExpr: string): string =>
     rustStreamFinish(J(cstName), offExpr, endExpr);
 
   /** TS three-state inline finish: 1→unwrap, 0→None, else array. */
@@ -4086,7 +3951,7 @@ function emitRustPrattMethod(
     const kidsPrep = '';
     const kids = kidsSlice === '_sk_base' ? '&self.vals[_sk_base..]' : kidsSlice;
     const altSlice = altExpr === '[]' ? '&[]' : `&${altExpr}`;
-    return rustAstCustomCall(fn, rule.name, {
+    return rustAstCustomCall(fn, {
       kidsPrep,
       kidsSlice: kids,
       altPrep: '',
@@ -4104,7 +3969,7 @@ function emitRustPrattMethod(
   const hasTplNud = rule.nudTplHole !== undefined;
   const hasTplPostfix = rule.postfixTplHole !== undefined;
   const templateFinish = (kidsSlice: string, offExpr: string, endExpr: string): string => {
-    if (!templateSlot || templateSlot.kind === 'keep') return keepFinishSlice(kidsSlice, '$template', offExpr, endExpr);
+    if (!templateSlot || templateSlot.kind === 'keep') return keepFinishSlice('$template', offExpr, endExpr);
     return customCall(templateSlot.fn, kidsSlice, '[]', offExpr, endExpr, undefined, undefined, templateSlot.folds);
   };
   // Template holes parse with the rule the matching reference declares (PrattRule.nudTplHole /
@@ -4206,7 +4071,7 @@ function emitRustPrattMethod(
         } else if (groupSlot.kind === 'node') {
           finish = `return Some(${nodeFinish(rustShapeNodeObjectExpr(groupSlot as NodeShape, '_sk_base', '(0u32, 0u32)', shapeIR.spans, 'save_off', 'self.last_end(save_off)', undefined), '_sk_base')});`;
         } else {
-          finish = `return Some(${keepFinish('_sk_base', rule.name, 'save_off')});`;
+          finish = `return Some(${keepFinish(rule.name, 'save_off')});`;
         }
         return `if self.peek_lid() == Some(${lidOf(ids, b.first)}) {
             let save = self.pos;
@@ -4285,7 +4150,7 @@ function emitRustPrattMethod(
             let _ab = self.vals.len();
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(argument);
-            return Some(${keepFinish('_ab', rule.name, '_op.0')});
+            return Some(${keepFinish(rule.name, '_op.0')});
         }\n        `;
       }
     }
@@ -4306,7 +4171,7 @@ function emitRustPrattMethod(
       } else if (nudSeqSlot.kind === 'inline') {
         finish = inlineFinishReturn('_sk_base');
       } else {
-        finish = `return Some(${keepFinish('_sk_base', rule.name, 'save_off')});`;
+        finish = `return Some(${keepFinish(rule.name, 'save_off')});`;
       }
       return `{
             let save = self.pos;
@@ -4340,7 +4205,7 @@ function emitRustPrattMethod(
       } else if (nudCappedSlot.kind === 'inline') {
         finish = `*pc = true; ${inlineFinishReturn('_sk_base')}`;
       } else {
-        finish = `*pc = true; return Some(${keepFinish('_sk_base', rule.name, 'save_off')});`;
+        finish = `*pc = true; return Some(${keepFinish(rule.name, 'save_off')});`;
       }
       return `if min_bp < ${c.capBp} {
             let save = self.pos;
@@ -4508,7 +4373,7 @@ function emitRustPrattMethod(
             self.vals.push(left);
             self.vals.push(SVal::Str(_op.0, _op.1));
             self.vals.push(_right);
-            left = ${keepFinish('_ab', rule.name, '_off')};
+            left = ${keepFinish(rule.name, '_off')};
             if self.capped { self.form = 1; return Some(left); }
             form = 1; tail_closed = true;
             continue;
@@ -4572,7 +4437,7 @@ function emitRustPrattMethod(
                     let _ab = self.vals.len();
                     self.vals.push(left);
                     self.vals.push(SVal::Str(_op.0, _op.1));
-                    left = ${keepFinish('_ab', rule.name, '_off')};
+                    left = ${keepFinish(rule.name, '_off')};
                     tail_closed = true;
                     form = 1;
                     continue;
@@ -4600,7 +4465,7 @@ function emitRustPrattMethod(
         // enclosing block's value.
         finish = rustStreamFinish(J(node.type), 't.off as u32', 't.end as u32') + ';';
       } else {
-        finish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(leaf); left = ${keepFinish('_ab', rule.name, '_off')}; }`;
+        finish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(leaf); left = ${keepFinish(rule.name, '_off')}; }`;
       }
       return `if self.peek_kid() == Some(${g.key}) {
                 if !tail_closed {
@@ -4628,7 +4493,7 @@ function emitRustPrattMethod(
         const nodeShape = postfixTokSlot as NodeShape;
         tplFinish = rustStreamFinish(J(nodeShape.type), 'node_off as u32', 'node_end as u32') + ';';
       } else {
-        tplFinish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(node); left = ${keepFinish('_ab', rule.name, 'node_off')}; }`;
+        tplFinish = `{ let _ab = self.vals.len(); self.vals.push(left); self.vals.push(node); left = ${keepFinish(rule.name, 'node_off')}; }`;
       }
       tplPart = `
             if !tail_closed && self.peek_kid() == Some(${kidOf(ids, '$templateHead')}) {
@@ -4707,7 +4572,7 @@ function emitRustPrattMethod(
         } else if (ledSlot.kind === 'inline') {
           finish = `left = self.shape_pack_range(_sk_base);`;
         } else {
-          finish = `{ self.vals.insert(_sk_base, left); left = ${keepFinish('_sk_base', rule.name, '_off')}; }`;
+          finish = `{ self.vals.insert(_sk_base, left); left = ${keepFinish(rule.name, '_off')}; }`;
         }
         return `${parts.length ? `if ${parts.join(' && ')} ` : ''}{
                     let led_save = self.pos;
@@ -4913,7 +4778,7 @@ function rustShapeUnsupported(ir: ParserIR, shapeIR: ShapeIR): Array<{ rule: str
  * conflicting arm/op types across sites → error. Returns the merged table.
  */
 type StreamTypeObj = { passthrough: true } | { optionalChain: true } | { parenOrComma: true };
-function collectStreamTypes(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): Map<string, { perArm: (string | StreamTypeObj)[]; opMap?: Record<string, string> }> {
+function collectStreamTypes(ir: ParserIR, shapeIR: ShapeIR): Map<string, { perArm: (string | StreamTypeObj)[]; opMap?: Record<string, string> }> {
   const merged = new Map<string, { perArm: (string | StreamTypeObj)[]; opMap?: Record<string, string> }>();
   const fail = (msg: string): never => { throw new Error('stream-type totality: ' + msg); };
   const ensureTypes = (fn: string, types: StreamType[] | undefined, armCount: number) => {
@@ -5068,7 +4933,7 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
   _rustShapeRuleFirst = buildRustShapeRuleFirst(ir);
   // M-A1.4-S5: streaming-only — the estree-type table is always collected
   // (every custom site must declare per-arm types/opMap).
-  const streamTypeTable = collectStreamTypes(ir, shapeIR, ids);
+  const streamTypeTable = collectStreamTypes(ir, shapeIR);
   const streamTypeFn = streamTypeTable.size ? emitStreamTypeFn(streamTypeTable) : '';
   const methods = shapeIR.rules.map((sir) => {
     const rule = ir.rules.find((r) => r.name === sir.name)!;
@@ -5079,7 +4944,7 @@ function emitRustShapeAddon(ir: ParserIR, shapeIR: ShapeIR, ids: LexIdPlan): str
   _rustShapeRuleFirst = null;
   return `
 
-${emitRustShapeTypes(ir, shapeIR)}
+${emitRustShapeTypes()}
 
 ${streamTypeFn}// Generic C makes every hook statically dispatched and monomorphized. No trait object,
 // callback table, or per-node allocation is introduced by the customs boundary.
@@ -5959,7 +5824,7 @@ fn parse<'a>(src: &'a str) -> Option<(Parser<'a>, i32)> {
 }
 
 ${docEditBlockRust(ir, shared)}
-${emitParseWithHelpers(ir, shapeB)}
+${emitParseWithHelpers(ir)}
 `;
 }
 
@@ -6107,7 +5972,6 @@ pub fn parse_interpreted<'a, B: Builder + Default>(src: &'a str, b: &mut B, dept
 }
 
 function recoveryRegionRust(ir: ParserIR, shared: SharedAlgorithms): string {
-  const ids = buildLexIdPlan(ir);
   return `
 // ---- recovery: the emit option { recovery: true }; generated from src/recovery-family.ts (shared by the TS / Go / Rust targets) ----
 #[derive(Clone, Copy)]

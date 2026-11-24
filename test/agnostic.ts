@@ -14,7 +14,7 @@ const digit = range('0', '9');
 const word = oneOf(range('A', 'Z'), range('a', 'z'), digit, '_');
 const nonWhitespace = noneOf(oneOf('\t', '\n', '\f', '\r', ' '));
 const Num = token(plus(digit));
-const Program = rule(($: any) => [many(alt(Word, Num, '+'))]);
+const Program = rule(() => [many(alt(Word, Num, '+'))]);
 
 const g = defineGrammar({ name: 'mini', tokens: { Word, Num }, rules: { Program }, entry: Program });
 const { tokenize, parse } = createParser(g);
@@ -65,7 +65,7 @@ const JSelfEnd = token(seq('/', '>'));                           // JSX self-clo
 const JCloseTg = token(seq('<', '/'));                           // JSX close-tag opener
 const JType    = rule(() => [[Word]]);
 const JGeneric = rule(($: any) => [['<', sep(JType, ','), '>', '(', sep($, ','), ')']]);  // <T, U>(…) generics
-const JElement = rule(($: any) => [['<', Word, opt(JTilde), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]); // <Tag …/> JSX
+const JElement = rule(() => [['<', Word, opt(JTilde), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]); // <Tag …/> JSX
 const JExpr    = rule(() => [Word, JTilde, JGeneric, JElement]);
 const JProgram = rule(() => [[many(JExpr)]]);
 const gj = defineGrammar({
@@ -89,13 +89,13 @@ check('gen-textmate JSX disambiguation skip-set quotes derived from grammar (~, 
 //    (`\.\.\.`, `[:,?]`, `[{\[]`, `$`) stays literal on purpose (it is a deliberately
 //    NARROWED subset of FIRST(Param), which the shared CFG rule cannot express).
 const AType  = rule(() => [[Word]]);
-const ATP    = rule(($: any) => [['<', sep(AType, ','), '>']]);                         // <T,> generic delimiters
-const AParam = rule(($: any) => [[Word, opt(':', AType)]]);
-const ADecl  = rule(($: any) => [['fn', Word, opt(ATP), '⟨', sep(AParam, ','), '⟩', '{', '}']]); // decl w/ type-params
-const AArrow = rule(($: any) => [[opt(ATP), '⟨', sep(AParam, ','), '⟩', '=>', Word]]);  // arrow, params in ⟨…⟩
-const ACall  = rule(($: any) => [[Word, '<', sep(AType, ','), '>', '⟨', sep(Word, ','), '⟩']]); // generic-call confirm
-const AAttr  = rule(($: any) => [[Word, opt('=', Word)]]);
-const AElem  = rule(($: any) => [['<', Word, many(AAttr), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]); // JSX tag
+const ATP    = rule(() => [['<', sep(AType, ','), '>']]);                         // <T,> generic delimiters
+const AParam = rule(() => [[Word, opt(':', AType)]]);
+const ADecl  = rule(() => [['fn', Word, opt(ATP), '⟨', sep(AParam, ','), '⟩', '{', '}']]); // decl w/ type-params
+const AArrow = rule(() => [[opt(ATP), '⟨', sep(AParam, ','), '⟩', '=>', Word]]);  // arrow, params in ⟨…⟩
+const ACall  = rule(() => [[Word, '<', sep(AType, ','), '>', '⟨', sep(Word, ','), '⟩']]); // generic-call confirm
+const AAttr  = rule(() => [[Word, opt('=', Word)]]);
+const AElem  = rule(() => [['<', Word, many(AAttr), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]); // JSX tag
 const AExpr  = rule(() => [Word, ACall, AArrow, AElem]);
 const AStmt  = rule(() => [ADecl, AExpr]);
 const AProg  = rule(() => [[many(AStmt)]]);
@@ -120,15 +120,15 @@ check('gen-textmate arrow-param confirm parens derived from arrow rule (⟨⟩, 
 //    constraint) must produce a guard mentioning `\bsubtypeof\b` and NEVER `\bextends\b`
 //    nor `\bis\b`. Proves the keyword derivation is data-driven and scoped to the
 //    param rule, not the type-arg rule.
-const CType   = rule(($: any) => [[Word, opt('is', Word)]]);                            // type, with an `is` predicate
-const CTParam = rule(($: any) => [[Word, opt('subtypeof', CType)]]);                    // type-PARAM: name + constraint
-const CTP     = rule(($: any) => [['<', sep(CTParam, ','), '>']]);                      // <T subtypeof X,> type-param list
-const CParam  = rule(($: any) => [[Word, opt(':', CType)]]);
-const CDecl   = rule(($: any) => [['fn', Word, opt(CTP), '(', sep(CParam, ','), ')', '{', '}']]); // decl w/ type-params (emits arrow-type-parameters)
-const CArrow  = rule(($: any) => [[opt(CTP), '(', sep(CParam, ','), ')', '=>', Word]]); // arrow w/ type-params
-const CCall   = rule(($: any) => [[Word, '<', sep(CType, ','), '>', '(', sep(Word, ','), ')']]); // generic-call (type-ARGS use CType)
-const CAttr   = rule(($: any) => [[Word, opt('=', Word)]]);
-const CElem   = rule(($: any) => [['<', Word, many(CAttr), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]);
+const CType   = rule(() => [[Word, opt('is', Word)]]);                            // type, with an `is` predicate
+const CTParam = rule(() => [[Word, opt('subtypeof', CType)]]);                    // type-PARAM: name + constraint
+const CTP     = rule(() => [['<', sep(CTParam, ','), '>']]);                      // <T subtypeof X,> type-param list
+const CParam  = rule(() => [[Word, opt(':', CType)]]);
+const CDecl   = rule(() => [['fn', Word, opt(CTP), '(', sep(CParam, ','), ')', '{', '}']]); // decl w/ type-params (emits arrow-type-parameters)
+const CArrow  = rule(() => [[opt(CTP), '(', sep(CParam, ','), ')', '=>', Word]]); // arrow w/ type-params
+const CCall   = rule(() => [[Word, '<', sep(CType, ','), '>', '(', sep(Word, ','), ')']]); // generic-call (type-ARGS use CType)
+const CAttr   = rule(() => [[Word, opt('=', Word)]]);
+const CElem   = rule(() => [['<', Word, many(CAttr), alt(JSelfEnd, ['>', JCloseTg, Word, '>'])]]);
 const CExpr   = rule(() => [Word, CCall, CArrow, CElem]);
 const CStmt   = rule(() => [CDecl, CExpr]);
 const CProg   = rule(() => [[many(CStmt)]]);

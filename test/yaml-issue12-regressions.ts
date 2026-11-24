@@ -31,7 +31,6 @@ const isComment = (s: string) => /comment/.test(s);
 const notComment = (s: string) => !/comment/.test(s);
 const isString = (s: string) => /string/.test(s);
 const isBlockString = (s: string) => /string\.unquoted\.block|string\.unquoted|keyword\.control\.flow\.block-scalar/.test(s);
-const notTag = (s: string) => !/storage\.type\.tag|\btag\.type|entity\.name\.tag\b.*tag/.test(s) && !/storage\.type\.tag/.test(s);
 const notNumber = (s: string) => !/constant\.numeric/.test(s);
 const notDirective = (s: string) => !/keyword\.other\.directive/.test(s);
 const notFlowPunct = (s: string) => !/punctuation\.separator|punctuation\.definition\.(sequence|mapping)/.test(s);

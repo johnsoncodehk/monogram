@@ -29,8 +29,8 @@ const BlockComment = token(seq('/*', star(altPattern(noneOf('*'), seq('*', noneO
 
 // Value = one value token; Program = a stream of them. (Lexer-level disambiguation — Hex vs
 // Number — comes from token DECLARATION ORDER, which both engines follow.)
-const Value = rule(($) => [Hex, Number_, Ident, Str]);
-const Program = rule(($) => [many(Value)]);
+const Value = rule(() => [Hex, Number_, Ident, Str]);
+const Program = rule(() => [many(Value)]);
 
 export default defineGrammar({
   name: 'richtokens',

@@ -89,7 +89,7 @@ export function buildRoleMap(grammar: Grammar): (leaf: { tokenType: string; text
     return null;   // unscoped / contextual token (a bare identifier) → not checkable by-construction
   };
 }
-export function leafRoles(grammar: Grammar, cst: CstNode, input: string, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
+export function leafRoles(cst: CstNode, input: string, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
   const out: LeafRole[] = [];
   const walk = (n: CstChild) => {
     if ('tokenType' in n) {

@@ -45,7 +45,7 @@ const Expr = rule(($) => [
   [$, postfix],
   [$, '.', Ident],
 ]);
-const Stmt = rule(($) => [
+const Stmt = rule(() => [
   ['let', sep(Ident, ','), opt(';')],
   [Expr, ';'],
 ]);

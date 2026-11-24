@@ -23,12 +23,12 @@ const Expr = rule(($) => [
 ]);
 // The C-style head stages the suppress set for an init that may be absent: when the init never
 // starts (`for (; a in b)`), the staging ends with its group, so the test after `;` reads `in`.
-const ForHead = rule(($) => [
+const ForHead = rule(() => [
   ['for', '(', exclude('in', Expr), 'in', Expr, ')', Stmt],
   ['for', '(', opt(exclude('in', Expr)), ';', opt(Expr), ')', Stmt],
 ]);
-const Stmt = rule(($) => [ForHead, [Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [ForHead, [Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'noinjs',

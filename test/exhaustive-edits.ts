@@ -8,7 +8,7 @@
 //
 //   node --max-old-space-size=4096 test/exhaustive-edits.ts
 import { writeFileSync } from 'node:fs';
-import { token, rule, defineGrammar, many, opt, sep, plus, oneOf, range, seq, star, noneOf } from '../src/api.ts';
+import { token, rule, defineGrammar, many, sep, plus, oneOf, range } from '../src/api.ts';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
 import { objectify } from './emitted-obj.ts';

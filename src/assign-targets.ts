@@ -163,7 +163,7 @@ export function planAssignTargets(grammar: Grammar, rules: RuleIR[]): AssignTarg
       }
     });
     for (const b of [...r.nudBrackets.map((x) => x.steps), ...r.nudSeqs, ...r.nudCapped.map((x) => x.steps), ...r.leds.map((x) => x.steps)]) markAssignTargets(b);
-    r.ledForm = r.leds.map((l, i) => {
+    r.ledForm = r.leds.map((_l, i) => {
       const f = armForm(r.name, r.ledNames[i]!, null, r.ledForm[i]!);
       if (f.k !== 'const') throw new Error(`assignTargets: led ${r.ledNames[i]} of rule ${r.name} as a container is not supported`);
       return f.v;

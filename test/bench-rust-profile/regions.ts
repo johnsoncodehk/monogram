@@ -175,7 +175,7 @@ function monoSymClass(sym: string): string {
   return 'other symbols';
 }
 
-function oxcClass(file: string, sym: string): string {
+function oxcClass(file: string): string {
   const m = /\/(oxc[a-z_]*)-\d+\.\d+\.\d+\/src\/([^/]+)/.exec(file);
   if (m) {
     const [, crate, sub] = m;
@@ -239,7 +239,7 @@ for (const c of costs) {
     }
   } else {
     const sc = oxcSymClass(c.fn);
-    const cl = oxcClass(c.file, c.fn);
+    const cl = oxcClass(c.file);
     if (cl) {
       add(phase, cl, c.ir);
       add(srcFn, `${c.file.replace(/^.*\/(oxc[a-z_]*-\d+\.\d+\.\d+\/)/, '$1')} [in ${c.fn.replace(/<[^<>]*(<[^<>]*>[^<>]*)*>/g, '<>').slice(0, 90)}]`, c.ir);

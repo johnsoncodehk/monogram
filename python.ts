@@ -320,7 +320,7 @@ const ClosedPattern = rule(() => [
   ClassPattern,
 ]);
 const OrPattern = rule(() => [[ClosedPattern, many('|', ClosedPattern)]]);
-const Pattern = rule(($) => [[OrPattern, 'as', PatternCaptureTarget], OrPattern]);
+const Pattern = rule(() => [[OrPattern, 'as', PatternCaptureTarget], OrPattern]);
 const StarPattern = rule(() => [['*', alt(PatternCaptureTarget, '_')]]);
 const MaybeStarPattern = () => alt(StarPattern, Pattern);
 const MaybeSequencePattern = rule(() => [[MaybeStarPattern(), many(',', MaybeStarPattern()), opt(',')]]);

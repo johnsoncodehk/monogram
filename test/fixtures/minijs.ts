@@ -54,9 +54,9 @@ const Expr = rule(($) => [
   [$, '[', $, ']'],                     // computed index
 ]);
 
-const Block = rule(($) => [['{', many(Stmt), '}']]);
+const Block = rule(() => [['{', many(Stmt), '}']]);
 
-const Stmt = rule(($) => [
+const Stmt = rule(() => [
   Block,
   [alt('var', 'let', 'const'), Ident, opt('=', Expr), ';'],
   ['if', '(', Expr, ')', Stmt, opt('else', Stmt)],
@@ -66,7 +66,7 @@ const Stmt = rule(($) => [
   [Expr, ';'],
 ]);
 
-const Program = rule(($) => [many(Stmt)]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'minijs',

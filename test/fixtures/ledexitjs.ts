@@ -23,8 +23,8 @@ const Expr = rule(($) => [
   [$, '!', '(', $, ')'],   // a led led by the postfix operator's literal
   [$, postfix],
 ]);
-const Stmt = rule(($) => [[Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [[Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'ledexitjs',

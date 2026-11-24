@@ -29,7 +29,7 @@ const Text = token(plus(noneOf('<')), { scope: 'text' });
 const RawText = token(plus(noneOf('<')), { scope: 'source' });
 const Comment = token(seq('<!--', star(anyChar(), { greedy: false }), '-->'), { scope: 'comment.block.html' });
 
-const Element = rule($ => [['<', Name, '=', AttrValue, '/', '>']]); // mentions every punctuation literal
+const Element = rule(() => [['<', Name, '=', AttrValue, '/', '>']]); // mentions every punctuation literal
 
 const html = defineGrammar({
   name: 'html-spike',

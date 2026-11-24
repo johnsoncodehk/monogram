@@ -444,7 +444,6 @@ function variants(seeds: string[], n = 300): string[] {
   return out;
 }
 
-type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };
 type Align = {
   oldN: number; newN: number; prefix: number; suffix: number; relexed: number; reused: number;
   streamEq?: boolean; treeEq?: boolean | null;

@@ -40,12 +40,12 @@ const Expr = rule(($) => [
   [$, op, $],               // binary infix, precedence from the ladder
 ]);
 
-const Stmt = rule(($) => [
+const Stmt = rule(() => [
   ['let', Ident, '=', Expr, ';'],
   [Expr, ';'],
 ]);
 
-const Program = rule(($) => [many(Stmt)]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'calc',

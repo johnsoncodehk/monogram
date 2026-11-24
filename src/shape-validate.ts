@@ -5,7 +5,7 @@ import { portableIR } from './parser-ir.ts';
 import type { ParserIR, RuleIR, Step, Alt, RdRule, PrattRule } from './parser-ir.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, ShapeDiag, RuleShape, NodeShape, ChoiceShape,
-  PrattShape, FieldDecl, TokenLeafPolicy,
+  PrattShape, TokenLeafPolicy,
 } from './shape-schema.ts';
 import type { Grammar } from './types.ts';
 

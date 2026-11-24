@@ -825,7 +825,7 @@ class Emitter {
   // Quantifier: body is matched via a helper fn (pushes + boolean), so the loop here
   // uses `return`/`break` only against ITS OWN while — no nested-loop hazard.
   private quantFollowT = -1;
-  litT(value: string): number { return -1; }   // bound by emitParser to the punct-literal table
+  litT: (value: string) => number = () => -1;   // bound by emitParser to the punct-literal table
 
   // ── Viable-set companions (diagnostics) ──
   // For a REQUIRED literal C in a seq, the literals PROVABLY still accepted when
@@ -1461,7 +1461,7 @@ function emitJsParser(grammar: Grammar): string {
   emitRuleFns(e, a);
 
   // ── parse() driver ──
-  emitDriver(e, a, entry);
+  emitDriver(e);
 
   return e.toString();
 }
@@ -2128,9 +2128,9 @@ function emitLeftRecRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDe
   e.emit(`  return node;`);
   e.emit(`}`);
   // Atom + continuation matchers.
-  atoms.forEach((atom, i) => emitArmNamed(e, a, `atom_${sanitize(rule.name)}_${i}`, atom));
+  atoms.forEach((atom, i) => emitArmNamed(e, `atom_${sanitize(rule.name)}_${i}`, atom));
   continuations.forEach((cont, i) => {
-    emitArmNamed(e, a, `cont_${sanitize(rule.name)}_${i}`, { type: 'seq', items: cont } as RuleExpr);
+    emitArmNamed(e, `cont_${sanitize(rule.name)}_${i}`, { type: 'seq', items: cont } as RuleExpr);
     if (contMix[i]) emitMixfixLed(e, a, `matchMixfixLed_${sanitize(rule.name)}_cont_${i}`, rule.name, cont, contMix[i]!);
   });
 }
@@ -2346,7 +2346,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   nuds.forEach((nud, i) => {
     const items = nud.type === 'seq' ? nud.items : [nud];
     if (items[0]?.type === 'prefix') return;
-    emitArmNamed(e, a, `nud_${sn}_${i}`, nud);
+    emitArmNamed(e, `nud_${sn}_${i}`, nud);
   });
   // LED arm matchers (skip operator leds).
   leds.forEach((led, i) => {
@@ -2365,7 +2365,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`  return true;`);
       e.emit(`}`);
     } else {
-      emitArmNamed(e, a, `led_${sn}_${i}`, { type: 'seq', items: led.items } as RuleExpr);
+      emitArmNamed(e, `led_${sn}_${i}`, { type: 'seq', items: led.items } as RuleExpr);
     }
     if (meta.mixfix[i]) emitMixfixLed(e, a, `matchMixfixLed_${sn}_led_${i}`, rule.name, led.items, meta.mixfix[i]!);
   });
@@ -2382,7 +2382,7 @@ function emitArm(e: Emitter, a: ReturnType<typeof analyze>, ruleName: string, i:
     e.emit(`}`);
     return;
   }
-  emitArmNamed(e, a, `arm_${sanitize(ruleName)}_${i}`, alt);
+  emitArmNamed(e, `arm_${sanitize(ruleName)}_${i}`, alt);
 }
 
 // The runtime of the markup container arm (see Emitter.markupContainerInto): the optional-end
@@ -2421,7 +2421,7 @@ function matchTokSame(nameKind: number, ref: number) {
 
 // Emit a named matcher fn for `expr`: pushes the matched children onto scratch and
 // returns a boolean, restoring pos AND scn on failure (the arena matcher contract).
-function emitArmNamed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string, expr: RuleExpr) {
+function emitArmNamed(e: Emitter, fnName: string, expr: RuleExpr) {
   e.emit(`function ${fnName}() {`);
   const single = e.singleLeafBodyPublic(expr);
   if (single) {
@@ -2479,7 +2479,7 @@ function emitMixfixLed(e: Emitter, a: ReturnType<typeof analyze>, fnName: string
 
 // Emit parseRuleEntry (memo + context handling for pratt/left-rec rules, mirrors
 // parseRule's pratt/left-rec branch) and the parse() driver.
-function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
+function emitDriver(e: Emitter) {
   e.emit(String.raw`
 // parseRule for a pratt/left-rec rule: memo + context + suppress, then the core.
 // The memo is per-rule arrays indexed by start pos (lazily sized to the token count,

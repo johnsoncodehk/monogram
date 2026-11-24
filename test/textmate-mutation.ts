@@ -28,7 +28,7 @@ import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
-import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
+import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type Bucket } from './generative-detect.ts';
 import {
   checkReachability, tokenCensus, literalDischarge, leafCoverage, contentObligations, loadTmFromObject, tmTokenize,
   type TmGrammarJson, type LeafObligations,
