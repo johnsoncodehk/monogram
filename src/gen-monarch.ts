@@ -617,13 +617,12 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   // the literal there (the test is conservative). Tried before the identifier rule.
   const wordEnd = `(?![\\w${escapeForCharClass(identToken ? tokenPatternIdentifierExtraChars(identToken) : '')}])`;
   const kwNames = highlightFacts(grammar).keywordNameGroups;
-  const anyLiteral = kwNames.literals.map(escapeRegex).join('|');
-  const keywordNameRules = (top: boolean): MonarchRule[] => anyLiteral ? kwNames.groups.flatMap(({ words, followers }) => {
+  const keywordNameRules = (top: boolean): MonarchRule[] => kwNames.flatMap(({ words, followers, starts }) => {
     const ws = words.filter(w => identKeywordToken.has(w));
     if (!ws.length) return [];
     const f = followers.map(escapeRegex).join('|');
-    return [[`(?:${ws.map(escapeRegex).join('|')})${wordEnd}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*(?:${anyLiteral}))`, top ? toValue('identifier') : 'identifier'] as MonarchRule];
-  }) : [];
+    return [[`(?:${ws.map(escapeRegex).join('|')})${wordEnd}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*[${starts.map(escapeForCharClass).join('')}])`, top ? toValue('identifier') : 'identifier'] as MonarchRule];
+  });
   const identRules = [...keywordNameRules(true), identRule];
   const identRulesInterp = [...keywordNameRules(false), identRuleInterp];
 

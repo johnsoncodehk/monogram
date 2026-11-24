@@ -5579,12 +5579,11 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
     // begins (`{ type: … }`, `return out;`, `set('k', v)`, `const from = 1`). Scoped as the name it
     // is (a callee as a function, else a plain variable); ranked before every keyword group.
     const kwNames = facts.keywordNameGroups;
-    const anyLiteral = kwNames.literals.map(escapeRegex).join('|');
-    const kwNamePats: TmPattern[] = anyLiteral ? kwNames.groups.flatMap(({ words, followers }) => {
+    const kwNamePats: TmPattern[] = kwNames.flatMap(({ words, followers, starts }) => {
       const f = followers.map(escapeRegex).join('|');
-      const base = `${keywordAlternation(words)}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*(?:${anyLiteral}))`;
+      const base = `${keywordAlternation(words)}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*[${starts.map(escapeForCharClass).join('')}])`;
       return [{ match: `${base}(?=\\s*\\()`, name: `entity.name.function.${langName}` }, { match: base, name: `variable.other.readwrite.${langName}` }];
-    }) : [];
+    });
     if (kwNamePats.length) {
       repository['keyword-as-name'] = { patterns: kwNamePats };
       topPatterns.push({ include: '#keyword-as-name' });
