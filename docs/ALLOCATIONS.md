@@ -34,12 +34,12 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | ts | typescript | _tsserver.js | parseWith | 4,932 | 3,139 | 15,943 | 3.23 | 5.08 | 537,368 | 109.0 | 171.2 | 8,673 | 252,250 | 285,118 |
 | ts | typescript | _tsserver.js ×4 | parse | 19,728 | 12,553 | 63,693 | 3.23 | 5.07 | 2,103,920 | 106.6 | 167.6 | 34,686 | 1,008,865 | 1,095,055 |
 | ts | typescript | _tsserver.js ×4 | parseWith | 19,728 | 12,553 | 63,693 | 3.23 | 5.07 | 2,103,920 | 106.6 | 167.6 | 34,686 | 1,008,865 | 1,095,055 |
-| ts | javascript | acorn.js | parse | 42,051 | 28,638 | 139,561 | 3.32 | 4.87 | 4,617,444 | 109.8 | 161.2 | 79,491 | 2,313,271 | 2,304,173 |
-| ts | javascript | acorn.js | parseWith | 42,051 | 28,638 | 139,561 | 3.32 | 4.87 | 4,617,444 | 109.8 | 161.2 | 79,491 | 2,313,271 | 2,304,173 |
-| ts | javascript | _tsserver.js | parse | 4,928 | 3,139 | 16,043 | 3.26 | 5.11 | 540,188 | 109.6 | 172.1 | 8,673 | 252,132 | 288,056 |
-| ts | javascript | _tsserver.js | parseWith | 4,928 | 3,139 | 16,043 | 3.26 | 5.11 | 540,188 | 109.6 | 172.1 | 8,673 | 252,132 | 288,056 |
-| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,553 | 64,093 | 3.25 | 5.11 | 2,115,200 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,807 |
-| ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,553 | 64,093 | 3.25 | 5.11 | 2,115,200 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,807 |
+| ts | javascript | acorn.js | parse | 42,051 | 32,239 | 146,763 | 3.49 | 4.55 | 4,819,100 | 114.6 | 149.5 | 86,693 | 2,515,039 | 2,304,061 |
+| ts | javascript | acorn.js | parseWith | 42,051 | 32,239 | 146,763 | 3.49 | 4.55 | 4,819,100 | 114.6 | 149.5 | 86,693 | 2,515,039 | 2,304,061 |
+| ts | javascript | _tsserver.js | parse | 4,928 | 3,411 | 16,587 | 3.37 | 4.86 | 555,420 | 112.7 | 162.8 | 9,217 | 267,394 | 288,026 |
+| ts | javascript | _tsserver.js | parseWith | 4,928 | 3,411 | 16,587 | 3.37 | 4.86 | 555,420 | 112.7 | 162.8 | 9,217 | 267,394 | 288,026 |
+| ts | javascript | _tsserver.js ×4 | parse | 19,712 | 13,641 | 66,269 | 3.36 | 4.86 | 2,176,128 | 110.4 | 159.5 | 36,862 | 1,069,439 | 1,106,689 |
+| ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 13,641 | 66,269 | 3.36 | 4.86 | 2,176,128 | 110.4 | 159.5 | 36,862 | 1,069,439 | 1,106,689 |
 | js | typescript | acorn.js | fresh | 42,251 | 28,813 | 5,154 | 0.12 | 0.18 | 13,909,056 | 329.2 | 482.7 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,251 | 28,813 | 4,992 | 0.12 | 0.17 | 234,424 | 5.5 | 8.1 | - | - | - |
 | js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,692 | 7,007 | 0.51 | 0.91 | 2,781,116 | 203.6 | 361.6 | - | - | - |
@@ -48,12 +48,12 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | js | typescript | _tsserver.js | reuse | 4,932 | 3,221 | 330 | 0.07 | 0.10 | 15,368 | 3.1 | 4.8 | - | - | - |
 | js | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,881 | 1,417 | 0.07 | 0.11 | 4,660,416 | 236.2 | 361.8 | - | - | - |
 | js | typescript | _tsserver.js ×4 | reuse | 19,728 | 12,881 | 1,293 | 0.07 | 0.10 | 60,512 | 3.1 | 4.7 | - | - | - |
-| js | javascript | acorn.js | fresh | 42,051 | 28,958 | 4,785 | 0.11 | 0.17 | 13,197,980 | 313.9 | 455.8 | - | - | - |
-| js | javascript | acorn.js | reuse | 42,051 | 28,958 | 4,627 | 0.11 | 0.16 | 228,444 | 5.4 | 7.9 | - | - | - |
-| js | javascript | _tsserver.js | fresh | 4,928 | 3,263 | 404 | 0.08 | 0.12 | 1,093,496 | 221.9 | 335.1 | - | - | - |
-| js | javascript | _tsserver.js | reuse | 4,928 | 3,263 | 318 | 0.06 | 0.10 | 15,176 | 3.1 | 4.7 | - | - | - |
-| js | javascript | _tsserver.js ×4 | fresh | 19,712 | 13,049 | 1,364 | 0.07 | 0.10 | 4,813,264 | 244.2 | 368.9 | - | - | - |
-| js | javascript | _tsserver.js ×4 | reuse | 19,712 | 13,049 | 1,245 | 0.06 | 0.10 | 59,744 | 3.0 | 4.6 | - | - | - |
+| js | javascript | acorn.js | fresh | 42,051 | 32,559 | 4,785 | 0.11 | 0.15 | 13,197,980 | 313.9 | 405.4 | - | - | - |
+| js | javascript | acorn.js | reuse | 42,051 | 32,559 | 4,627 | 0.11 | 0.14 | 228,444 | 5.4 | 7.0 | - | - | - |
+| js | javascript | _tsserver.js | fresh | 4,928 | 3,535 | 404 | 0.08 | 0.11 | 1,093,496 | 221.9 | 309.3 | - | - | - |
+| js | javascript | _tsserver.js | reuse | 4,928 | 3,535 | 318 | 0.06 | 0.09 | 15,176 | 3.1 | 4.3 | - | - | - |
+| js | javascript | _tsserver.js ×4 | fresh | 19,712 | 14,137 | 1,364 | 0.07 | 0.10 | 4,813,264 | 244.2 | 340.5 | - | - | - |
+| js | javascript | _tsserver.js ×4 | reuse | 19,712 | 14,137 | 1,245 | 0.06 | 0.09 | 59,744 | 3.0 | 4.2 | - | - | - |
 | go | typescript | acorn.js | fresh | 42,251 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 218.9 | 323.0 | 3 | 2,072,576 | 7,177,344 |
 | go | typescript | acorn.js | reuse | 42,251 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | acorn.js | slim-reuse | 42,251 | 11,491 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
@@ -66,14 +66,14 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | go | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,737 | 78 | 0.00 | 0.01 | 3,710,624 | 188.1 | 291.3 | 3 | 901,120 | 2,809,504 |
 | go | typescript | _tsserver.js ×4 | reuse | 19,728 | 12,737 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | _tsserver.js ×4 | slim-reuse | 19,728 | 5,485 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | javascript | acorn.js | fresh | 42,051 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 220.0 | 323.0 | 3 | 2,072,576 | 7,177,344 |
-| go | javascript | acorn.js | reuse | 42,051 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | javascript | acorn.js | fresh | 42,051 | 32,239 | 83 | 0.00 | 0.00 | 9,249,920 | 220.0 | 286.9 | 3 | 2,072,576 | 7,177,344 |
+| go | javascript | acorn.js | reuse | 42,051 | 32,239 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | acorn.js | slim-reuse | 42,051 | 11,491 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | javascript | _tsserver.js | fresh | 4,928 | 3,139 | 60 | 0.01 | 0.02 | 718,496 | 145.8 | 228.9 | 3 | 225,280 | 493,216 |
-| go | javascript | _tsserver.js | reuse | 4,928 | 3,139 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | javascript | _tsserver.js | fresh | 4,928 | 3,411 | 60 | 0.01 | 0.02 | 718,496 | 145.8 | 210.6 | 3 | 225,280 | 493,216 |
+| go | javascript | _tsserver.js | reuse | 4,928 | 3,411 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | _tsserver.js | slim-reuse | 4,928 | 1,367 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | javascript | _tsserver.js ×4 | fresh | 19,712 | 12,553 | 78 | 0.00 | 0.01 | 3,710,624 | 188.2 | 295.6 | 3 | 901,120 | 2,809,504 |
-| go | javascript | _tsserver.js ×4 | reuse | 19,712 | 12,553 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | javascript | _tsserver.js ×4 | fresh | 19,712 | 13,641 | 79 | 0.00 | 0.01 | 4,251,296 | 215.7 | 311.7 | 3 | 1,015,808 | 3,235,488 |
+| go | javascript | _tsserver.js ×4 | reuse | 19,712 | 13,641 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | javascript | _tsserver.js ×4 | slim-reuse | 19,712 | 5,465 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 
 ## Where: ts target, parse, typescript grammar, acorn.js (top 15 of 16 sites by bytes)
