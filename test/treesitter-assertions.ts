@@ -60,11 +60,20 @@ const RENDERED: AssertionClass[] = ['lowered', 'reserved-set'];
 // declaration has its own `using` arm).
 // Decorators (land/grammar-decorators): a `@` that trivia separates from its name takes a reserved-guarded
 // name (`@ a`; JavaScript an IdentifierReference, TypeScript not a reserved word): reserved-set +1 in each.
+// Statement / Declaration split (land/grammar-statement-declaration): `export` reads the declaring
+// productions themselves, so their assertions get a second site (the `asi()` arms and `sameLine`s:
+// lowered +3 js / jsx, +6 ts / tsx; TypeScript's `using` guard `not('[' | '{')`: lookahead1 +1) and
+// the `not(not(declaration word))` before a Stmt leaves (lookahead1 -1 js / jsx, lookahead -1 ts /
+// tsx). JavaScript's Statement holds the plain FunctionDeclaration of an `if` clause (Annex B) and
+// of a LabelledItem: three copies of the function name's reserved-word guard (reserved-set +3). Its
+// expression statement's `not('{' | 'function' | 'class' | '@' | Decorator)` is no longer beside
+// the declarations (they are Stmt's, one rule up): start markers do not reach it, lookahead1 +1
+// (owed to the tree-sitter lane: plan the marker across a rule that is an alternative of another).
 const PINNED: Record<string, Partial<Record<AssertionClass, number>>> = {
-  javascript:      { lowered: 61,  vacuous: 4,  'reserved-set': 48, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
-  typescript:      { lowered: 155, vacuous: 60, 'reserved-set': 68, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
-  javascriptreact: { lowered: 63,  vacuous: 4,  'reserved-set': 48, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
-  typescriptreact: { lowered: 157, vacuous: 60, 'reserved-set': 68, scanner: 7,  reserved: 0, lookahead1: 80, lookahead: 65, 'left-context': 2 },
+  javascript:      { lowered: 64,  vacuous: 4,  'reserved-set': 51, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
+  typescript:      { lowered: 161, vacuous: 60, 'reserved-set': 68, scanner: 7,  reserved: 0, lookahead1: 81, lookahead: 64, 'left-context': 2 },
+  javascriptreact: { lowered: 66,  vacuous: 4,  'reserved-set': 51, scanner: 0,  reserved: 0, lookahead1: 15, lookahead: 4 },
+  typescriptreact: { lowered: 163, vacuous: 60, 'reserved-set': 68, scanner: 7,  reserved: 0, lookahead1: 81, lookahead: 64, 'left-context': 2 },
   yaml:            { lowered: 1,  scanner: 16, lookahead1: 6 },
 };
 

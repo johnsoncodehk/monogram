@@ -14,6 +14,7 @@
 (expr name: (ident) @function)
 (new_target name: (ident) @function)
 (class_heritage name: (ident) @type)
+(statement name: (ident) @function)
 (decl name: (ident) @function)
 (decl name: (ident) @type)
 
@@ -22,6 +23,7 @@
 (expr "function" (ident) @function)
 (new_target "function" (ident) @function)
 (class_heritage "class" (ident) @type)
+(statement "function" (ident) @function)
 (decl "function" (ident) @function)
 (decl "class" (ident) @type)
 

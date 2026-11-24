@@ -11,9 +11,9 @@ Every choice point of the grammar and how the generated parser (the portable pla
 | rule alternatives | 25 | 6 | 4 | 0 | 15 | 19 |
 | NUD arms | 5 | 0 | 0 | 0 | 5 | 5 |
 | LED connectors | 5 | 3 | 0 | 2 | 0 | 4 |
-| inline choice | 490 | 215 | 0 | 275 | 0 | 273 |
-| star | 143 | 134 | 0 | 9 | 0 | 45 |
-| opt | 316 | 274 | 0 | 42 | 0 | 138 |
+| inline choice | 492 | 215 | 0 | 277 | 0 | 274 |
+| star | 145 | 136 | 0 | 9 | 0 | 47 |
+| opt | 317 | 275 | 0 | 42 | 0 | 139 |
 | sep | 130 | 19 | 0 | 111 | 0 | 0 |
 
 | finding | count |
@@ -847,7 +847,7 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `const`: two tokens: committed to const_ (#24) (takes a mark: it can fail after `'const'`)
   - `declare`: two tokens: committed to declared (#12), unless declare (#9), declare2 (#10), declare3 (#11) admit the token (then the frame) (takes a mark: it can fail after `'declare'`)
   - `enum`: two tokens: committed to enum_ (#8) (takes a mark: it can fail after `'enum'`)
-  - `export`: two tokens: committed to exportDeclaration (#18), unless exportAsNamespace (#17), exportDefault (#19), exportAll (#20), exportNamed (#21) and 2 more admit the token (then the frame) (takes a mark: it can fail after `'export'`)
+  - `export`: two tokens: committed to exportAsNamespace (#17), unless exportDeclaration (#18), exportDefault (#19), exportAll (#20), exportNamed (#21) and 2 more admit the token (then the frame) (takes a mark: it can fail after `'export'`)
   - `function`: two tokens: committed to function_ (#0), unless generator (#1) admits the token (then the frame) (takes a mark: it can fail after `'function'`)
   - `import`: two tokens: committed to importDeclaration (#25) (takes a mark: it can fail after `'import'`)
   - `interface`: two tokens: committed to interface (#4) (takes a mark: it can fail after `'interface'`)
@@ -856,8 +856,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `type`: two tokens: committed to type (#5) (takes a mark: it can fail after `'type'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <String>, <Template> and 10 more: no candidate, the list fails
   - <Decorator>: two tokens: committed to prefixed (#13) (takes a mark: it can fail after `alt((DecoratorExpr many(DecoratorExpr))…`)
-  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'; exportAsNamespace (#17) at `export` only before 'as'; exportDefault (#19) at `export` only before '@'|'@new'|'default'|Decorator; exportAll (#20) at `export` only before '*'|'type'; exportNamed (#21) at `export` only before '{'; exportEquals (#22) at `export` only before '='; exportNamedType (#23) at `export` only before 'type'
-  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@'|…46; seq (#14) only before '@'|'@new'|'abstract'|'accessor'|'async'|'class'|…17; namespace (#15) only before Ident; module (#16) only before Ident|String; exportAsNamespace (#17) only before 'as'; exportDefault (#19) only before '@'|'@new'|'default'|Decorator; exportAll (#20) only before '*'|'type'; exportNamed (#21) only before '{'; exportEquals (#22) only before '='; exportNamedType (#23) only before 'type'; const_ (#24) only before 'enum'; importDeclaration (#25) only before '*'|'defer'|'type'|'{'|Ident|String
+  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; asyncFunction (#2) at `async` only before 'function'; asyncGenerator (#3) at `async` only before 'function'; namedClass (#6) at `class` only before Ident; anonymousClass (#7) at `class` only before '<'|'extends'|'implements'|'{'; declare (#9) at `declare` only before 'function'; declare2 (#10) at `declare` only before 'module'; declare3 (#11) at `declare` only before 'global'
+  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; interface (#4) only before Ident; type (#5) only before Ident; namedClass (#6) only before Ident; anonymousClass (#7) only before '<'|'extends'|'implements'|'{'; enum_ (#8) only before Ident; declare (#9) only before 'function'; declare2 (#10) only before 'module'; declare3 (#11) only before 'global'; prefixed (#13) only before '!'|'('|'.'|'<'|'?.'|'@'|…46; seq (#14) only before '@'|'@new'|'abstract'|'accessor'|'async'|'class'|…17; namespace (#15) only before Ident; module (#16) only before Ident|String; exportAsNamespace (#17) only before 'as'; exportDeclaration (#18) only before '@'|'@new'|'abstract'|'accessor'|'async'|'await'|…21; exportDefault (#19) only before '@'|'@new'|'default'|Decorator; exportAll (#20) only before '*'|'type'; exportNamed (#21) only before '{'; exportEquals (#22) only before '='; exportNamedType (#23) only before 'type'; const_ (#24) only before 'enum'; importDeclaration (#25) only before '*'|'defer'|'type'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), namedClass (#6), anonymousClass (#7) and 13 more
 - one token, no mark: 14 inline choices, 28 star, 46 opt, 5 sep
 - Decl / function_: `sep(Param, ',')`: by attempt
@@ -979,7 +979,12 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / module: `alt(!{'break'\|'case'\|'catch'\|'class'\|…32} Ident many(('…`: by attempt
 - Decl / module: `many(('.' Ident))`: one token; takes a mark: it can fail after `'.'`
 - Decl / exportAsNamespace: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Decl / exportDeclaration: `alt(Decl \| &(alt('var' \| 'let' \| 'const' \| 'using' \| 'a…`: by attempt
+- Decl / exportDeclaration: `alt(Decl \| ('let'\|'const'\|'var') Binding many((',' Bind…`: by attempt; takes a mark: branch 1: it can fail after `('let'\|'const'\|'var')`; branch 2: it can fail after `opt('await' sameLine)`
+- Decl / exportDeclaration: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
+- Decl / exportDeclaration: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Decl / exportDeclaration: `opt('await' sameLine)`: one token; takes a mark: it can fail after `'await'`
+- Decl / exportDeclaration: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
+- Decl / exportDeclaration: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / exportDefault: `alt((DecoratorExpr many(DecoratorExpr)) alt('default' &…`: by attempt; takes a mark: branch 0: it can fail after `(DecoratorExpr many(DecoratorExpr))`
 - Decl / exportDefault: `alt('default' &(alt(&{'@'\|'class'\|'function'\|'interface…`: one token; takes a mark: branch 0: it can fail after `'default'`
 - Decl / exportDefault: `alt('function' opt(!{'break'\|'case'\|'catch'\|'class'\|…32…`: by attempt; takes a mark: branch 0: it can fail after `'function'`; branch 1: it can fail after `'function'`; branch 2: it can fail after `'async'`; branch 3: it can fail after `'async'`; branch 4: it can fail after `many(DecoratorExpr)`; branch 5: it can fail after `many(DecoratorExpr)`; branch 6: it can fail after `'interface'`; branch 8: it can fail after `Expr`

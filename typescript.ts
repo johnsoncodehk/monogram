@@ -39,7 +39,7 @@ import {
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, bindingName, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
-  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier, bracketIndex,
+  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, variableDeclaration, moduleSpecifier, bracketIndex,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -710,12 +710,15 @@ const CatchParameter = rule($ => [
   [BindingPattern, opt(':', Type)],
 ]);
 
+// `[await] using` declarations (explicit resource management): `Stmt` and `export` read it.
+const usingDeclaration = () => [opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, not(alt('[', '{')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()];
 const Stmt = rule($ => [
   Block,
-  // VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
-  // or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse,
-  // and `let;` is the expression statement of the identifier `let` (sloppy mode).
-  arm('variable', field('kind', alt('let', 'const', 'var')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
+  // VariableStatement / LexicalDeclaration (14.3, `variableDeclaration`); `let;` is the expression
+  // statement of the identifier `let` (sloppy mode). Unlike JavaScript's, this rule is also every
+  // sub-statement position: tsc's parseStatement takes a declaration there (`if (x) let y = 1;`,
+  // `if (f) let \n{}` as `let {}`) and leaves it to the checker.
+  arm('variable', ...variableDeclaration(['let', 'const', 'var'], Binding)),
   ['if', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('consequence', $), opt('else', field('alternative', $))],
   forStatement($, ForHead, ForAwaitHead),
   ['while', '(', field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr)), ')', field('body', $)],
@@ -742,7 +745,7 @@ const Stmt = rule($ => [
   // is `using[a] = b` (element-assignment on the identifier `using`) and stays valid, while
   // `using {a} = b` / `await using [a] = null` (no derivation — V8 + babel reject; tsc is
   // lenient on the `{` form) correctly fail. (Guards the first binding; see ForHead for for-of.)
-  arm('using', opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, not(alt('[', '{')), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
+  arm('using', ...usingDeclaration()),
   Decl,
   // The JavaScript expression statement (`expressionStatement`): tsc's parseStatement also takes
   // `{` as a block and `function`, `class`, `@` and same-line `async function` as declarations
@@ -1113,7 +1116,7 @@ const Decl = rule($ => [
   ['namespace', ...bindingIdentifier, many('.', Ident), '{', many(Stmt), '}'],   // dotted name: `namespace A.B.C { … }`
   ['module', alt([...bindingIdentifier, many('.', Ident)], String_), '{', many(Stmt), '}'],   // `module A.B.C { … }` | `module "x" { … }`
   arm('exportAsNamespace', field('exportKeyword', 'export'), 'as', 'namespace', ...bindingName, asi()),   // UMD NamespaceExportDeclaration — BEFORE `exportDeclaration`
-  exportDeclaration($, Stmt, ['var', 'let', 'const', 'using', ['await', 'using']]),
+  exportDeclaration($, [arm('variable', ...variableDeclaration(['let', 'const', 'var'], Binding)), arm('using', ...usingDeclaration())]),
   // decorators may also sit BETWEEN `export` and `default` (`export @dec default
   // class C {}` — tsc parses the soup in either spot; ordering is a checker error). There
   // `default` is a modifier word, so a declaration follows it (`export @d default x;` has no

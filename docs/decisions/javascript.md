@@ -8,13 +8,13 @@ Every choice point of the grammar and how the generated parser (the portable pla
 
 | choice point | sites | one token | two tokens | by attempt | longest match | take a mark |
 |:--|--:|--:|--:|--:|--:|--:|
-| rule alternatives | 15 | 2 | 3 | 0 | 10 | 12 |
+| rule alternatives | 16 | 2 | 3 | 0 | 11 | 13 |
 | NUD arms | 3 | 0 | 0 | 0 | 3 | 3 |
 | LED connectors | 3 | 3 | 0 | 0 | 0 | 3 |
-| inline choice | 86 | 43 | 0 | 43 | 0 | 43 |
-| star | 59 | 58 | 0 | 1 | 0 | 38 |
+| inline choice | 91 | 44 | 0 | 47 | 0 | 47 |
+| star | 61 | 60 | 0 | 1 | 0 | 40 |
 | opt | 86 | 54 | 0 | 32 | 0 | 54 |
-| sep | 45 | 7 | 0 | 38 | 0 | 0 |
+| sep | 48 | 7 | 0 | 41 | 0 | 0 |
 
 | finding | count |
 |:--|--:|
@@ -228,67 +228,86 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - ClassHeritage LED / led_bracket: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - ClassHeritage LED / led_paren: `sep(Expr, ',')`: by attempt
 
-### Stmt
+### Statement
 
-- Stmt (19 alternatives):
-  - `!`, `(`, `+`, `++`, `-`, `--`, `...`, `[` and 10 more: one token: committed to expr (#18) (takes a mark: it can fail after `Expr`)
+- Statement (17 alternatives):
+  - `!`, `(`, `+`, `++`, `-`, `--`, `...`, `[` and 11 more: one token: committed to expr (#16) (takes a mark: it can fail after `Expr`)
   - `;`: one token: committed to empty (#13)
-  - `@`, `class`, `export`, `function`: one token: committed to decl (#17)
-  - `async`: two tokens: committed to expr (#18), unless labelled (#12), decl (#17) admit the token (then the frame) (takes a mark: it can fail after `Expr`)
-  - `await`: two tokens: committed to expr (#18), unless labelled (#12), using (#16) admit the token (then the frame) (takes a mark: it can fail after `Expr`)
   - `break`: one token: committed to break_ (#9) (takes a mark: it can fail after `'break'`)
-  - `case`, `catch`, `default`, `else`, `enum`, `extends`, `finally`, `in` and 1 more: no candidate, the list fails
-  - `const`, `var`: two tokens: committed to variable (#1) (takes a mark: it can fail after `('let'\|'const'\|'var')`)
+  - `case`, `catch`, `class`, `const`, `default`, `else`, `enum`, `export` and 5 more: no candidate, the list fails
   - `continue`: one token: committed to continue_ (#10) (takes a mark: it can fail after `'continue'`)
   - `debugger`: one token: committed to debugger_ (#14) (takes a mark: it can fail after `'debugger'`)
   - `do`: one token: committed to do_ (#5) (takes a mark: it can fail after `'do'`)
   - `for`: two tokens: committed to for_ (#3) (takes a mark: it can fail after `'for'`)
   - `if`: two tokens: committed to if_ (#2) (takes a mark: it can fail after `'if'`)
-  - `import`: two tokens: committed to expr (#18), unless decl (#17) admits the token (then the frame) (takes a mark: it can fail after `Expr`)
-  - `let`: two tokens: committed to expr (#18), unless variable (#1), labelled (#12) admit the token (then the frame) (takes a mark: it can fail after `Expr`)
   - `return`: one token: committed to return_ (#7) (takes a mark: it can fail after `'return'`)
   - `switch`: two tokens: committed to switch_ (#6) (takes a mark: it can fail after `'switch'`)
   - `throw`: one token: committed to throw_ (#8) (takes a mark: it can fail after `'throw'`)
   - `try`: two tokens: committed to try_ (#11) (takes a mark: it can fail after `'try'`)
-  - `using`: two tokens: committed to expr (#18), unless labelled (#12), using (#16) admit the token (then the frame) (takes a mark: it can fail after `Expr`)
+  - `var`: two tokens: committed to variable (#1) (takes a mark: it can fail after `('var')`)
   - `while`: two tokens: committed to while_ (#4) (takes a mark: it can fail after `'while'`)
   - `with`: two tokens: committed to with_ (#15) (takes a mark: it can fail after `'with'`)
   - `{`: one token: committed to block (#0)
-  - <Ident>: two tokens: committed to expr (#18), unless labelled (#12) admits the token (then the frame) (takes a mark: it can fail after `Expr`)
-  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 3 more: one token: committed to expr (#18) (takes a mark: it can fail after `Expr`)
-  - <Decorator>: one token: committed to decl (#17)
-  - <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
-  - two tokens (pairs): variable (#1) at `let` only before '['|'{'|Ident; using (#16) at `await` only before 'using'; using (#16) at `using` only before '['|'{'|Ident; decl (#17) at `async` only before 'function'; decl (#17) at `import` only before '*'|'defer'|'source'|'{'|Ident|String
-  - two tokens (SECOND): variable (#1) only before '['|'{'|Ident; if_ (#2) only before '('; for_ (#3) only before '('|'await'; while_ (#4) only before '('; switch_ (#6) only before '('; try_ (#11) only before '{'; labelled (#12) only before ':'; with_ (#15) only before '('; using (#16) only before '['|'using'|'{'|Ident
-  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over variable (#1), labelled (#12), using (#16), decl (#17), expr (#18)
+  - <Ident>: two tokens: committed to expr (#16), unless labelled (#12) admits the token (then the frame) (takes a mark: it can fail after `Expr`)
+  - <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String>, <Template> and 3 more: one token: committed to expr (#16) (takes a mark: it can fail after `Expr`)
+  - <Decorator>, <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
+  - two tokens (SECOND): variable (#1) only before '['|'{'|Ident; if_ (#2) only before '('; for_ (#3) only before '('|'await'; while_ (#4) only before '('; switch_ (#6) only before '('; try_ (#11) only before '{'; labelled (#12) only before ':'; with_ (#15) only before '('
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over labelled (#12), expr (#16)
 - one token, no mark: 1 star, 1 opt
+- Statement / variable: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
+- Statement / variable: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Statement / if_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / if_: `alt(Statement \| 'function' !{'break'\|'case'\|'catch'\|'cl…`: by attempt; takes a mark: branch 1: it can fail after `'function'`
+- Statement / if_: `sep(Param, ',')`: by attempt
+- Statement / if_: `opt('else' alt(Statement \| 'function' !{'break'\|'case'\|…`: one token; takes a mark: it can fail after `'else'`
+- Statement / if_: `alt(Statement \| 'function' !{'break'\|'case'\|'catch'\|'cl…`: by attempt; takes a mark: branch 1: it can fail after `'function'`
+- Statement / if_: `sep(Param, ',')`: by attempt
+- Statement / for_: `alt('(' ForHead ')' \| 'await' '(' ForAwaitHead ')')`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'await'`
+- Statement / while_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / do_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / switch_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / return_: `opt(sameLine Expr many((',' Expr)))`: by attempt; takes a mark: it can fail after `Expr`
+- Statement / return_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / return_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Statement / throw_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / throw_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Statement / break_: `opt(sameLine !{'break'\|'case'\|'catch'\|'class'\|…32} Iden…`: by attempt
+- Statement / break_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Statement / continue_: `opt(sameLine !{'break'\|'case'\|'catch'\|'class'\|…32} Iden…`: by attempt
+- Statement / continue_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Statement / try_: `opt('catch' opt('(' CatchParameter ')') Block)`: one token; takes a mark: it can fail after `'catch'`
+- Statement / try_: `opt('(' CatchParameter ')')`: one token; takes a mark: it can fail after `'('`
+- Statement / try_: `opt('finally' Block)`: one token; takes a mark: it can fail after `'finally'`
+- Statement / labelled: `alt(Statement \| 'function' !{'break'\|'case'\|'catch'\|'cl…`: by attempt; takes a mark: branch 1: it can fail after `'function'`
+- Statement / labelled: `sep(Param, ',')`: by attempt
+- Statement / debugger_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+- Statement / with_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / expr: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
+- Statement / expr: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
+
+### Stmt
+
+- Stmt (4 alternatives):
+  - `!`, `(`, `+`, `++`, `-`, `--`, `...`, `;` and 3 more: one token: committed to statement (#0)
+  - `@`, `class`, `export`, `function`: two tokens: committed to decl (#3)
+  - `async`: two tokens: committed to statement (#0), unless decl (#3) admits the token (then the frame)
+  - `await`: two tokens: committed to statement (#0), unless using (#2) admits the token (then the frame)
+  - `case`, `catch`, `default`, `else`, `enum`, `extends`, `finally`, `in` and 1 more: no candidate, the list fails
+  - `const`: two tokens: committed to variable (#1) (takes a mark: it can fail after `('let'\|'const')`)
+  - `import`: two tokens: committed to statement (#0), unless decl (#3) admits the token (then the frame)
+  - `let`: two tokens: committed to statement (#0), unless variable (#1) admits the token (then the frame)
+  - `using`: two tokens: committed to statement (#0), unless using (#2) admits the token (then the frame)
+  - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 4 more: one token: committed to statement (#0)
+  - <Decorator>: two tokens: committed to decl (#3)
+  - <$templateMiddle>, <$templateTail>, punctuation: no candidate, the list fails
+  - two tokens (pairs): variable (#1) at `let` only before '['|'{'|Ident; using (#2) at `await` only before 'using'; using (#2) at `using` only before '['|'{'|Ident; decl (#3) at `async` only before 'function'; decl (#3) at `import` only before '*'|'defer'|'source'|'{'|Ident|String
+  - two tokens (SECOND): variable (#1) only before '['|'{'|Ident; using (#2) only before '['|'using'|'{'|Ident; decl (#3) only before '('|'*'|'.'|'@'|'async'|'class'|…13
+  - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over statement (#0), variable (#1), using (#2), decl (#3)
 - Stmt / variable: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
 - Stmt / variable: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / if_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / if_: `opt('else' Stmt)`: one token; takes a mark: it can fail after `'else'`
-- Stmt / for_: `alt('(' ForHead ')' \| 'await' '(' ForAwaitHead ')')`: one token; takes a mark: branch 0: it can fail after `'('`; branch 1: it can fail after `'await'`
-- Stmt / while_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / do_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / switch_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / return_: `opt(sameLine Expr many((',' Expr)))`: by attempt; takes a mark: it can fail after `Expr`
-- Stmt / return_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / return_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / throw_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / throw_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / break_: `opt(sameLine !{'break'\|'case'\|'catch'\|'class'\|…32} Iden…`: by attempt
-- Stmt / break_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / continue_: `opt(sameLine !{'break'\|'case'\|'catch'\|'class'\|…32} Iden…`: by attempt
-- Stmt / continue_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / try_: `opt('catch' opt('(' CatchParameter ')') Block)`: one token; takes a mark: it can fail after `'catch'`
-- Stmt / try_: `opt('(' CatchParameter ')')`: one token; takes a mark: it can fail after `'('`
-- Stmt / try_: `opt('finally' Block)`: one token; takes a mark: it can fail after `'finally'`
-- Stmt / debugger_: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / with_: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
 - Stmt / using: `opt('await' sameLine)`: one token; takes a mark: it can fail after `'await'`
 - Stmt / using: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
 - Stmt / using: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
-- Stmt / expr: `many((',' Expr))`: one token; takes a mark: it can fail after `','`
-- Stmt / expr: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 
 ### Block
 
@@ -432,8 +451,8 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
   - `import`: two tokens: committed to importDeclaration (#10) (takes a mark: it can fail after `'import'`)
   - <Ident>, <HexNumber>, <OctalNumber>, <BinaryNumber>, <BigInt>, <Number>, <LegacyNumber>, <String> and 7 more: no candidate, the list fails
   - <Decorator>: two tokens: committed to decorated (#6) (takes a mark: it can fail after `(DecoratorExpr many(DecoratorExpr))`)
-  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; exportDefault (#7) at `export` only before 'default'; exportAll (#8) at `export` only before '*'; exportNamed (#9) at `export` only before '{'
-  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; class_ (#4) only before Ident; decorated (#6) only before '('|'.'|'@'|'async'|'class'|'export'|…4; exportDefault (#7) only before 'default'; exportAll (#8) only before '*'; exportNamed (#9) only before '{'; importDeclaration (#10) only before '*'|'defer'|'source'|'{'|Ident|String
+  - two tokens (pairs): function_ (#0) at `function` only before Ident; generator (#1) at `function` only before '*'; exportDeclaration (#5) at `export` only before '@'|'async'|'class'|'const'|'export'|'function'|…4; exportDefault (#7) at `export` only before 'default'; exportAll (#8) at `export` only before '*'; exportNamed (#9) at `export` only before '{'
+  - two tokens (SECOND): function_ (#0) only before Ident; generator (#1) only before '*'; asyncFunction (#2) only before 'function'; asyncGenerator (#3) only before 'function'; class_ (#4) only before Ident; exportDeclaration (#5) only before '@'|'async'|'class'|'const'|'export'|'function'|…4; decorated (#6) only before '('|'.'|'@'|'async'|'class'|'export'|…4; exportDefault (#7) only before 'default'; exportAll (#8) only before '*'; exportNamed (#9) only before '{'; importDeclaration (#10) only before '*'|'defer'|'source'|'{'|Ident|String
   - longest match: a candidate frame (a mark per new best) at the keys above where an `unless` candidate admits the token, over function_ (#0), generator (#1), asyncFunction (#2), asyncGenerator (#3), exportDeclaration (#5), decorated (#6) and 3 more
 - one token, no mark: 13 inline choices, 7 star, 6 opt, 1 sep
 - Decl / function_: `sep(Param, ',')`: by attempt
@@ -441,7 +460,9 @@ Per rule: its candidate lists (every key and what decides it), then the inline c
 - Decl / asyncFunction: `sep(Param, ',')`: by attempt
 - Decl / asyncGenerator: `sep(Param, ',')`: by attempt
 - Decl / class_: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
-- Decl / exportDeclaration: `alt(Decl \| &{'const'\|'let'\|'var'} Stmt)`: by attempt
+- Decl / exportDeclaration: `alt(Decl \| ('var'\|'let'\|'const') Binding many((',' Bind…`: one token; takes a mark: branch 1: it can fail after `('var'\|'let'\|'const')`
+- Decl / exportDeclaration: `many((',' Binding))`: one token; takes a mark: it can fail after `','`
+- Decl / exportDeclaration: `alt(';' \| !(sameLine) \| &{'}'})`: by attempt
 - Decl / decorated: `alt('class' !{'break'\|'case'\|'catch'\|'class'\|…32} Ident…`: by attempt; takes a mark: branch 0: it can fail after `'class'`
 - Decl / decorated: `opt('extends' ClassHeritage)`: one token; takes a mark: it can fail after `'extends'`
 - Decl / exportDefault: `alt('function' opt(!{'break'\|'case'\|'catch'\|'class'\|…32…`: by attempt; takes a mark: branch 0: it can fail after `'function'`; branch 1: it can fail after `'function'`; branch 2: it can fail after `'async'`; branch 3: it can fail after `'async'`; branch 4: it can fail after `many(DecoratorExpr)`; branch 5: it can fail after `many(DecoratorExpr)`; branch 6: it can fail after `Expr`

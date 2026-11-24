@@ -502,8 +502,11 @@ const p_tsDeparts: string[] = [];
       if (weAccept(code) !== want) p_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)}`);
     }
   }
+  // tsc's parser reads an empty declaration list there, as in `var;` (docs/CORRECTNESS.md): a recorded divergence.
+  const tsRecorded = ['export let\n;'];
   for (const code of [...new Set([...statementPositions.accept, ...statementPositions.reject, ...tsOnly])]) {
     const want = tsAccepts(code);
+    if (tsRecorded.includes(code)) { if (want === tsWe(code)) p_fail.push(`${JSON.stringify(code)} (TypeScript) agrees with tsc now: remove it from tsRecorded`); continue; }
     if (tsWe(code) !== want) p_fail.push(`we ${want ? 'reject' : 'accept'} ${JSON.stringify(code)} (TypeScript, tsc ${want ? 'accepts' : 'rejects'})`);
     if (statementPositions.accept.includes(code) !== want && !tsOnly.includes(code)) p_tsDeparts.push(code);
   }

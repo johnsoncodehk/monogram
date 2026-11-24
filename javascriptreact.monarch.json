@@ -359,7 +359,7 @@
         "identifier"
       ],
       [
-        "(?:let|const|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "(?:var|let|const|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
         "identifier"
       ],
       [
@@ -379,7 +379,7 @@
         "identifier"
       ],
       [
-        "(?:export)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "(?:export)(?![\\w$])(?!\\s*(?:\\*|@|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
       [
@@ -546,14 +546,14 @@
         }
       ],
       [
-        "(?:super|target|meta|source|from|as|class|try|finally|async|import|defer|function|get|set|accessor|let|const|var|using|if|for|while|switch|constructor|catch|with|static)(?![\\w$])(?=\\s*/)",
+        "(?:super|target|meta|source|from|as|class|try|finally|async|import|defer|function|get|set|accessor|var|let|const|using|if|for|while|switch|constructor|catch|with|export|static)(?![\\w$])(?=\\s*/)",
         {
           "token": "identifier",
           "switchTo": "@value"
         }
       ],
       [
-        "(?:super|new|target|meta|source|from|as|class|try|finally|extends|async|import|defer|function|get|set|accessor|let|const|var|using|if|for|while|switch|constructor|catch|with|static)(?![\\w$])(?=\\s*<)",
+        "(?:super|new|target|meta|source|from|as|class|try|finally|extends|async|import|defer|function|get|set|accessor|var|let|const|using|if|for|while|switch|constructor|catch|with|export|static)(?![\\w$])(?=\\s*<)",
         {
           "token": "identifier",
           "switchTo": "@value"
@@ -646,14 +646,6 @@
               "token": "keyword",
               "switchTo": "@root"
             },
-            "let": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "const": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
             "var": {
               "token": "keyword",
               "switchTo": "@root"
@@ -719,6 +711,14 @@
               "switchTo": "@root"
             },
             "with": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "let": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "const": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1608,8 +1608,6 @@
             "function": "keyword",
             "get": "keyword",
             "set": "keyword",
-            "let": "keyword",
-            "const": "keyword",
             "var": "keyword",
             "if": "keyword",
             "else": "keyword",
@@ -1627,6 +1625,8 @@
             "finally": "keyword",
             "debugger": "keyword",
             "with": "keyword",
+            "let": "keyword",
+            "const": "keyword",
             "using": "keyword",
             "of": "keyword",
             "case": "keyword",
