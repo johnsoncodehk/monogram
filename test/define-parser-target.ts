@@ -61,7 +61,8 @@ for (const f of SRC_FILES) {
   if (layer !== '.' && !may) { fail(`src/${f}: a directory that is not a layer (${layer})`); continue; }
   if (!may) continue;
   const text = readFileSync(SRC_DIR + f, 'utf8');
-  for (const m of text.matchAll(/(?:from|import\() *'(\.[^']*)'/g)) {
+  // every form that names a module: `from '…'`, a bare `import '…'`, `import('…')`; either quote
+  for (const m of text.matchAll(/(?:\bfrom|\bimport)\s*\(?\s*['"](\.[^'"]*)['"]/g)) {
     const target = posix.normalize(posix.join(posix.dirname(f), m[1]!));
     if (!may.includes(layerOf(target))) fail(`layer rule: src/${f} -> ${m[1]} (${layer} may not import ${layerOf(target)})`);
   }
