@@ -543,12 +543,11 @@ const y_tsDeparts: string[] = [];
   const tsParse = createParser((await import('../typescript.ts')).default).parse;
   const tsWe = (code: string) => { try { tsParse(code); return true; } catch (e) { if (isInputError(e)) return false; throw e; } };
   const tsAccepts = (code: string) => !((ts.createSourceFile('t.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS) as any).parseDiagnostics?.length);
-  // TypeScript's grammar is unchanged by `when` (step 1 gates javascript.ts only): tsc's parser
-  // reads `await` as the operator outside async functions (its error is the checker's) and
-  // refuses `yield * x = 1`, where typescript.ts reserves `await` in a nested function or arrow
-  // body and reads `yield` as the operator. Recorded divergences, owed to the TypeScript contexts
-  // step (DESIGN: step 4, `Type` resets and tsc's await / yield reading).
-  const tsRecorded = ['yield * x = 1', 'async function f() { () => await a; }', 'function f() { await x; }', 'async function f() { function g() { await a; } }', '() => await a'];
+  // TypeScript's grammar is unchanged by `when` (step 1 gates javascript.ts only; TypeScript keeps
+  // tsc's reading, `await` an operator everywhere): tsc's parser refuses `yield * x = 1` outside a
+  // generator, where typescript.ts reads `yield` as the operator everywhere. A recorded
+  // divergence, owed to the TypeScript contexts step (the declared-contexts design, step 4).
+  const tsRecorded = ['yield * x = 1'];
   for (const [want, codes] of [[true, contexts.accept], [false, contexts.reject]] as const) {
     for (const code of codes) {
       if (acornAccepts(code) !== want) y_fail.push(`acorn ${want ? 'rejects' : 'accepts'} ${JSON.stringify(code)}: fix the case`);
