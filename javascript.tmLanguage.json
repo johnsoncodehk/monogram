@@ -232,7 +232,7 @@
   "repository": {
     "regex-literal-prefix-ops": {
       "name": "string.regexp.js",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~@(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*([!](?:\\s*[!])*)\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.logical.prefix.js"
@@ -1033,7 +1033,7 @@
     },
     "decorator": {
       "name": "entity.name.function.decorator.js",
-      "match": "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?"
+      "match": "@(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*(?![a-zA-Z0-9_$\\\\-￿])"
     },
     "privatefield": {
       "name": "variable.other.property.js",
@@ -1929,7 +1929,7 @@
       "name": "punctuation.bracket.curly.js"
     },
     "punctuation": {
-      "match": "\\?|:",
+      "match": "@|\\?|:",
       "name": "punctuation.js"
     },
     "expr-scope-keyword-control-loop": {
@@ -2190,7 +2190,7 @@
     },
     "regex": {
       "name": "string.regexp.js",
-      "begin": "(?:(?<=[=|\\^&<>+\\-*%~(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
+      "begin": "(?:(?<=[=|\\^&<>+\\-*%~@(,.\\[?:{;])|(?<=\\binstanceof)(?<!\\.instanceof|\\?\\.instanceof)|(?<=\\bin)(?<!\\.in|\\?\\.in)|(?<=\\bnew)(?<!\\.new|\\?\\.new)|(?<=\\bextends)(?<!\\.extends|\\?\\.extends)|(?<=\\byield)(?<!\\.yield|\\?\\.yield)|(?<=\\belse)(?<!\\.else|\\?\\.else)|(?<=\\bdo)(?<!\\.do|\\?\\.do)|(?<=\\breturn)(?<!\\.return|\\?\\.return)|(?<=\\bthrow)(?<!\\.throw|\\?\\.throw)|(?<=\\bof)(?<!\\.of|\\?\\.of)|(?<=\\bcase)(?<!\\.case|\\?\\.case)|(?<=\\bexport)(?<!\\.export|\\?\\.export)|(?<=\\bdefault)(?<!\\.default|\\?\\.default)|(?<=\\btypeof)(?<!\\.typeof|\\?\\.typeof)|(?<=\\bvoid)(?<!\\.void|\\?\\.void)|(?<=\\bdelete)(?<!\\.delete|\\?\\.delete)|(?<=\\bawait)(?<!\\.await|\\?\\.await)|(?<=^))\\s*(?:((?:/\\*\\*(?!/)[\\s\\S]*?\\*/|/\\*[\\s\\S]*?\\*/)\\s*))?(/)(?![*/])",
       "beginCaptures": {
         "1": {
           "name": "comment.block.js"

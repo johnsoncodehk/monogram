@@ -109,7 +109,7 @@ module.exports = grammar({
   rules: {
     program: $ => repeat(choice($.decl, $.stmt)),
 
-    decorator_expr: $ => seq($.decorator, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))),
+    decorator_expr: $ => choice(seq("@", "(", $.expr, repeat(seq(",", $.expr)), ")"), seq(choice($.decorator, seq("@", reserved("reserved_1", $.ident))), repeat(seq(".", choice(reserved("unreserved", $.ident), $.private_field))), optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
 
     expr: $ => choice(
       prec.right(2, seq($.expr, field('operator', choice("=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=")), $.expr)),
@@ -255,7 +255,7 @@ module.exports = grammar({
 
     string: $ => token(/"(?:[^"\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|\r|[^ux\r]))*"|'(?:[^'\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|\r|[^ux\r]))*'/),
 
-    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})|\.)*)?/),
+    decorator: $ => token(/@(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 
     private_field: $ => token(/#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 
