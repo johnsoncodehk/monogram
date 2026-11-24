@@ -1,4 +1,4 @@
-import type { LedPrec, Grammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, TargetContext } from './types.ts';
+import type { LedPrec, Grammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, AssignTargetContext } from './types.ts';
 import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
 import { whenTest } from './grammar-utils.ts';
 import {
@@ -42,7 +42,7 @@ interface TokenOptions {
   escapeValid?: TokenPattern;
   regex?: boolean;
   embed?: string;
-  // ── Lexer hints (keep gen-parser language-agnostic; all optional) ──
+  // ── Lexer hints (keep interpreter language-agnostic; all optional) ──
   identifier?: boolean;
   // A token that is a fixed literal prefix followed by an IdentifierName (e.g. JS private
   // names, `#x`). Declares the prefix so the lexer's Unicode ID_Start/ID_Continue fallback
@@ -126,7 +126,7 @@ interface SameLineMarker { readonly __kind: 'sameLine' }
 interface NoCommentMarker { readonly __kind: 'noCommentBefore' }
 interface NoMultilineFlowMarker { readonly __kind: 'noMultilineFlowBefore' }
 interface NotLeftLeafMarker { readonly __kind: 'notLeftLeaf'; readonly words: string[] }
-interface TargetMarker { readonly __kind: 'target'; readonly ctx: string }
+interface AssignTargetMarker { readonly __kind: 'assignTarget'; readonly ctx: string }
 interface PrefixSlot {
   readonly __kind: 'prefix';
   (...ops: (string | WhenNode)[]): PrefixOps;
@@ -135,12 +135,12 @@ interface PostfixSlot {
   readonly __kind: 'postfix';
   (...ops: string[]): PostfixOps;
 }
-interface PrefixOps { readonly __kind: 'prefix-ops'; ops: (string | WhenNode)[]; requireTarget?: boolean; capped?: boolean }
-interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireTarget?: boolean }
+interface PrefixOps { readonly __kind: 'prefix-ops'; ops: (string | WhenNode)[]; requireAssignTarget?: boolean; capped?: boolean }
+interface PostfixOps { readonly __kind: 'postfix-ops'; ops: string[]; requireAssignTarget?: boolean }
 interface NoUnaryLhsOps { readonly __kind: 'no-unary-lhs-ops'; ops: string[] }
-interface LhsTargetOps { readonly __kind: 'lhs-target-ops'; ops: string[]; ctx?: string }
+interface LhsAssignTargetOps { readonly __kind: 'lhs-assign-target-ops'; ops: string[]; ctx?: string }
 
-type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker | NotLeftLeafMarker | TargetMarker;
+type Marker = OpMarker | PrefixSlot | PostfixSlot | SameLineMarker | NoCommentMarker | NoMultilineFlowMarker | NotLeftLeafMarker | AssignTargetMarker;
 
 export const op: OpMarker = { __kind: 'op' };
 
@@ -167,23 +167,23 @@ export const noMultilineFlowBefore: NoMultilineFlowMarker = { __kind: 'noMultili
 // rule that a qualified type name's root is an IdentifierReference, so the keyword/literal types
 // `void`/`null`/`true`/`false`/`this` are not `.`-qualifiable (`void.x` has no parse tree) while an
 // identifier-rooted type (`A.B`, `undefined.x`, `number.x`) is. Mirrors the AssignmentTargetType gate
-// (`lhsTarget`/`prefixTarget`), reading the SAME head leaf but predicated on TEXT membership.
+// (`lhsAssignTarget`/`prefixAssignTarget`), reading the SAME head leaf but predicated on TEXT membership.
 export function notLeftLeaf(...words: string[]): NotLeftLeafMarker {
   return { __kind: 'notLeftLeaf', words };
 }
 
-// Zero-width DECLARED ASSIGNMENT-TARGET check (Grammar.targets): it matches iff the node that
-// ends IMMEDIATELY BEFORE it passes the target context `ctx` (`[StarExpressions, target('star'),
+// Zero-width DECLARED ASSIGNMENT-TARGET check (Grammar.assignTargets): it matches iff the node that
+// ends IMMEDIATELY BEFORE it passes the target context `ctx` (`[StarExpressions, assignTarget('star'),
 // '=', …]`): a node passes iff its arm is one of the context's leaves, or one of its containers
 // whose named children all pass (a unit node, one child and nothing else, is its child). So a head
 // is parsed once, as an expression, and checked only where the `=` tail is taken.
-export function target(ctx: string): TargetMarker {
-  return { __kind: 'target', ctx };
+export function assignTarget(ctx: string): AssignTargetMarker {
+  return { __kind: 'assignTarget', ctx };
 }
 
-// Infix operators whose LEFT operand must pass the declared target context `ctx` (as `target(ctx)`
-// after it), in place of `lhsTarget`'s built-in shallow check: ECMAScript `=` takes a pattern.
-export const targetOps = (ctx: string, ...ops: string[]): LhsTargetOps => ({ __kind: 'lhs-target-ops' as const, ops, ctx });
+// Infix operators whose LEFT operand must pass the declared target context `ctx` (as `assignTarget(ctx)`
+// after it), in place of `lhsAssignTarget`'s built-in shallow check: ECMAScript `=` takes a pattern.
+export const assignTargetOps = (ctx: string, ...ops: string[]): LhsAssignTargetOps => ({ __kind: 'lhs-assign-target-ops' as const, ops, ctx });
 
 export const prefix: PrefixSlot = Object.assign(
   (...ops: (string | WhenNode)[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops }),
@@ -209,19 +209,19 @@ export const noUnaryLhs = (...ops: string[]): NoUnaryLhsOps => ({ __kind: 'no-un
 // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. This is ECMAScript's
 // AssignmentTargetType, enforced at PARSE time. A general, declarable property; the
 // engine enforces it generically via the operand node's outermost form (head/tail leaf).
-export const lhsTarget = (...ops: string[]): LhsTargetOps => ({ __kind: 'lhs-target-ops' as const, ops });
+export const lhsAssignTarget = (...ops: string[]): LhsAssignTargetOps => ({ __kind: 'lhs-assign-target-ops' as const, ops });
 
 // Postfix operators whose OPERAND must be a valid assignment target (LHS), same shape
-// rule as `lhsTarget` above — e.g. JS postfix `++`/`--`: `x++` is fine but `-x++` parses
+// rule as `lhsAssignTarget` above — e.g. JS postfix `++`/`--`: `x++` is fine but `-x++` parses
 // as `-(x++)`, and `++x++`, `x++ ++` are syntax errors (the operand `++x` / `x++` is not
 // a LeftHandSideExpression). Distinct from `postfix(...)` (no operand-shape constraint).
-export const postfixTarget = (...ops: string[]): PostfixOps => ({ __kind: 'postfix-ops' as const, ops, requireTarget: true });
+export const postfixAssignTarget = (...ops: string[]): PostfixOps => ({ __kind: 'postfix-ops' as const, ops, requireAssignTarget: true });
 
 // Prefix operators whose OPERAND must be a valid assignment target (LHS) — e.g. JS prefix
 // `++`/`--` (the update prefixes): `++x`, `++x.y` are fine but `++-x`, `++ ++x`, `++x--`
 // are syntax errors. Distinct from `prefix(...)` (the pure-unary `-`/`!`/`typeof`/… take
 // ANY operand, including an update: `-x++`, `void ++x` are fine).
-export const prefixTarget = (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops, requireTarget: true });
+export const prefixAssignTarget = (...ops: string[]): PrefixOps => ({ __kind: 'prefix-ops' as const, ops, requireAssignTarget: true });
 
 // Prefix operators CAPPED at their own level: such an operator may begin an operand only where an
 // operator of its level or a looser one could stand, never as the operand of a tighter operator.
@@ -488,7 +488,7 @@ interface PrecLevelDef {
   operators: PrecOperator[];
 }
 
-type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps | LhsTargetOps;
+type OpSpec = string | PrefixOps | PostfixOps | NoUnaryLhsOps | LhsAssignTargetOps;
 
 function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
   const result: PrecOperator[] = [];
@@ -500,12 +500,12 @@ function buildPrecOps(ops: OpSpec[]): PrecOperator[] {
         // `when(cond, 'op')` among the operators: the operator exists only where cond holds.
         if (v instanceof WhenNode && (v.items.length !== 1 || typeof v.items[0] !== 'string')) throw new Error(`prefix(when(${JSON.stringify(v.cond)}, ...)): a gated operator is one literal`);
         const value = v instanceof WhenNode ? v.items[0] as string : v;
-        result.push({ value, position: 'prefix', requireTarget: o.requireTarget, ...(o.capped ? { capped: true } : {}), ...(v instanceof WhenNode ? { when: v.cond } : {}) });
+        result.push({ value, position: 'prefix', requireAssignTarget: o.requireAssignTarget, ...(o.capped ? { capped: true } : {}), ...(v instanceof WhenNode ? { when: v.cond } : {}) });
       }
     } else if (o.__kind === 'postfix-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'postfix', requireTarget: o.requireTarget });
-    } else if (o.__kind === 'lhs-target-ops') {
-      for (const v of o.ops) result.push({ value: v, position: 'infix', ...(o.ctx !== undefined ? { targetCtx: o.ctx } : { requireTarget: true }) });
+      for (const v of o.ops) result.push({ value: v, position: 'postfix', requireAssignTarget: o.requireAssignTarget });
+    } else if (o.__kind === 'lhs-assign-target-ops') {
+      for (const v of o.ops) result.push({ value: v, position: 'infix', ...(o.ctx !== undefined ? { assignTargetCtx: o.ctx } : { requireAssignTarget: true }) });
     } else {
       for (const v of o.ops) result.push({ value: v, position: 'infix', noUnaryLhs: true });
     }
@@ -650,7 +650,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   if (marker.__kind === 'noCommentBefore') return { type: 'noCommentBefore' };
   if (marker.__kind === 'noMultilineFlowBefore') return { type: 'noMultilineFlowBefore' };
   if (marker.__kind === 'notLeftLeaf') return { type: 'notLeftLeaf', words: marker.words };
-  if (marker.__kind === 'target') return { type: 'target', ctx: marker.ctx };
+  if (marker.__kind === 'assignTarget') return { type: 'assignTarget', ctx: marker.ctx };
   throw new Error(`Unknown element: ${JSON.stringify(el)}`);
 }
 
@@ -679,7 +679,7 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   tokens: Record<string, TokenRef>;
   prec?: PrecLevelDef[];
   ledPrec?: LedPrec[];
-  targets?: Record<string, TargetContext>;   // declared assignment-target contexts (Grammar.targets)
+  assignTargets?: Record<string, AssignTargetContext>;   // declared assignment-target contexts (Grammar.assignTargets)
   composeGt?: true;       // the lexer scans `>` alone and the parser composes `>`-led operators (Grammar.composeGt)
   composeLt?: true;       // likewise for `<` and the `<`-led operators (Grammar.composeLt)
   rules: R;
@@ -811,7 +811,7 @@ export function defineGrammar<const R extends Record<string, RuleRef>>(config: G
   });
   const entryRule = config.entry ? names.get(config.entry) : undefined;   // `entry` may be omitted: findEntryRule then takes the last rule
   if (config.entry && !entryRule) throw new Error('`entry` references an undeclared rule');
-  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, ...(config.composeGt ? { composeGt: true as const } : {}), ...(config.composeLt ? { composeLt: true as const } : {}), ...(config.targets ? { targets: config.targets } : {}), rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
+  const grammar = { name: config.name, scopeName: config.scopeName, tokens, precs, ledPrecs: config.ledPrec, ...(config.composeGt ? { composeGt: true as const } : {}), ...(config.composeLt ? { composeLt: true as const } : {}), ...(config.assignTargets ? { assignTargets: config.assignTargets } : {}), rules, entryRule, scopeOverrides, contextualScopes, markup: config.markup, elements: config.elements, indent: config.indent, newline: config.newline, expressionRule: config.expression ? names.get(config.expression) : undefined, aliasScopes: config.aliasScopes, canonicalRepoNames: config.canonicalRepoNames, manifest: config.manifest, treeSitterConflicts: config.treeSitterConflicts, treeSitterContextualNames: config.treeSitterContextualNames };
 
   // Nullable NON-ENTRY rules are a definition error: the engine never returns an empty match for a
   // rule, so such a rule's empty case is unreachable and references to it fail silently where the

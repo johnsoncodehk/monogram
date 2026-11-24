@@ -1,6 +1,6 @@
 // grammar-analysis.ts — the STRUCTURAL static analysis both parser engines derive from a
-// Grammar, single-sourced. createParser (gen-parser.ts, the runtime interpreter / oracle)
-// and emitParser (emit-parser.ts, the standalone compiler) must agree on precedence/binding
+// Grammar, single-sourced. createParser (interpreter.ts, the runtime interpreter / oracle)
+// and emitParser (target-js.ts, the standalone compiler) must agree on precedence/binding
 // power, NUD/LED (Pratt) and atom/continuation (left-rec) classification, nullability, and —
 // critically — what counts as left-recursive. These are pure functions of the grammar, so a
 // second hand-written copy is not an independent oracle, only a place for the two to DRIFT.
@@ -22,8 +22,8 @@ export interface OpInfo {
   rbp: number;
   assoc: 'left' | 'right' | 'none';
   position: 'infix' | 'prefix' | 'postfix';
-  requireTarget?: boolean;
-  targetCtx?: string;   // the left operand must pass this declared target context (PrecOperator.targetCtx)
+  requireAssignTarget?: boolean;
+  assignTargetCtx?: string;   // the left operand must pass this declared target context (PrecOperator.assignTargetCtx)
   // A capped prefix operator (PrecOperator.capped): it begins an operand only while minBp < capBp
   // (its own level's binding power).
   capBp?: number;
@@ -154,25 +154,25 @@ export function analyzeGrammar(grammar: Grammar) {
   const noUnaryLhsOps = new Set<string>();
   const postfixOpValues = new Set<string>();
   // Infix/prefix/postfix ops whose operand must be a valid assignment target (see
-  // PrecOperator.requireTarget).
-  const requireTargetOps = new Set<string>();
+  // PrecOperator.requireAssignTarget).
+  const requireAssignTargetOps = new Set<string>();
   for (let i = 0; i < grammar.precs.length; i++) {
     const level = grammar.precs[i];
     const bp = (i + 1) * 2;
     for (const op of level.operators) {
       if (op.position === 'prefix') {
-        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireTarget: op.requireTarget, ...(op.capped ? { capBp: bp } : {}), ...(op.when !== undefined ? { when: whenTest(op.when) } : {}) });
-        if (op.requireTarget) requireTargetOps.add(op.value);
+        prefixOps.set(op.value, { lbp: 0, rbp: level.assoc === 'right' ? bp - 1 : bp, assoc: level.assoc, position: 'prefix', requireAssignTarget: op.requireAssignTarget, ...(op.capped ? { capBp: bp } : {}), ...(op.when !== undefined ? { when: whenTest(op.when) } : {}) });
+        if (op.requireAssignTarget) requireAssignTargetOps.add(op.value);
       } else if (op.position === 'postfix') {
         postfixOpValues.add(op.value);
-        opTable.set(op.value, { lbp: bp, rbp: 0, assoc: level.assoc, position: 'postfix', requireTarget: op.requireTarget });
-        if (op.requireTarget) requireTargetOps.add(op.value);
+        opTable.set(op.value, { lbp: bp, rbp: 0, assoc: level.assoc, position: 'postfix', requireAssignTarget: op.requireAssignTarget });
+        if (op.requireAssignTarget) requireAssignTargetOps.add(op.value);
       } else {
         const lbp = bp;
         const rbp = level.assoc === 'right' ? bp - 1 : bp;
-        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget, ...(op.targetCtx !== undefined ? { targetCtx: op.targetCtx } : {}) });
+        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireAssignTarget: op.requireAssignTarget, ...(op.assignTargetCtx !== undefined ? { assignTargetCtx: op.assignTargetCtx } : {}) });
         if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
-        if (op.requireTarget) requireTargetOps.add(op.value);
+        if (op.requireAssignTarget) requireAssignTargetOps.add(op.value);
       }
     }
   }
@@ -446,7 +446,7 @@ export function analyzeGrammar(grammar: Grammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -562,7 +562,7 @@ export function analyzeGrammar(grammar: Grammar) {
         if (sec.len1) acc.add(e.delimiter);
         return { s: acc, len1: sec.len1 };
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
         return { s: new Set(), len1: false };
       case 'op': case 'prefix': case 'postfix':
         return { s: new Set(), len1: true };
@@ -645,7 +645,7 @@ export function analyzeGrammar(grammar: Grammar) {
         for (const [k, x] of m) addSec(out, k, extend(x, new Set([e.delimiter]), true));
         return out;
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Map();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget': return new Map();
       default: return null;
     }
   }
@@ -703,7 +703,7 @@ export function analyzeGrammar(grammar: Grammar) {
 
   return {
     tokenNames,
-    opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
+    opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireAssignTargetOps,
     ledPrecByConnector, binaryConnectors, connectorLbp, nudCapOf, atLevelBp,
     prattRules, classifyAlts, classifyLeftRec,
     nullableRules, exprNullable, leftRuleRefs, altsOf, itemsOf,

@@ -72,7 +72,7 @@ export const EXACT_ASSERTION_CLASSES: readonly AssertionClass[] = ['lowered', 'v
 export interface AssertionRecord {
   /** grammar rule whose tree holds the assertion */
   rule: string;
-  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf' | 'target';
+  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf' | 'assignTarget';
   cls: AssertionClass;
   /** the assertion, written compactly (`not("{" | Ident)`), cut at 160 characters */
   text: string;
@@ -806,7 +806,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
     case 'noCommentBefore':
     case 'noMultilineFlowBefore':
     case 'notLeftLeaf':
-    case 'target':
+    case 'assignTarget':
       // A zero-width assertion consumes nothing and a CFG has no lookahead, so it renders to a
       // no-op. Never silently: classifyAssertions recorded it with whether the drop is exact (the
       // `assertions` ledger of the output); one it did not reach is a generator defect.
@@ -982,7 +982,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
 
 /**
  * Where the readings of a Pratt rule overlap, the interpreter's order, rendered so tree-sitter keeps
- * the same reading (gen-parser.ts prattCore). Its LED loop tries the continuations in grammar order
+ * the same reading (interpreter.ts prattCore). Its LED loop tries the continuations in grammar order
  * before any operator, and the first that matches wins; its NUD takes the longest match, an
  * alternative inside an arm the first that matches. Three facts follow:
  * - `yields`: a continuation whose consuming items are a strict prefix of an EARLIER continuation's
@@ -1530,7 +1530,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
 
   const classify = (e: RuleExpr, P: Set<string>, next: RuleExpr | undefined): AssertionClass => {
     if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
-    if (e.type === 'notLeftLeaf' || e.type === 'target') return 'left-context';   // a predicate over the node to its left
+    if (e.type === 'notLeftLeaf' || e.type === 'assignTarget') return 'left-context';   // a predicate over the node to its left
     if (e.type !== 'not') throw new Error(`classifyAssertions: ${e.type} is not an assertion`);
     const body = treeSitterView(e.body);
     if (body.type === 'sameLine') return 'scanner';                      // not(sameLine): a line terminator here
@@ -2841,7 +2841,7 @@ function seqHasParenExpr(alt: RuleExpr, selfName: string): boolean {
 /**
  * Plan for an interpolated-template token. The single regex token (`Template`) is
  * re-expressed as a tree-sitter RULE so `${ … }` holes re-enter the expression
- * grammar, mirroring how gen-parser.ts/emit-lexer.ts split a template into
+ * grammar, mirroring how interpreter.ts/emit-lexer.ts split a template into
  * head/middle/tail spans around interpolation holes. All delimiters are DERIVED
  * from the token's `template` hint — nothing here is TS-specific.
  */

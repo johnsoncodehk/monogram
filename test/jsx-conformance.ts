@@ -5,7 +5,7 @@
 //   2. plain JavaScript still parses under the .jsx grammar — additivity gate;
 //   3. TypeScript-only syntax (type annotations, generics) is REJECTED — .jsx is
 //      JavaScript, so a type layer must NOT leak in via the shared JSX module.
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import ts from 'tsc-oracle';
 
 const grammar = (await import('../javascriptreact.ts')).default;

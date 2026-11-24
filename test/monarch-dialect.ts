@@ -24,7 +24,7 @@
 //                                          class, against test/tm-monarch-agreement.json (tier ci)
 import { readFileSync } from 'node:fs';
 import { generateMonarch, type MonarchLanguage, type MonarchRule, type MonarchAction } from '../src/gen-monarch.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import tsx from '../typescriptreact.ts';
 import jsx from '../javascriptreact.ts';

@@ -1,5 +1,5 @@
 // planShape: a shape (src/shape2-eval.ts `defineShape`) compiled against the portable engine's IR
-// (src/emit-portable.ts) into what a printer needs to emit a parser that builds the shape's values
+// (src/parser-ir.ts) into what a printer needs to emit a parser that builds the shape's values
 // DIRECTLY, in the one parse, with no CST: per (rule, engine arm) a CONSTRUCT plan (an algo-ir Fn,
 // src/algo-ir.ts "Shape values") that runs where the engine accepts that arm (RuleLowering.accept /
 // cand / commit, PrattLowering's nud / led / operator sites) in place of the CST builder's node, and
@@ -49,7 +49,7 @@
 // equation at a call site that reads more than a constant or a copy.
 import { ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 import type { Expr, Fn, Stmt } from './algo-ir.ts';
-import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './emit-portable.ts';
+import type { ParserIR, PrattRule, RdRule, RuleIR, ShapeInhVal, Step } from './parser-ir.ts';
 import type { RuleExpr } from './types.ts';
 import { cardOf, type ArmInfo, type ScopeInfo, type Shape, type Slot } from './shape2-eval.ts';
 import { kindsOf } from './shape-types.ts';

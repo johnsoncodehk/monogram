@@ -1,7 +1,7 @@
 // Gate: the shared algorithm core is target-language-agnostic and the portable targets register
 // themselves independently.
 //
-//   1. core modules (algo-ir / relex-family / lex-family / define-target) import no target module, name no
+//   1. core modules (algo-ir / relex-family / lex-family / define-parser-target) import no target module, name no
 //      target, keep no host switch, and none of their string literals carries punctuation —
 //      every operator, delimiter, comment marker and keyword comes from a target's Lowering
 //      (point 4 prints the families through a non-C lowering);
@@ -20,8 +20,8 @@ import { QUICK } from './check-targets.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
-import { defineParserTarget, registeredTargets } from '../src/define-target.ts';
-import { buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, portableIR } from '../src/emit-portable.ts';
+import { defineParserTarget, registeredTargets } from '../src/define-parser-target.ts';
+import { buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, portableIR } from '../src/parser-ir.ts';
 import { planShape } from '../src/shape-plan.ts';
 import namedcalcShape from './fixtures/shape-namedcalc.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
@@ -35,7 +35,7 @@ const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url),
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 
-const CORE = ['algo-ir.ts', 'relex-family.ts', 'lex-family.ts', 'reuse-family.ts', 'define-target.ts'];
+const CORE = ['algo-ir.ts', 'relex-family.ts', 'lex-family.ts', 'reuse-family.ts', 'define-parser-target.ts'];
 const TARGETS = [
   { file: 'target-ts.ts', target: tsTarget, name: 'typescript' },
   { file: 'target-go.ts', target: goTarget, name: 'go' },
@@ -69,7 +69,7 @@ for (const f of CORE) {
 }
 
 const defineCalls = new Map<string, number>();
-for (const f of ['emit.ts', 'emit-portable.ts', 'emit-parser.ts', ...CORE, ...TARGETS.map((t) => t.file)]) {
+for (const f of ['emit.ts', 'parser-ir.ts', 'target-js.ts', ...CORE, ...TARGETS.map((t) => t.file)]) {
   const n = (code(src(f)).match(/(?<!function )\bdefineParserTarget\(/g) ?? []).length;
   if (n) defineCalls.set(f, n);
 }

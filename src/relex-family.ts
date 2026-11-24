@@ -35,7 +35,7 @@
 // only the unchanged text after them, so resync needs only the lexer state to match. Nothing of
 // this is recorded by the lexer: the lexers pay nothing for it.
 
-import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids, tplEndKids } from './emit-portable.ts';
+import { type ParserIR, buildLexIdPlan, kidOf, lidOf, regionKids, tplEndKids } from './parser-ir.ts';
 import { type LookPlan, lexLookPlan } from './lex-family.ts';
 import type { CSet } from './lex-match-plan.ts';
 import { type CharSet, type Expr, type Fn, type ListTy, type Lowering, type MetaFlag, type MetaInt, type RecordDecl, type Stmt, type TokInt, type Ty, printFns } from './algo-ir.ts';
@@ -57,7 +57,7 @@ export interface RelexMode {
   elements: boolean;
   // Raw-text elements: the lexer keeps each element frame's tagOpen token index (tagAt).
   raw: boolean;
-  // The kinds of the region's own tokens: they carry no literal id (emit-portable.ts regionKids).
+  // The kinds of the region's own tokens: they carry no literal id (parser-ir.ts regionKids).
   regionKids: number[];
   kidNl: number;
   // The kinds of a template literal that ends at its closing delimiter (the whole literal and its

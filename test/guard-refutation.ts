@@ -1,8 +1,8 @@
 // Gate: A GUARD ONLY REFUSES WHAT CANNOT MATCH. Every portable target skips a longest-match
 // candidate (an rd rule's alternative, a Pratt NUD sequence or capped arm) when the token at its
-// start fails its Guard (emit-portable.ts Guard): outside its `first` set, or failing one of its
+// start fails its Guard (parser-ir.ts Guard): outside its `first` set, or failing one of its
 // `lead` tests — the candidate's own leading one-token tests (test/guard-lead.ts proves those
-// equal), and the refusal by the complement of its FIRST over concrete symbols (emit-portable.ts,
+// equal), and the refusal by the complement of its FIRST over concrete symbols (parser-ir.ts,
 // "Refusal by the complement of FIRST"). A wrong refusal would change the language silently, and
 // the interpreter, which takes no such guard, would not notice unless a corpus input happened to
 // reach it.
@@ -18,10 +18,10 @@
 //
 //   node test/guard-refutation.ts
 import { readdirSync } from 'node:fs';
-import { portableIR, buildLexIdPlan, type ParserIR, type Guard, type TokenSet } from '../src/emit-portable.ts';
+import { portableIR, buildLexIdPlan, type ParserIR, type Guard, type TokenSet } from '../src/parser-ir.ts';
 import { analyzeGrammar, hasMarker } from '../src/grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { collectLiterals } from '../src/grammar-utils.ts';
 import type { Grammar, RuleExpr, RuleDecl } from '../src/types.ts';
 

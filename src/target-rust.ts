@@ -1,4 +1,4 @@
-// The Rust Target for emit-portable. Renders the same language-agnostic ParserIR as
+// The Rust Target for parser-ir. Renders the same language-agnostic ParserIR as
 // tsTarget/goTarget into a self-contained Rust program (no external crates — the lexer is
 // regex-free, so it compiles with rustc alone, no Cargo/network). Its CST JSON is checked
 // against the interpreter on accept/reject parity, so `emitParser(grammar, rustTarget)` is a
@@ -11,11 +11,11 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
-import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type AssignTargetsIR } from './parser-ir.ts';
+import type { ArmForm } from './assign-targets.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
-import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
+import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { beginRsShape, RS_SLOT, rsIsPlanFn, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
@@ -47,12 +47,12 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
-// A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
+// A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
   g === null ? [] : [...(keyed || g.first === null ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : []), ...g.lead.map((l) => leadRs(l, t, recv)),
     ...(g.pairs ?? []).map((x) => `${recv}.pair_in(${x.when.id}, &${t}, ${x.second.id})`)];
-// A guard's lead test (emit-portable.ts LeadTest) on the buffered token t.
+// A guard's lead test (parser-ir.ts LeadTest) on the buffered token t.
 const leadRs = (l: LeadTest, t: string, recv: string): string => {
   const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx & ${CTX_WORD_BITS} != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
   return l.is ? inS : `!${inS}`;
@@ -79,7 +79,7 @@ const keysRs = (keys: string[]): string => {
   }
   return out.join(' | ');
 };
-// A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
+// A Commit's switch (parser-ir.ts commitWalk) over the buffered token t.
 const commitSwRs: CommitLowering = {
   sw: (by, cases, dflt) => `        match t.${by} {\n${cases.map((c) => `        ${keysRs(c.keys)} => {${c.stmt ? `\n${c.stmt}\n        ` : ''}}`).join('\n')}\n        _ => {${dflt ? `\n${dflt}\n        ` : ''}}\n        }`,
   ifAll: ifRs,
@@ -129,7 +129,7 @@ macro_rules! cand {
         if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more $ck = $p.b.checkpoint(); } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
     };
 }
-/// A committed candidate (emit-portable.ts Commit; target-rust.ts commitBodyRs): \`$c\` from here;
+/// A committed candidate (parser-ir.ts Commit; target-rust.ts commitBodyRs): \`$c\` from here;
 /// matched (\`undo_ne\`: and past its start), node \`$rid\` is returned after \`$set\` (a NUD's form, tail
 /// and capped flag), else what it did is undone to the checkpoint (\`clean\`: a clean failure left
 /// nothing to undo, so none is taken) and the statement after the macro runs.
@@ -1179,7 +1179,7 @@ const aid = (rule: string, key: string, rid: number): number => (SHAPE_RS ? SHAP
 // a const argument: the builder's finish_arm::<id> calls that arm's construct plan directly (no
 // dispatch on the arm at run time; rust-shape.ts).
 const finRs = (id: number | string, rest: string, p = 'self'): string => (SHAPE_RS ? `${p}.fin::<{ ${id} }>(${rest})` : `${p}.finish(${id}, ${rest})`);
-// The step walk's Rust spelling (emit-portable.ts, StepLowering), over the receiver `recv`: `self`
+// The step walk's Rust spelling (parser-ir.ts, StepLowering), over the receiver `recv`: `self`
 // at a rule's top level (children accumulate on `self.scratch`), `p` inside a closure or a method
 // that took `let p = self`; `r`: in recognize form (ParserIR.forms), advancing and building
 // nothing. Rust: a body is a non-capturing closure `|p| …` (a `fn(&mut Parser<B>) -> bool`, so no
@@ -1197,17 +1197,17 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    // Declared target contexts (declared-targets.ts): computed only in the building form (a
+    // Declared target contexts (assign-targets.ts): computed only in the building form (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator,
     // the enclosing one kept in a local of the frame (no stack: nothing allocated per parse).
     acc: (call, mask) => (r ? call : `(${call} && ${recv}.acc_k(${mask}))`),
     accSep: () => (r ? 'true' : `${recv}.acc_s()`),
     // A demand twin's Pratt child (DemandIR): the position before the call, then the call.
     dfix: (call) => (r ? call : `{ let _m = ${recv}.pos as isize; let _ok = ${call}; ${recv}.dfix(_m, _ok) }`),
-    target: (mask) => { if (r) throw new Error('rust: a target() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
+    assignTarget: (mask) => { if (r) throw new Error('rust: an assignTarget() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
     accRun: (cond, af) => (r ? cond : `{ let _a = ${recv}.acc; ${recv}.acc = ${af.init}; let _r = (${cond}); if _r { ${recv}.acc_out(${af.low}, ${af.last}); } ${recv}.acc = _a; _r }`),
     armForm: armFormRs,
-    // A body guard (emit-portable.ts annotateSteps): star tests it before each attempt inside an
+    // A body guard (parser-ir.ts annotateSteps): star tests it before each attempt inside an
     // out-of-line loop (`star_in`); opt / sep test it here and make their attempt out of line
     // (`opt_out` / `sep_by_out`). Both are `#[inline(never)]` and generic over the body, so each site
     // is one small function with its body inlined, and the function holding the step grows by a set
@@ -1268,17 +1268,17 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
   return L;
 }
 const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, rsSteps(ids, 'self', false));
-// An arm's form when it won (declared-targets.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (assign-targets.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormRs = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'self.acc_f' : pratt ? '(self.form & !3)' : 'self.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
-const lowRs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
+const lowRs = (ir: { assignTargets?: AssignTargetsIR }, f: string): string => (ir.assignTargets ? `(${f} & 3)` : f);
 // Declared target contexts' state on the parser (as target-ts.ts targetRuntimeTs): the open
 // container's accumulator (an enclosing one's is a local of its arm: accRun), acc_f the form of the container arm that just matched.
 // With a demand context also the re-parse in progress (its start; -1 none), the re-parses and those above the bound (src/reparse-family.ts).
-const targetFieldsRs = (ir: ParserIR): string => (ir.targets ? `\n    acc: u8,\n    acc_f: u8,${ir.targets.demand ? '\n    rp_at: isize,\n    rp_n: usize,\n    rp_over: usize,' : ''}` : '');
-const targetInitRs = (ir: ParserIR): string => (ir.targets ? ` acc: 0, acc_f: 0,${ir.targets.demand ? ' rp_at: -1, rp_n: 0, rp_over: 0,' : ''}` : '');
+const targetFieldsRs = (ir: ParserIR): string => (ir.assignTargets ? `\n    acc: u8,\n    acc_f: u8,${ir.assignTargets.demand ? '\n    rp_at: isize,\n    rp_n: usize,\n    rp_over: usize,' : ''}` : '');
+const targetInitRs = (ir: ParserIR): string => (ir.assignTargets ? ` acc: 0, acc_f: 0,${ir.assignTargets.demand ? ' rp_at: -1, rp_n: 0, rp_over: 0,' : ''}` : '');
 function targetRuntimeRs(ir: ParserIR): string {
-  const t = ir.targets;
+  const t = ir.assignTargets;
   if (!t) return '';
   return `
     fn acc_out(&mut self, low: u8, last: u8) { let q = self.acc & ${t.passes}; self.acc_f = q | low | ((q << 1) & last); }
@@ -1311,7 +1311,7 @@ function sharedFns(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
     (ir.forms.recognizeShared[id] ? `    #[inline]\n    fn sub_${id}_r(&mut self) -> bool { let p = self; ${stepStmtsP(s, ids, ar, true)} }\n` : '')).join('');
 }
 
-// The Rust spelling of an rd rule's shell (emit-portable.ts, ruleShell), common to its two forms;
+// The Rust spelling of an rd rule's shell (parser-ir.ts, ruleShell), common to its two forms;
 // a guard reads the token bound by `if let Some(t)` (the buffered token is an Option).
 const rsRuleBase = (ids: LexIdPlan, recv: string) => ({
   ind: '        ',
@@ -1382,7 +1382,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   });
 }
 
-/** The entry rule with reuse recording (emit-portable entryShell): per-top-kid lookahead ext via
+/** The entry rule with reuse recording (parser-ir entryShell): per-top-kid lookahead ext via
  *  parse_top_one (shape A), or an EntryMeta per segment (shape B). */
 function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
@@ -1490,11 +1490,11 @@ function rbSite(ids: LexIdPlan, steps: string[]): number {
   if (i === undefined) m.set(key, (i = m.size));
   return i;
 }
-// The demand form of a target context (emit-portable.ts DemandIR), as target-ts.ts demandFnsTs:
+// The demand form of a target context (parser-ir.ts DemandIR), as target-ts.ts demandFnsTs:
 // the twins, dfix, twin_form, reparse_from (src/reparse-family.ts) and its externs, and per rule
 // the cold demand_<rule>.
 function demandFnsRs(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
-  const D = ir.targets?.demand;
+  const D = ir.assignTargets?.demand;
   if (!D) return '';
   const S = rsSteps(ids, 'self', false);
   const twinOf = (f: string) => `((${f} >> ${DEFER_SHIFT}) & 7) as isize - 1`;
@@ -1545,24 +1545,24 @@ ${sites.flatMap((st, i) => st.map((c, k) => `            ${i * 4 + k} => ${c},`)
     }
 ${shared.rebindFamily(ir, 'methods').split('\n').map((l) => (l ? `    ${l}` : l)).join('\n')}`;
 }
-// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+// A NUD arm's capped flag (parser-ir NodeCap): 'tail' is the flag its trailing operand left.
 const capRs = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? 'self.capped' : 'false');
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
   const d = r.nudDispatch;
-  // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
+  // The operator tables (parser-ir prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
   const ops = prattOpTables(r, ids);
-  // The operator row (emit-portable prattOpRow): one load per LED iteration, the index masked to the
+  // The operator row (parser-ir prattOpRow): one load per LED iteration, the index masked to the
   // table's power-of-two length (in range by construction: no bounds check).
   const row = prattOpRow(r, ids);
   const rowAt = (lid: string) => `Self::${r.name}_ROW[(${lid} as usize) & ${row.size - 1}]`;
-  // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
+  // Each arm's form (assign-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowRs(ir, f);
   // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
-  // The operators a target context reads (emit-portable binLeftOps) are a switch behind the table's
+  // The operators a target context reads (parser-ir binLeftOps) are a switch behind the table's
   // test bit: every other operator tests what it did without contexts and its node's form is a constant.
   const leftOps = binLeftOps(ops);
   const tgtFail = leftOps.length === 0 ? `${lf('form')} != 0`
@@ -1570,7 +1570,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const keep = leftOps.filter((o) => o.acc);
   // A demand operator (DemandIR): its node is ASSIGNED, a left operand with a twin number goes to
   // the cold demand_<rule> (demandFnsRs); p0 is the left operand's mark.
-  const D = ir.targets?.demand, dem = demandLids(r, ids, D);
+  const D = ir.assignTargets?.demand, dem = demandLids(r, ids, D);
   const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : dem.length ? `(if tgt && (${dem.map((l) => `op_lid == ${l}`).join(' || ')}) { ${1 | D!.assigned} } else { 1 })` : '1';
   const tgtDem = dem.length ? `(${lf('form')} != 0 || (form & ${D!.defer}) != 0 && !self.demand_${r.name}(op_lid as isize, form as isize, p0, self.pos as isize))` : tgtFail;
   // A gated prefix operator (`await`, PrattRule.prefix's `when`) is one only where the context word
@@ -1615,7 +1615,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             self.back(save);
         }`,
     dispatch: dispatchRsL('t', false),
-    // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
+    // A committed arm (parser-ir.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, t.off as usize, save')}; self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
@@ -1689,7 +1689,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         self.suppress_cur = prev;
         r
     }
-    /// The operator row per lid (emit-portable prattOpRow: binary lbp / rbp / flags, postfix lbp / target, composite lead, led index).
+    /// The operator row per lid (parser-ir prattOpRow: binary lbp / rbp / flags, postfix lbp / target, composite lead, led index).
     const ${r.name}_ROW: [u32; ${row.size}] = [${row.rows.join(', ')}];
     fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
 `,
@@ -3151,7 +3151,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       case 'look':
       case 'ahead':
       case 'aheadCtx':
-      case 'target':
+      case 'assignTarget':
       case 'when':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
@@ -3441,7 +3441,7 @@ function emitRustAstRdAltSteps(
       case 'look':
       case 'ahead':
       case 'aheadCtx':
-      case 'target':
+      case 'assignTarget':
       case 'when':
       case 'sameLine': return false;
     }
@@ -3461,7 +3461,7 @@ function emitRustAstRdAltSteps(
       case 'altlit': return true;
       case 'sameLine': return true;
       case 'when': return true;
-      case 'target': return true;
+      case 'assignTarget': return true;
       case 'ahead': return true;
       case 'aheadCtx': return true;
       case 'look': return true;
@@ -3520,7 +3520,7 @@ function emitRustAstRdAltSteps(
       }
       case 'seq':
         return emitSteps(s.steps, okVar);
-      case 'target': throw new Error('rust typed AST: declared target contexts not printed yet');
+      case 'assignTarget': throw new Error('rust typed AST: declared target contexts not printed yet');
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'when':
@@ -3862,7 +3862,7 @@ function emitRustRdMethod(
   };
 
   // parse_ast_<rule> chooses among the alternatives as parse_<rule> does: longest match in
-  // declaration order (emit-portable.ts, RdRule). Each alternative is `parse_ast_<rule>_alt(i)`;
+  // declaration order (parser-ir.ts, RdRule). Each alternative is `parse_ast_<rule>_alt(i)`;
   // one that ends past the best so far becomes the best, any other is rolled back. An
   // alternative's events are already in the stream when it returns, so when a later one
   // SUPERSEDES an earlier best both are rolled back and the later one is built again from the
@@ -4237,7 +4237,7 @@ function emitRustPrattMethod(
             let _op = self.current_span();
             self.pos += 1;
             let _argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => v,
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             };
@@ -4254,7 +4254,7 @@ function emitRustPrattMethod(
             let _op = self.current_text();
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => v,
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             };
@@ -4266,7 +4266,7 @@ function emitRustPrattMethod(
             let save = self.pos;
             self.pos += 1;
             match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => { *pf = ${prefix.form}; *pt = true; return Some(v); }
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => { *pf = ${prefix.form}; *pt = true; return Some(v); }
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             }
@@ -4277,7 +4277,7 @@ function emitRustPrattMethod(
             let _op = self.current_span();
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => v,
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             };
@@ -4360,7 +4360,7 @@ function emitRustPrattMethod(
   }
 
   // ── NUD selection ──
-  // Longest match over the arms (emit-portable.ts, PrattRule.nudOrder), as the CST parser does:
+  // Longest match over the arms (parser-ir.ts, PrattRule.nudOrder), as the CST parser does:
   // the arm that ends farthest wins, the earliest-declared one on a tie. Each arm is
   // `parse_ast_<rule>_nud_arm(i, ..)`, `i` its declaration index; it returns its value when it
   // matches. One that beats the best so far becomes the best; any other is rolled back.
@@ -4443,7 +4443,7 @@ function emitRustPrattMethod(
   const binarySlot = slotOf(ps.binary as { kind: string } | undefined, rule.binary.length > 0);
   if (binarySlot && rule.binary.length) {
     const binaryArms = rule.binary.map((b) =>
-      `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}),`,
+      `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}, ${b.requireAssignTarget}, ${b.noUnaryLhs}),`,
     ).join('\n                ');
     if (binarySlot.kind === 'node') {
       binaryBody = `{
@@ -4521,7 +4521,7 @@ function emitRustPrattMethod(
   const postfixSlot = slotOf(ps.postfix as { kind: string } | undefined, rule.postfix.length > 0);
   if (postfixSlot && rule.postfix.length) {
     const postArms = rule.postfix.map((p) =>
-      `Some(${lidOf(ids, p.op)}) => (${p.lbp}, ${p.requireTarget}),`,
+      `Some(${lidOf(ids, p.op)}) => (${p.lbp}, ${p.requireAssignTarget}),`,
     ).join('\n                    ');
     if (postfixSlot.kind === 'node') {
       postfixCode = `{
@@ -5871,7 +5871,7 @@ function emitRustLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms,
     // EntryMeta is always emitted — Builder::entry_meta returns it (even when the side table is unused).
     const entryMetaStruct = `\n#[derive(Clone, Copy)]\nstruct EntryMeta { tok_start: u32, tok_end: u32, ext: u32, off: u32, end: u32, kid_count: u32 }\n`;
     const arenaIdTables = renderArenaIdTablesRust(recovery ? withReservedRules(ar) : ar);
-    return `// GENERATED by emit-portable.ts (rustTarget) — parser library for grammar "${ir.grammarName}".
+    return `// GENERATED by parser-ir.ts (rustTarget) — parser library for grammar "${ir.grammarName}".
 // Public API: tokenize(src) -> Result<Vec<Token>, LexError> (the lexer alone; tokens borrow only src), parse_with /
 // Doc (CST). Compile as a library (rustc --crate-type lib) or include via \`mod\`.
 #![allow(non_snake_case)]

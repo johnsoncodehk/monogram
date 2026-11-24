@@ -1,6 +1,6 @@
-// ── emit-parser ──
+// ── target-js ──
 //
-// An EMITTER (vs the createParser RUNTIME INTERPRETER in gen-parser.ts). It takes
+// An EMITTER (vs the createParser RUNTIME INTERPRETER in interpreter.ts). It takes
 // the same Grammar, re-derives the SAME static analysis createParser does
 // (precedence/binding-power tables, Pratt NUD/LED classification, FIRST sets,
 // nullability, mixfix/access-tail detection), and emits SELF-CONTAINED JavaScript
@@ -11,7 +11,7 @@
 // The algorithmic CONTROL cores (the Pratt precedence loop, the left-recursion
 // loop, the longest-match non-recursive loop, the mixfix operand re-bind, the
 // packrat memo, save/restore backtracking) stay as a generic runtime that the
-// emitted code CALLS — copied VERBATIM from gen-parser.ts so their longest-match /
+// emitted code CALLS — copied VERBATIM from interpreter.ts so their longest-match /
 // tail-closing / suppress / mixfix semantics are byte-identical to the oracle.
 // What those loops used to dispatch per arm (matchExpr(alt) / matchSeq(items)) is
 // now a GENERATED specialized matcher per NUD/LED/alt arm, so the interpretive
@@ -48,7 +48,7 @@ const plainGroup = (e: RuleExpr): e is Extract<RuleExpr, { type: 'group' }> =>
   e.type === 'group' && !(e.suppress && e.suppress.length) && !e.ctxMode && e.when === undefined;
 function analyze(grammar: Grammar) {
   const {
-    tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
+    tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireAssignTargetOps,
     ledPrecByConnector, binaryConnectors, connectorLbp, atLevelBp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
@@ -74,7 +74,7 @@ function analyze(grammar: Grammar) {
     const alts = r.body.type === 'alt' ? r.body.items : [r.body];
     if (alts.some((alt) => atLevelIn(alt) && !(prattRules.has(r.name) && selfAtLevelEnd(alt, r.name)))) throw new Error(`jsTarget: rule ${r.name} reads a rule atLevel(…); not supported, use the portable targets`);
   }
-  if (grammar.targets && Object.keys(grammar.targets).length) throw new Error(`jsTarget: declared target contexts (Grammar.targets: ${Object.keys(grammar.targets).join(', ')}) are not supported; use the portable targets`);
+  if (grammar.assignTargets && Object.keys(grammar.assignTargets).length) throw new Error(`jsTarget: declared target contexts (Grammar.assignTargets: ${Object.keys(grammar.assignTargets).join(', ')}) are not supported; use the portable targets`);
 
   // First-token dispatch.
   function firstTokenOf(alt: RuleExpr): FirstTok {
@@ -117,7 +117,7 @@ function analyze(grammar: Grammar) {
         const wordConnector = conn?.type === 'literal' && /^[A-Za-z]/.test(conn.value);
         if (!lastIsOperand && !wordConnector) isAccessTail = true;
         // Only an access tail extends an access tail; a lookahead-ended LED closes it too.
-        if (!isAccessTail || (last.type === 'not' && last.body.type !== 'not')) isTailClosing = true;   // a NEGATIVE lookahead (gen-parser.ts negativeLook)
+        if (!isAccessTail || (last.type === 'not' && last.body.type !== 'not')) isTailClosing = true;   // a NEGATIVE lookahead (interpreter.ts negativeLook)
       }
       accessTail.push(isAccessTail);
       tailClosing.push(isTailClosing);
@@ -238,7 +238,7 @@ function analyze(grammar: Grammar) {
             if (kws) pending = pending ? new Set([...pending, ...kws]) : kws;
             continue;
           }
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'target') continue;
+          if (item.type === 'op' || item.type === 'postfix' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf' || item.type === 'assignTarget') continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) {
@@ -259,7 +259,7 @@ function analyze(grammar: Grammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -279,7 +279,7 @@ function analyze(grammar: Grammar) {
   }
 
   // Deep per-alternative FIRST set + nullability for the longest-match dispatch — the
-  // emitted mirror of gen-parser.ts's altMightStart. An alternative whose FIRST element
+  // emitted mirror of interpreter.ts's altMightStart. An alternative whose FIRST element
   // is a rule ref (`Decl …`, `Expr …`) is pruned when the lookahead can't begin that
   // rule (resolved through the transitive firstSets), not only when it begins with a
   // known literal/token. Sound: exprFirst over-approximates (never omits a startable
@@ -395,7 +395,7 @@ function analyze(grammar: Grammar) {
 
 
   return {
-    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps, binaryConnectors,
+    grammar, tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireAssignTargetOps, binaryConnectors,
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
@@ -700,7 +700,7 @@ class Emitter {
         }
       case 'group': {
         // atLevel(op, $) ending a NUD (the one use analyze admits): this rule's core read at op's
-        // level, as a prefix operator's operand is (gen-parser.ts matchExpr 'group').
+        // level, as a prefix operator's operand is (interpreter.ts matchExpr 'group').
         const lvl = this.a.atLevelBp(expr);
         if (lvl !== null) {
           const name = (expr.body as { name: string }).name;
@@ -709,8 +709,8 @@ class Emitter {
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
         // matches its body (same as matchExpr 'group').
-        // The staging ends with the group, matched or not (gen-parser.ts matchExpr 'group').
-        // A `when` group exists only where its condition holds over the word in force (gen-parser.ts).
+        // The staging ends with the group, matched or not (interpreter.ts matchExpr 'group').
+        // A `when` group exists only where its condition holds over the word in force (interpreter.ts).
         if (expr.when !== undefined) {
           const w = whenTest(expr.when);
           return [`if ((ctx & ${w.mask}) !== ${w.val}) { ${onFail} }`, this.matchInto(expr.body, onFail)].join('\n');
@@ -773,7 +773,7 @@ class Emitter {
     const items = mc.items;
     const nameKind = (item: RuleExpr): number => {
       const k = item.type === 'ref' ? this.a.symtab.typeKind.get(item.name) : undefined;
-      if (k === undefined) throw new Error('emit-parser: the markup container arm names its element with a token the symbol table does not hold');
+      if (k === undefined) throw new Error('target-js: the markup container arm names its element with a token the symbol table does not hold');
       return k;
     };
     const skip = (item: RuleExpr) => item.type === 'op' || item.type === 'prefix' || item.type === 'postfix';
@@ -901,7 +901,7 @@ class Emitter {
     const ext = runId < 0 ? ''
       : stopVar === '' ? `\n  if (adoptRunPos === pos) runExtend(${runId});`
       : `\n  if (adoptRunPos === pos) { if (${stopVar} === undefined) runExtend(${runId}); else adoptRunPos = -1; }`;
-    if (stopVar !== '' && kind !== '*') throw new Error('emit-parser: the markup container content is a `*` repetition');
+    if (stopVar !== '' && kind !== '*') throw new Error('target-js: the markup container content is a `*` repetition');
     const stop = stopVar === '' ? [] : [`  if (${stopVar} !== undefined && mkAtTrigger(${stopVar})) break;`];
     const recFirst = this.quantRecoverFirst(body);
     const csFn = recFirst !== null ? this.membershipFn(recFirst) : 'null';
@@ -969,7 +969,7 @@ class Emitter {
     return `(!${this.membershipFn(fs)}(pos) && !recovering)`;
   }
 
-  // Deep per-alternative dispatch condition (mirrors gen-parser.ts altMightStart): the
+  // Deep per-alternative dispatch condition (mirrors interpreter.ts altMightStart): the
   // POSITIVE "this alt might start at startTok" test for the longest-match loops. `true`
   // when the alt is nullable or its FIRST set is unknown/empty (always tried — an empty
   // match never wins longest-match); else a membership test over the alt's transitive
@@ -984,7 +984,7 @@ class Emitter {
 
   // A `not(...)` over a literal / alternation of KEYWORD literals → the int keyword-kinds,
   // else null. Lets the not be one membership test instead of matching each keyword arm
-  // (mirrors gen-parser.ts notKwSet; emits the same check matchKwLit uses, so byte-identical).
+  // (mirrors interpreter.ts notKwSet; emits the same check matchKwLit uses, so byte-identical).
   notKwKinds(body: RuleExpr): number[] | null {
     const kinds: number[] = [];
     const collect = (e: RuleExpr): boolean =>
@@ -1113,7 +1113,7 @@ class Emitter {
       const w = i >> 5;
       const bit = (1 << (i & 31)) | 0;
       const sec = a.altSecond.get(alt);
-      // The always conditions MIRROR gen-parser's altMightSecond null-keys cases
+      // The always conditions MIRROR interpreter's altMightSecond null-keys cases
       // exactly (incl. empty-set → always) — engine-identical prune decisions.
       if (a.altNullable.get(alt) || !sec || sec.s === null || sec.len1 || sec.s.size === 0) {
         for (let k = 0; k < k2Mask[w].length; k++) k2Mask[w][k] |= bit;
@@ -1231,15 +1231,15 @@ export const jsTarget: Target = {
   emitParser: emitJsParser,
 };
 
-// A grammar whose every declared target context is on demand (TargetContext.when) is parsed by
-// this retiring emitter with the shallow check alone: its `targetOps` operators require a target
-// as `lhsTarget` does (a recorded divergence, docs/CORRECTNESS.md: it takes `[a + b] = x`). An
+// A grammar whose every declared target context is on demand (AssignTargetContext.when) is parsed by
+// this retiring emitter with the shallow check alone: its `assignTargetOps` operators require a target
+// as `lhsAssignTarget` does (a recorded divergence, docs/CORRECTNESS.md: it takes `[a + b] = x`). An
 // eager context stays refused.
 function shallowDemand(grammar: Grammar): Grammar {
-  const t = grammar.targets;
+  const t = grammar.assignTargets;
   if (!t || !Object.keys(t).length || Object.values(t).some((c) => c.when !== 'demand')) return grammar;
-  const precs = grammar.precs.map((l) => ({ ...l, operators: l.operators.map((o) => (o.targetCtx === undefined ? o : (({ targetCtx: _, ...rest }) => ({ ...rest, requireTarget: true }))(o))) }));
-  const { targets: _t, ...rest } = grammar;
+  const precs = grammar.precs.map((l) => ({ ...l, operators: l.operators.map((o) => (o.assignTargetCtx === undefined ? o : (({ assignTargetCtx: _, ...rest }) => ({ ...rest, requireAssignTarget: true }))(o))) }));
+  const { assignTargets: _t, ...rest } = grammar;
   return { ...rest, precs };
 }
 function emitJsParser(grammar: Grammar): string {
@@ -1250,7 +1250,7 @@ function emitJsParser(grammar: Grammar): string {
   const entry = findEntryRule(grammar);
 
   // ── Header: baked tables ──
-  e.emit(`// GENERATED by monogram (emit-parser.ts) — do not edit. Specialized parser for grammar ${J(grammar.name)}.`);
+  e.emit(`// GENERATED by monogram (target-js.ts) — do not edit. Specialized parser for grammar ${J(grammar.name)}.`);
   // The lexer, generated over the token-id tables of the ONE symtab analyze() derived.
   const st = a.symtab;
   const lexer = emitLexer(lexSpecOf(grammar), st, { ts: true, windowed: true });
@@ -1346,7 +1346,7 @@ function emitJsParser(grammar: Grammar): string {
       }
       return arr;
     };
-    e.emit(`type OpInfo = { lbp: number; rbp: number; assoc: string; position: string; requireTarget?: boolean; when?: { mask: number; val: number } };`);
+    e.emit(`type OpInfo = { lbp: number; rbp: number; assoc: string; position: string; requireAssignTarget?: boolean; when?: { mask: number; val: number } };`);
     e.emit(`const OP_BY_T: (OpInfo | null)[] = ${J(byT(a.opTable))};`);
     e.emit(`const PREFIX_BY_T: (OpInfo | null)[] = ${J(byT(a.prefixOps))};`);
   }
@@ -1369,7 +1369,7 @@ function emitJsParser(grammar: Grammar): string {
     for (const v of st.kwLitKind.values()) tSize = Math.max(tSize, v + 1);
     for (const v of st.puLitKind.values()) tSize = Math.max(tSize, v + 1);
     const rt = new Array<number>(tSize).fill(0);
-    for (const v of a.requireTargetOps) {
+    for (const v of a.requireAssignTargetOps) {
       const d = st.classifyKey(v);
       if (d.kind !== 'tok' && d.t > 0) rt[d.t] = 1;
     }
@@ -1382,7 +1382,7 @@ function emitJsParser(grammar: Grammar): string {
   // `++x`) — head kid is an operator-tag leaf in prefixOps — or a postfix-update (`x++`) —
   // tail kid is an operator-tag leaf in postfixOpValues. A parenthesized cover / member /
   // element / call / non-null tail has no operator-tag leaf at head or tail, so it passes.
-  e.emit(`function _notTarget(lhs: number) {`);
+  e.emit(`function _notAssignTarget(lhs: number) {`);
   if (a.unaryRows) e.emit(`  if ((rowCapped[lhs] & 2) !== 0) return true;`);
   e.emit(`  const n = rowCount[lhs]; if (n === 0) return false;`);
   e.emit(`  const cs = rowStart[lhs];`);
@@ -1403,12 +1403,12 @@ function emitJsParser(grammar: Grammar): string {
   // correctly accepted, like tsc.)
   // Only a LED builds such a node: its head kid is the left operand, a node of the same rule (a NUD
   // never starts with one), so a NUD whose second kid is a name spelled like a connector (`class as {}`)
-  // passes, as the portable engine's construct-decided form has it (gen-parser.ts notAssignTarget).
+  // passes, as the portable engine's construct-decided form has it (interpreter.ts notAssignTarget).
   e.emit(`  if (n >= 3 && _h >= 0 && rowRule[_h] === rowRule[lhs]) { const _m = kids[cs + 1]; if (_m < 0) { if (((~_m) & 3) === 2) return true; const _mt = absTok[lhs] + ((~_m) >>> 2); if (binaryConnectors.has(docText(toff(_mt), tend(_mt)))) return true; } }`);
   e.emit(`  return false;`);
   e.emit(`}`);
   // Head-leaf TEXT of a node: descend the LEFTMOST-child spine to the OUTERMOST leaf and return its
-  // token text (the SAME head-leaf the _notTarget gate reads, generalized to recurse through child
+  // token text (the SAME head-leaf the _notAssignTarget gate reads, generalized to recurse through child
   // nodes). Drives the notLeftLeaf LED gate: a node whose head leaf text is in the arm's word set
   // (e.g. `void`/`null`/`this` for the type `.` qualification) is not a valid LEFT operand of the
   // arm. A childless ($missing recovery) node returns '' (matches no word → the arm is not blocked).
@@ -1454,7 +1454,7 @@ function emitJsParser(grammar: Grammar): string {
   e.emit(`//\${HELPERS}`);
   e.emit(``);
 
-  // ── Shared runtime (copied semantics from gen-parser.ts) ──
+  // ── Shared runtime (copied semantics from interpreter.ts) ──
   emitRuntime(e);
 
   // ── Per-rule parse functions ──
@@ -1467,7 +1467,7 @@ function emitJsParser(grammar: Grammar): string {
 }
 
 // ── Runtime: the generic engine state + control loops, emitted verbatim ──
-// These are copied from gen-parser.ts so their semantics are byte-identical. The
+// These are copied from interpreter.ts so their semantics are byte-identical. The
 // ONLY change: where the interpreter called matchExpr(alt)/matchSeq(items) per arm,
 // these call the GENERATED per-arm matcher functions (installed via the rule fns).
 function emitRuntime(e: Emitter) {
@@ -2194,8 +2194,8 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       // A target-requiring prefix (`++`/`--`) operand must be a LeftHandSideExpression
       // (`++-x`, `++ ++x`, `++x--`, `++await x` are syntax errors). Fail hard like
       // noUnaryLhs. A recovery-synthesized $missing operand has no children, so
-      // _notTarget returns false → recovery is not falsely rejected.
-      e.emit(`        if (rhs >= 0 && info.requireTarget && _notTarget(rhs)) break _fail;`);
+      // _notAssignTarget returns false → recovery is not falsely rejected.
+      e.emit(`        if (rhs >= 0 && info.requireAssignTarget && _notAssignTarget(rhs)) break _fail;`);
       e.emit(`        if (rhs >= 0 && pos > bestNudPos) { scPush(rhs); lhs = finishNode(${rid}, mark); bestNudPos = pos; nudClosed = true; }`);
       e.emit(`      }`);
       e.emit(`    }`);
@@ -2291,7 +2291,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // A target-requiring postfix (`++`/`--`) may not apply to a unary/update operand
   // (`++x++`, `x++ ++`): its operand must be a LeftHandSideExpression. Fail hard (like
   // noUnaryLhs), so the expression can't reparse some other way.
-  e.emit(`          if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
+  e.emit(`          if (REQTGT_T[opT] !== 0 && _notAssignTarget(lhs)) break _fail;`);
   e.emit(`          scPush(~((pos << 2) | 2));`);
   e.emit(`          if (++pos > frameMax) { frameMax = pos; if (pos > maxPos) maxPos = pos; }`);
   e.emit(`          lhs = finishWrap(${rid}, lhs, ledMark);`);
@@ -2300,7 +2300,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`      } else {`);
   // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
   // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Like noUnaryLhs, fail hard.
-  e.emit(`        if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
+  e.emit(`        if (REQTGT_T[opT] !== 0 && _notAssignTarget(lhs)) break _fail;`);
   if (a.unaryRows) e.emit(`        if (NOUNARY_T[opT] !== 0 && (rowCapped[lhs] & 2) !== 0) break _fail;`);
   e.emit(`        if (NOUNARY_T[opT] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);
@@ -2337,7 +2337,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   e.emit(`  return lhs;`);
   e.emit(`  }`);
   if (e.linesSince(coreFrom).some(l => /\breturn -1\b/.test(l))) {
-    throw new Error(`emit-parser: ${ruleFn}_pratt fails outside its one restoring exit (use 'break _fail')`);
+    throw new Error(`target-js: ${ruleFn}_pratt fails outside its one restoring exit (use 'break _fail')`);
   }
   e.emit(`  pos = saved; scn = mark; return -1;`);
   e.emit(`}`);
@@ -2389,7 +2389,7 @@ function emitArm(e: Emitter, a: ReturnType<typeof analyze>, ruleName: string, i:
 // map as data, the two name reads, and the end-tag name matcher.
 function emitMarkupRuntime(e: Emitter, a: ReturnType<typeof analyze>, mc: MarkupContainer) {
   const open = a.symtab.puLitKind.get(a.grammar.markup!.tagOpen);
-  if (open === undefined) throw new Error('emit-parser: the markup tagOpen is not a punctuation literal of the grammar');
+  if (open === undefined) throw new Error('target-js: the markup tagOpen is not a punctuation literal of the grammar');
   const nameKinds = [...mc.nameTokens].map(n => a.symtab.typeKind.get(n)!);
   e.emit(`// ── Markup container arm: optional end tags + the end tag's name ──`);
   e.emit(`// Element name (lowercased) → the start-tag names that implicitly close it.`);

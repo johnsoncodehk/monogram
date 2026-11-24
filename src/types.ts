@@ -545,10 +545,10 @@ export interface PrecOperator {
   // target (LeftHandSideExpression) — NOT a prefix-unary, prefix-update, or postfix-update
   // expression. ECMAScript AssignmentTargetType, enforced at parse time (JS `=`/`+=`/…,
   // postfix `++`/`--`). A parenthesized cover or member/element/call/non-null tail passes.
-  requireTarget?: boolean;
+  requireAssignTarget?: boolean;
   // An infix operator whose left operand must pass the declared target context of this name
-  // (Grammar.targets; api.ts targetOps) in place of requireTarget's shallow check.
-  targetCtx?: string;
+  // (Grammar.assignTargets; api.ts assignTargetOps) in place of requireAssignTarget's shallow check.
+  assignTargetCtx?: string;
   // A prefix operator CAPPED at its own level (`cappedPrefix`): it may begin an operand only where
   // the enclosing Pratt minBp is looser than its level, so it is never the operand of a tighter
   // operator (Python `a == not b`, `-not x` have no parse). Its own operand and the leds after it
@@ -663,15 +663,15 @@ type RuleExprNode =
   // the connector rebinds to nothing and the parse rejects. Encodes TS's rule that a qualified type
   // name `A.B` has an IdentifierReference root — the keyword/literal types `void`/`null`/`true`/
   // `false`/`this` are NOT qualifiable (`void.x` has no parse tree). It mirrors the AssignmentTargetType
-  // gate (`_notTarget`) which reads the same head leaf, but predicated on TEXT membership rather than
+  // gate (`_notAssignTarget`) which reads the same head leaf, but predicated on TEXT membership rather than
   // operator-tag shape. Like the other zero-width markers it consumes nothing → invisible to every
   // generator (a no-op in the CFG): gen-treesitter renders it `blank()` and drops it from the seq,
   // so the derived GLR grammar keeps the UNCONSTRAINED `.` LED (a left-leaf predicate is not
   // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no treeSitterRelax needed.
   | { type: 'notLeftLeaf'; words: string[] }
   // Zero-width DECLARED ASSIGNMENT-TARGET check (api.ts `target`): the node ending immediately
-  // before it must pass the target context `ctx` of Grammar.targets. Consumes nothing.
-  | { type: 'target'; ctx: string }
+  // before it must pass the target context `ctx` of Grammar.assignTargets. Consumes nothing.
+  | { type: 'assignTarget'; ctx: string }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }
@@ -686,9 +686,9 @@ export interface RuleDecl {
 }
 
 // when: 'eager' (the default) computes the predicate in every Pratt call's form; 'demand' computes
-// nothing in the normal parse and re-parses a container on the left of a `targetOps` operator
-// (declared-targets.ts planDemand): its leaves must be the arms the shallow check takes.
-export interface TargetContext { leaves: string[]; containers?: Record<string, string>; last?: string[]; when?: 'eager' | 'demand' }
+// nothing in the normal parse and re-parses a container on the left of a `assignTargetOps` operator
+// (assign-targets.ts planDemand): its leaves must be the arms the shallow check takes.
+export interface AssignTargetContext { leaves: string[]; containers?: Record<string, string>; last?: string[]; when?: 'eager' | 'demand' }
 
 /** The grammar data every generator takes (what `defineGrammar` returns). Its type carries the names of its rules (`R`), so a
  * consumer keyed by rule name (a shape: `defineShape` in src/shape.ts) is checked by TypeScript.
@@ -708,14 +708,14 @@ export interface Grammar<R extends string = string> {
   // alone and the parser composes `<<`, `<=`, `<<=` from adjacent single `<` tokens where it reads
   // an operator (what tsc's reScanLessThanToken undoes by splitting). See gtComposites.
   composeLt?: true;
-  // DECLARED ASSIGNMENT-TARGET CONTEXTS, by name (api.ts `target(ctx)`, `targetOps(ctx, …)`): which
+  // DECLARED ASSIGNMENT-TARGET CONTEXTS, by name (api.ts `assignTarget(ctx)`, `assignTargetOps(ctx, …)`): which
   // nodes may stand where a context's target is taken. Arms are named by their stable names
   // (grammar-names), never by text. A node passes iff its arm is in `leaves`, or in `containers`
   // and every child of the named field (or every rule child, 'all') passes; a node with one child
   // and nothing else is its child. A `last` arm passes as a container's child only as its final
   // child with no ',' after it (an ECMAScript rest element). Absent: no context; the shallow
-  // `lhsTarget` check is the grammar's only target rule.
-  targets?: Record<string, TargetContext>;
+  // `lhsAssignTarget` check is the grammar's only target rule.
+  assignTargets?: Record<string, AssignTargetContext>;
   rules: (RuleDecl & { name: R })[];
   entryRule?: string;  // the rule a parse starts from (`defineGrammar`'s `entry`); absent → the last declared rule. Read it through findEntryRule, never by position
   scopeOverrides: Map<string, string[]>;

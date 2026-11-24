@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 import { emitParser } from '../src/target.ts';
 import { rustTarget } from '../src/target-rust.ts';
 import { tsTarget } from '../src/target-ts.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { evaluateShape, defineShape } from '../src/shape2-eval.ts';
 import { child, node, text } from '../src/shape2-schema.ts';
 import { token, rule, defineGrammar, many, plus, oneOf, range, arm, field } from '../src/api.ts';

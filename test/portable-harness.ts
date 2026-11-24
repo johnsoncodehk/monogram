@@ -36,7 +36,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser, type EmitOptions, type Target } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
@@ -534,7 +534,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     const gfile = relative(ROOT_DIR, fileURLToPath(new URL(c.path, import.meta.url)));
     const emit = (t: Target, opts: EmitOptions = {}) => cachedEmit(gfile, t.name, opts, () => emitParser(grammar, t, opts), c.parts ?? null);
     // A grammar that declares target contexts has no total parsing yet (recoveryTables refuses it).
-    const rec = grammar.targets ? {} : RECOVERY;
+    const rec = grammar.assignTargets ? {} : RECOVERY;
     const tsLibSrc = emit(tsTarget, rec);
     const emitted: Prepared['emitted'] = [{ label: 'typescript', def: () => emit(tsTarget), rec: tsLibSrc }];
     const tsFile = `${dir}/p.ts`;

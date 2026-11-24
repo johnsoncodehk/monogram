@@ -126,7 +126,7 @@ seconds: the portable-targets corpus / edits / recovery classes, test262, tm-mut
 …): those run in CI on every `land/**` push and on master, `--changed --all` runs them too, and a
 `ci`-tier gate whose own script changed runs in the inner loop (the change is to that gate). It
 assumes the generated artifacts are current (`npm run gen`). Inputs are split BY TARGET: each emit
-target's module (`src/emit-parser.ts`, `src/target-ts.ts`, `src/target-go.ts`, `src/target-rust.ts`)
+target's module (`src/target-js.ts`, `src/target-ts.ts`, `src/target-go.ts`, `src/target-rust.ts`)
 imports only the core `src/target.ts`, never another target (`src/emit.ts`, the public surface,
 re-exports all four: a gate that imports it depends on every target), so a gate of one target does
 not run for another target's change; a gate marked `targets: true` (the portable-targets classes),

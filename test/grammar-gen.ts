@@ -34,7 +34,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Grammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
 import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/token-pattern.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { findEntryRule } from '../src/grammar-analysis.ts';
 
 // Max emissions in one derivation. A deep tree of 2-rep quantifiers grows the list multiplicatively;
@@ -473,7 +473,7 @@ class Walker {
       case 'quantifier': return e.kind === '+' ? this.minExpand(e.body) : [];
       case 'group': return this.minExpand(e.body);
       case 'sep': return this.minExpand(e.element);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
       case 'op': case 'prefix': case 'postfix': return [];
     }
   }
@@ -572,7 +572,7 @@ class Walker {
         for (const b of el) { if (b.length * 2 + 1 <= MAX_EMS) { out.push([...b, { t: 'lit', value: e.delimiter }, ...b]); if (out.length >= cap) return out; } }
         return out;
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
       case 'op': case 'prefix': case 'postfix': return [[]];
     }
   }
@@ -622,7 +622,7 @@ class Walker {
         for (let i = 0; i < reps; i++) { if (i) out.push({ t: 'lit', value: e.delimiter }); cappend(out, this.cover(e.element, budget - 1, ch)); }
         return out;
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
       case 'op': case 'prefix': case 'postfix': return [];
     }
   }
@@ -689,7 +689,7 @@ class Walker {
       case 'quantifier': { const out: Emission[] = []; for (const x of this.nestRec(e.body, target, nest, fuel, atTarget)) out.push(x); return out; }
       case 'group': return this.nestRec(e.body, target, nest, fuel, atTarget);
       case 'sep': { const out: Emission[] = []; for (const x of this.nestRec(e.element, target, nest, fuel, atTarget)) out.push(x); return out; }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
       case 'op': case 'prefix': case 'postfix': return [];
     }
   }
@@ -955,7 +955,7 @@ class Walker {
       case 'quantifier': return this.coverRec(e.body, tokenName, sampleText);   // fire exactly one rep (it carries the token)
       case 'group': return this.coverRec(e.body, tokenName, sampleText);
       case 'sep': return this.coverRec(e.element, tokenName, sampleText);       // one element (it carries the token)
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
       case 'op': case 'prefix': case 'postfix': return [];
     }
   }

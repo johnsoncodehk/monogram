@@ -1,11 +1,11 @@
-// Rebind family: the mixfix operand re-bind (emit-portable.ts PrattRule.ledRebind), authored once
+// Rebind family: the mixfix operand re-bind (parser-ir.ts PrattRule.ledRebind), authored once
 // and printed for every engine form of every target (the native rule functions and the recovery
 // interpreter alike).
 //
 // A led `<L1> $ <L2> …` whose greedy operand took the L2 it needs fails; the re-bind then retries
 // the operand CAPPED at each depth-0 L2 token inside what the greedy operand took (the brackets
 // `( [ {` against `) ] }` counted), in order, and takes the first where the operand ends exactly at
-// that token and L2 and the rest match (the interpreter's matchMixfixLed, gen-parser.ts). The cap
+// that token and L2 and the rest match (the interpreter's matchMixfixLed, interpreter.ts). The cap
 // is the token stream ending there: a capped parse is a parse of a shorter input. It runs only on
 // the led's failure path, and undoes itself when it fails.
 //
@@ -13,7 +13,7 @@
 // interpreter's table walk); the marks, the cap and the token read are each engine form's externs.
 
 import { type Expr, type Fn, type Lowering, type Stmt, printFns } from './algo-ir.ts';
-import { rebindBrackets, type LexIdPlan } from './emit-portable.ts';
+import { rebindBrackets, type LexIdPlan } from './parser-ir.ts';
 
 type Ty0 = 'int' | 'bool';
 const v = (name: string): Expr => ({ k: 'var', name });

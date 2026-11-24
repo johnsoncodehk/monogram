@@ -1,17 +1,17 @@
 // Gate class of the portable targets (test/portable-harness.ts): the HAND-WRITTEN LISTS. On each
 // grammar's accept / reject lists (test/portable-cases.ts) every target gives the oracle's verdict
-// and, when it accepts, the oracle's rule skeleton; the jsTarget parser (emit-parser.ts) gives the
+// and, when it accepts, the oracle's rule skeleton; the jsTarget parser (target-js.ts) gives the
 // oracle's CST byte for byte. Also: tok-spans (the token ranges each top-level kid consumed, the
 // same in every target and a partition of the stream), the Unicode corpus of the javascript
 // grammar, the recovery emission's default prefix, and the refusal of an entry rule that must
 // choose its empty alternative.
 import { writeFileSync } from 'node:fs';
 import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/emit-parser.ts';
+import { jsTarget } from '../src/target-js.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
-import { RESERVED_RULES } from '../src/emit-portable.ts';
+import { RESERVED_RULES } from '../src/parser-ir.ts';
 import { objectify } from './emitted-obj.ts';
 import { runsTarget } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
@@ -150,7 +150,7 @@ const RESERVED_NAMES = RESERVED_RULES.map((r) => `, ${JSON.stringify(r)}`).join(
 for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll()) {
   // Every module of this gate is emitted with total parsing (the emit option `recovery`), whose
   // region is appended to the default module and changes none of it but the rule-name table, which
-  // names the reserved rules after the grammar's (emit-portable.ts RESERVED_RULES): each module,
+  // names the reserved rules after the grammar's (parser-ir.ts RESERVED_RULES): each module,
   // that table read without them, begins with the default emission, byte for byte.
   for (const e of emitted) {
     if (e.rec.replace(RESERVED_NAMES, '').startsWith(e.def())) continue;
@@ -266,7 +266,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
     console.log(`  ${c.grammar}: tok-spans checked on ${cases.length} accept case(s)${c.grammar === 'calc' ? ' + trailing-punct probe' : ''}`);
   }
 
-  // The jsTarget parser (emit-parser.ts, not built from the portable IR) on the same hand-written
+  // The jsTarget parser (target-js.ts, not built from the portable IR) on the same hand-written
   // lists: the oracle's verdict on each, and on each accepted input the oracle's CST byte for byte
   // (its contract, emit-parser-verify.ts). Its suppress gates (the no-`in` for-heads of
   // NO_IN_HEADS) are compiled from the grammar analysis like the portable targets', by a
@@ -294,9 +294,9 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
       gate.failures++;
       console.log(`  ${c.grammar}/js: ACCEPT ${want.ok === got.ok ? 'CST' : 'verdict'} mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, js ok=${got.ok})`);
     }
-    // A grammar whose contexts are all on demand: jsTarget keeps the shallow check (emit-parser.ts
+    // A grammar whose contexts are all on demand: jsTarget keeps the shallow check (target-js.ts
     // shallowDemand), so a reject the context alone refuses may parse there (docs/CORRECTNESS.md).
-    const shallow = grammar.targets !== undefined && Object.values(grammar.targets).every((t) => t.when === 'demand');
+    const shallow = grammar.assignTargets !== undefined && Object.values(grammar.assignTargets).every((t) => t.when === 'demand');
     let wide = 0;
     for (const src of c.reject) {
       const want = oracleOut(src), got = jsOut(src);

@@ -1,10 +1,10 @@
-// Proof that gen-parser is language-agnostic: a tiny grammar whose tokens are
+// Proof that interpreter is language-agnostic: a tiny grammar whose tokens are
 // named NOTHING like TypeScript's, with no template/regex/backtick at all, run
 // on the same engine. If the engine still hardcoded 'Ident'/'Template'/backtick,
 // these assertions would fail.
 import { token, rule, defineGrammar, alt, many, opt, sep, none, seq, plus, oneOf, range, anyChar, star, noneOf } from '../src/api.ts';
 import { tokenPatternStartsWithDecimal } from '../src/token-pattern.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { emitTokenizerModule, lexSpecOf } from '../src/emit-lexer.ts';

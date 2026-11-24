@@ -11,7 +11,7 @@
 // html-bench.ts and html-issue-cases.ts, plus tricky tree-construction cases.
 //
 // Run: node test/src-coverage-html.ts
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { parseFragment } from 'parse5';
 import { cases as htmlIssueCases } from './html-issue-cases.ts';
 import { run, type AgreeResult, type CorpusItem } from './src-coverage.ts';

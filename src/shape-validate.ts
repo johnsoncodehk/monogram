@@ -1,8 +1,8 @@
 /**
  * Shape validator — checks ShapeSpec against portable IR.
  */
-import { portableIR } from './emit-portable.ts';
-import type { ParserIR, RuleIR, Step, Alt, RdRule, PrattRule } from './emit-portable.ts';
+import { portableIR } from './parser-ir.ts';
+import type { ParserIR, RuleIR, Step, Alt, RdRule, PrattRule } from './parser-ir.ts';
 import type {
   ShapeSpec, ShapeIR, ShapeIRRule, ShapeDiag, RuleShape, NodeShape, ChoiceShape,
   PrattShape, FieldDecl, TokenLeafPolicy,
@@ -65,7 +65,7 @@ function slotsOfStep(s: Step, leaves: Record<string, TokenLeafPolicy>): Slot[] {
     case 'aheadCtx':
     case 'sameLine':
     case 'when':
-    case 'target':
+    case 'assignTarget':
       return [{ k: 'zw' }];
   }
 }

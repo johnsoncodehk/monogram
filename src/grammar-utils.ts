@@ -1,8 +1,8 @@
 // Structural primitives over the grammar AST (RuleExpr), shared by the parser
-// generator (gen-parser) and the TextMate highlighter generator (gen-tm).
+// generator (interpreter) and the TextMate highlighter generator (gen-tm).
 //
 // Only PURE, structural helpers belong here — the small things both consumers
-// build on. The high-level logic stays separate: gen-parser's parse strategy
+// build on. The high-level logic stays separate: interpreter's parse strategy
 // (FIRST sets, left-recursion, Pratt classification) answers "how to parse";
 // gen-tm's shape detection answers "how to emit TextMate regexes". Those change
 // for different reasons and must not be coupled.
@@ -11,7 +11,7 @@ import type { Grammar, RuleExpr } from './types.ts';
 /** The ZERO-WIDTH MARKERS of the grammar language: assertions that consume nothing and build no
  *  child (a negative lookahead, the line and comment conditions, the left-leaf gate, a declared
  *  target check). Every reader that skips or names them asks this one set. */
-export const ZERO_WIDTH_MARKERS: ReadonlySet<RuleExpr['type']> = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
+export const ZERO_WIDTH_MARKERS: ReadonlySet<RuleExpr['type']> = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'assignTarget']);
 export const isZeroWidthMarker = (t: RuleExpr['type']): boolean => ZERO_WIDTH_MARKERS.has(t);
 
 /** The grammar's context parameters (docs/GRAMMAR.md "Contexts: `when`"), one bit each of the

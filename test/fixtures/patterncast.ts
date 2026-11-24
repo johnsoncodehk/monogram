@@ -1,11 +1,11 @@
 // patterncalc (declared target contexts) plus a PREFIX-SHAPED NUD: `cast` (`<T>e`, TypeScript's type
 // assertion) ends in its operand read at the prefix level (atLevel), so its node's form has the
-// prefix-unary low bits (FORM_UNARY, emit-portable PrattRule.nudBracketForm) OR'd with the pass bits
-// of the context it is a leaf of (declared-targets.ts). Both meanings are read in one grammar:
+// prefix-unary low bits (FORM_UNARY, parser-ir PrattRule.nudBracketForm) OR'd with the pass bits
+// of the context it is a leaf of (assign-targets.ts). Both meanings are read in one grammar:
 // `<T>a = x` passes the pattern context, while `++<T>a` (a target-requiring prefix) and `<T>a ** b`
 // (a noUnaryLhs operator) are refused by the low bits, as `-a ** b` is.
 import {
-  token, rule, defineGrammar, left, right, op, prefix, prefixTarget, noUnaryLhs, targetOps, atLevel, arm, field,
+  token, rule, defineGrammar, left, right, op, prefix, prefixAssignTarget, noUnaryLhs, assignTargetOps, atLevel, arm, field,
   seq, oneOf, range, star, many, opt, sep,
 } from '../../src/api.ts';
 
@@ -47,14 +47,14 @@ export default defineGrammar({
   scopeName: 'source.patterncast',
   tokens: { Ident, Num },
   prec: [
-    right(targetOps('pattern', '=')),
+    right(assignTargetOps('pattern', '=')),
     left('+'),
     right(noUnaryLhs('**')),
     right(prefix('-')),
-    right(prefixTarget('++')),
+    right(prefixAssignTarget('++')),
   ],
   rules: { Expr, Elem, Prop, Stmt, Program },
-  targets: {
+  assignTargets: {
     pattern: {
       leaves: ['ident', 'paren', 'member', 'shorthand', 'cast'],
       containers: { array: 'all', object: 'all', spread: 'all', rest: 'all', init: 'value', '=': 'left' },

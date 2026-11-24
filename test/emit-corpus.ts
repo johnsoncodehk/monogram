@@ -12,8 +12,8 @@
 //      diverse, real-world TypeScript with zero vendoring and no license question.
 //
 // This is what makes the parity check CORPUS-FREE, so it runs in `npm run check` on every
-// machine and every CI run — the mechanism that forces a gen-parser change to propagate to
-// emit-parser (issue #45 A2/A4). When the optional /tmp/ts-repo corpus is also present the
+// machine and every CI run — the mechanism that forces a interpreter change to propagate to
+// target-js (issue #45 A2/A4). When the optional /tmp/ts-repo corpus is also present the
 // gates additionally sweep it for breadth; absent, that sweep is skipped.
 import { execFileSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
@@ -203,7 +203,7 @@ function corpusCommit(): string {
 }
 
 // (the byte-identical CST compare is O(tree size); a 250 KB cap keeps the rich, deeply-
-// nested sources like emit-parser.ts while dropping the multi-hundred-KB ones).
+// nested sources like target-js.ts while dropping the multi-hundred-KB ones).
 const SIZE_CAP = 250 * 1024;
 const GENERATED = /\.cst-match\.ts$|\.d\.ts$/;
 

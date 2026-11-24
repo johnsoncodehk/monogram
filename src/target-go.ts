@@ -1,4 +1,4 @@
-// The Go Target for emit-portable. Renders the same language-agnostic ParserIR as tsTarget
+// The Go Target for parser-ir. Renders the same language-agnostic ParserIR as tsTarget
 // into a self-contained Go program (Go stdlib only — the lexer is regex-free, so it compiles
 // with no module dependencies). Its CST JSON is checked byte-for-byte against the interpreter,
 // so `emitParser(grammar, goTarget)` is a real, verified Go parser derived from the
@@ -9,11 +9,11 @@
 // stack. A node is an int32 index, never a heap pointer. Backtracking truncates the three
 // slices to saved lengths; the slices keep their capacity across parses (reset to len 0), so a
 // warmed parser allocates ~nothing per parse.
-import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
-import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type AssignTargetsIR } from './parser-ir.ts';
+import type { ArmForm } from './assign-targets.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
-import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
+import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, isNum, isOpt, isRec, isRecList, recName, type BinOp, type Lowering, unitMask, type MetaInt, type MkMeta, type R, type TokInt, type Ty } from './algo-ir.ts';
@@ -32,14 +32,14 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
-// A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, for the engine
+// A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, for the engine
 // (w '') or the builder walker (w 'W').
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, w: '' | 'W', keyed: boolean): string[] => {
   if (g === null) return [];
   const parts = keyed || g.first === null ? [] : [`inTokenSet(${g.first.id}, ${t})`];
   if (g.second !== null) parts.push(`p.secondIn(${g.second.id})`);
-  for (const l of g.lead) {   // the guard's lead tests (emit-portable.ts LeadTest) on t
+  for (const l of g.lead) {   // the guard's lead tests (parser-ir.ts LeadTest) on t
     const inS = l.ctx ? `(inTokenSet(${l.set}, ${t}) || (p.ctx&${CTX_WORD_BITS} != 0 && inCtxWords(p.ctx, ${t})))` : `inTokenSet(${l.set}, ${t})`;
     parts.push(l.is ? inS : `!${inS}`);
   }
@@ -58,7 +58,7 @@ const dispatchGoL = (t: string): DispatchLowering => ({
 });
 const dispatchGo = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
   dispatchWalk(d, ids, arm, dispatchGoL(t), nilable);
-// A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
+// A Commit's switch (parser-ir.ts commitWalk) over the buffered token t.
 const commitSwGo = (t: string): CommitLowering => ({
   sw: (by, cases, dflt) => `\tswitch ${t}.${by === 'lid' ? 'Lid' : 'Kid'} {\n${cases.map((c) => `\tcase ${c.keys.join(', ')}:${c.stmt ? `\n${c.stmt}` : ''}`).join('\n')}${dflt ? `\n\tdefault:\n${dflt}` : ''}\n\t}`,
   ifAll: ifGo,
@@ -112,7 +112,7 @@ const lostGoW = (_recv: string) => `p.scratch = p.scratch[:sb]; ${arenaRestore()
 const candGo = (d: Dispatch, i: number, cond: string, win: string, lost: string) =>
   `{ if ${cond} && ${beatsGo(d, 'p.pos', i)} { ${win} } else { ${lost} }; p.back(save) }`;
 
-// The Go spelling of an rd rule's shell (emit-portable.ts, ruleShell), common to its three forms.
+// The Go spelling of an rd rule's shell (parser-ir.ts, ruleShell), common to its three forms.
 // PREDICTIVE arms are joined on one line: Go's semicolon insertion after a line-final `}` would
 // break `}` / `else if` across lines.
 const goRuleBase = (r: RdRule, ids: LexIdPlan, guardW: '' | 'W') => ({
@@ -159,22 +159,22 @@ const CURSOR_GO: GoEngine = {
   mark: '', reset: '',
 };
 const branchGoR = (cond: string) => `{ sp := p.pos; if ${cond} { return true }; p.back(sp) }`;
-// The step walk's Go spelling (emit-portable.ts, StepLowering) for one engine: the native engine
+// The step walk's Go spelling (parser-ir.ts, StepLowering) for one engine: the native engine
 // building ('', receiver `engine`), the builder engine building ('W', receiver `recv`), or either
 // one recognizing ('R', ParserIR.forms; e: whose recognizers). Go: a body or a step's statements
 // are a func literal called in place.
 type GoForm = '' | 'W' | 'R';
 const markSuffixGo = (mk: MarkForm, f: GoForm): string => (mk === 'none' ? 'C' : mk === 'leaves' && f !== 'R' ? 'L' : '');
-// An arm's form when it won (declared-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (assign-targets.ts ArmForm): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormGo = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'p.accF' : pratt ? '(p.form &^ 3)' : 'p.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
-const lowGo = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
+const lowGo = (ir: { assignTargets?: AssignTargetsIR }, f: string): string => (ir.assignTargets ? `(${f} & 3)` : f);
 // Declared target contexts' runtime on an engine type (as target-ts.ts targetRuntimeTs): the open
 // container's accumulator `acc` (an enclosing one's is in its arm's frame: accRun), `accF` the form of the container
 // arm that just matched; `nudOkF` a committed NUD arm with a form of its own.
-const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? `\n\tacc, accF uint8${ir.targets.demand ? '\n\trpAt1, rpN, rpOver int // the demand re-parse in progress (its start + 1; 0: none), the re-parses, those above the bound (src/reparse-family.ts)' : ''}` : '');
+const targetFieldsGo = (ir: ParserIR): string => (ir.assignTargets ? `\n\tacc, accF uint8${ir.assignTargets.demand ? '\n\trpAt1, rpN, rpOver int // the demand re-parse in progress (its start + 1; 0: none), the re-parses, those above the bound (src/reparse-family.ts)' : ''}` : '');
 function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
-  const t = ir.targets;
+  const t = ir.assignTargets;
   const ret = node === 'int32' ? 'n' : 'n, true';
   const nudOkF = `func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
   // Without contexts a committed prefix-shaped NUD arm (FORM_UNARY, nudLowForm) is the one with a form of its own.
@@ -203,7 +203,7 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     rule: (name) => (f === 'R' ? `p.rec${name}()` : f === 'W' ? `p.callRuleW(p.parse${name}W())` : `p.callRule(p.parse${name}())`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
-    // Declared target contexts (declared-targets.ts): computed only in the building forms (a
+    // Declared target contexts (assign-targets.ts): computed only in the building forms (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
     // accSwap's result, the enclosing one, is accEnd's argument (Go evaluates the calls of an
     // expression left to right), so it is kept in the frame, not on a stack.
@@ -212,10 +212,10 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     // A demand twin's Pratt child (DemandIR): the position is read first (Go runs the calls of an
     // expression left to right).
     dfix: (call) => (f === 'R' ? call : `p.dfix(p.rpPos(), ${call})`),
-    target: (mask) => { if (f === 'R') throw new Error('go: a target() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
+    assignTarget: (mask) => { if (f === 'R') throw new Error('go: an assignTarget() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
     accRun: (cond, af) => (f === 'R' ? cond : `p.accEnd(p.accSwap(${af.init}), ${cond}, ${af.low}, ${af.last})`),
     armForm: armFormGo,
-    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
+    // A body guard (parser-ir.ts annotateSteps): opt / sep test it before their one attempt,
     // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
     // attempted without a mark (starC / optC / sepByC). A body that fails with leaves only
     // (MarkForm 'leaves') takes the L forms when building: the position and the scratch list, no
@@ -1128,7 +1128,7 @@ func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 }`;
 }
 
-// The operator row of a Pratt rule (emit-portable prattOpRow) at the lid in \`lid\`: the index masked
+// The operator row of a Pratt rule (parser-ir prattOpRow) at the lid in \`lid\`: the index masked
 // to the table's power-of-two length, so the compiler proves it in range (no bounds check).
 const goRowAt = (r: PrattRule, ids: LexIdPlan, lid: string): string => `row_${r.name}[${lid}&${prattOpRow(r, ids).size - 1}]`;
 // The binary operator read through the row (`row`, loaded at the loop's top: PrattLowering.opRow):
@@ -1304,7 +1304,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
   });
 }
 
-/** The entry rule with reuse recording (emit-portable entryShell), native engine: EntryMeta per
+/** The entry rule with reuse recording (parser-ir entryShell), native engine: EntryMeta per
  *  top-level entry (+ the Node.ext oracle) via parseTopOne (shape A), or per segment (shape B). */
 function rdEntryWithReuse(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan): string {
   const rid = ruleIdOf(ar, r.name);
@@ -1412,7 +1412,7 @@ ${headUse}\tfor {
   });
 }
 
-// The Go spelling of a Pratt rule's shell (emit-portable.ts, prattShell), common to its two
+// The Go spelling of a Pratt rule's shell (parser-ir.ts, prattShell), common to its two
 // engines. Every frame is printed in place, not called: Go inlines no function past its budget,
 // and a helper over the loop's locals is past it.
 const goPrattBase = (r: PrattRule, ids: LexIdPlan, leftLeaf: (words: string) => string) => {
@@ -1447,19 +1447,19 @@ ${cases.map((c) => `\t\tcase ${c.idx}:\n${c.arms.map((a) => `\t\t\t${a}`).join('
   };
 };
 
-// A Pratt rule's forms (declared-targets.ts; without target contexts every arm's but the prefix
+// A Pratt rule's forms (assign-targets.ts; without target contexts every arm's but the prefix
 // arm's is 0, a postfix or binary node's 1): each NUD arm's (fm), a postfix token arm's, the
 // template postfix's, the postfix operator node's, the binary node's (not a target, its leaf bits,
-// and those its left operand passes: info.acc); lf masks the low bits; ctx is targetOps' test.
+// and those its left operand passes: info.acc); lf masks the low bits; ctx is assignTargetOps' test.
 function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
-  const D = ir.targets?.demand, dem = demandLids(r, ids, D);
+  const D = ir.assignTargets?.demand, dem = demandLids(r, ids, D);
   const postTok = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   return {
     fm: (i: number) => (r.nudForm ? armFormGo(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`),
     postTok,
     tpl: ir.tpl ? postTok(kidOf(ids, ir.tpl.token)) : 0,
     post: r.postForm ?? 1,
-    // The operators a target context reads (emit-portable binLeftOps): a switch behind the table's
+    // The operators a target context reads (parser-ir binLeftOps): a switch behind the table's
     // test bit (goBinLeft); every other operator tests what it did without contexts and its node's
     // form is a constant.
     // A demand operator (DemandIR): its node is ASSIGNED (binDem), a left operand with a twin
@@ -1471,7 +1471,7 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     lf: (f: string) => lowGo(ir, f),
   };
 }
-// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+// A NUD arm's capped flag (parser-ir NodeCap): 'tail' is the flag its trailing operand left.
 const capGo = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? 'p.capped' : 'false');
 function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): string {
   // The native engine. `won` records the node just finished as the best so far and moves nb/kb
@@ -1487,7 +1487,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
-    // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
+    // A committed arm (parser-ir.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (i, conds) => commitGo(conds, `{ save := p.pos; sb := len(p.scratch); p.pushLeaf(uint8(t.Kid), uint32(p.pos)); p.pos++; n := p.finish(${rid}, sb, int(t.Off), save); p.form = ${T.fm(i)}; p.tail = false; return n }`, fail, true),
     commitSeq: (i, conds, cond, tail, capped, undo, nullable) => commitGo(conds, commitBodyGo(cond, undo ? UNDO_GO : null, nullable, finGo(rid), (n) => (T.fm(i) === '0' ? `return p.nudOk(${n}, ${tail}, ${capGo(capped)})` : `return p.nudOkF(${n}, ${T.fm(i)}, ${tail}, ${capGo(capped)})`)), fail),
@@ -1560,7 +1560,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `${goPrattOpTables(r, ids, ir.targets?.demand)}
+    entry: `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
@@ -1597,7 +1597,7 @@ ${B.nudClose}
   return prattShell(r, ir, ids, L);
 }
 
-/** A Pratt rule's operator tables (emit-portable prattOpTables) as arrays indexed by the token's
+/** A Pratt rule's operator tables (parser-ir prattOpTables) as arrays indexed by the token's
  *  lid, one entry per literal id (`ok` marks an operator): a bounds-checked load, where a
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
 /** The test that keeps a gated prefix operator (`await`, PrattRule.prefix's `when`) one only where
@@ -1608,7 +1608,7 @@ function preGateGo(r: PrattRule, ids: LexIdPlan): string {
 function goPrattOpTables(r: PrattRule, ids: LexIdPlan, D?: DemandIR): string {
   const ops = prattOpTables(r, ids);
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
-  // The operators a target context reads (emit-portable binLeftOps), behind the table's test bit:
+  // The operators a target context reads (parser-ir binLeftOps), behind the table's test bit:
   // does the left operand fail its context (binFail), the pass bits the node keeps from it (binKeep).
   const left = binLeftOps(ops), keep = left.filter((o) => o.acc);
   const fns = left.length === 0 ? '' : `
@@ -1632,7 +1632,7 @@ func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
   const demFn = dem.length ? `
 func binDem_${r.name}(tgt bool, op uint16) uint8 { if tgt && (${dem.map((l) => `op == ${l}`).join(' || ')}) { return ${1 | D!.assigned} }; return 1 }` : '';
   const row = prattOpRow(r, ids);
-  // the operator row (emit-portable prattOpRow), its nonzero entries keyed by lid
+  // the operator row (parser-ir prattOpRow), its nonzero entries keyed by lid
   const rowInit = row.rows.flatMap((v, lid) => (v ? [`${lid}: ${v}`] : [])).join(', ');
   return `var row_${r.name} = [${row.size}]uint32{${rowInit}}${fns}${demFn}
 var pre_${r.name} = [${ops.size}]preOp{${pre}}`;
@@ -1962,11 +1962,11 @@ function rbSite(ids: LexIdPlan, recv: string, steps: string[]): number {
   if (i === undefined) f.set(key, (i = f.size));
   return i;
 }
-// The demand form of a target context (emit-portable.ts DemandIR) on one engine (as target-ts.ts
+// The demand form of a target context (parser-ir.ts DemandIR) on one engine (as target-ts.ts
 // demandFnsTs): the twins (twin<k>, the closure's rd rules' `__twin` functions), dfix, twinForm,
 // reparseFrom (src/reparse-family.ts) and its externs, and per rule the cold demand_<rule>.
 function demandFnsGo(recv: string, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
-  const D = ir.targets?.demand;
+  const D = ir.assignTargets?.demand;
   if (!D) return '';
   const w = recv !== 'engine';
   const S = w ? goSteps(ids, 'W', recv, ENGINE_GO_W, ar) : goSteps(ids, '', 'engine', ENGINE_GO);
@@ -2069,7 +2069,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): stri
   });
 }
 
-/** The entry rule with reuse recording (emit-portable entryShell), builder engine. Engine-side
+/** The entry rule with reuse recording (parser-ir entryShell), builder engine. Engine-side
  *  EntryMeta (R2): consumer handles are never mutated; a span comes from spanned + SpanOf. */
 function rdEntryWithReuseW(r: RdRule, plan: ReusePlan, ids: LexIdPlan, ar: ArenaIdPlan, recv: string): string {
   const rid = ruleIdOf(ar, r.name);
@@ -3701,7 +3701,7 @@ export const goTarget = defineParserTarget({
 \treturn p.finish(${ruleIdOf(ar, '$template')}, sb, int(t.Off), save)
 }
 `).join('');
-    return `// GENERATED by emit-portable.ts (goTarget) — parser LIBRARY (package parser) for grammar "${ir.grammarName}".
+    return `// GENERATED by parser-ir.ts (goTarget) — parser LIBRARY (package parser) for grammar "${ir.grammarName}".
 // Public API: Tokenize(src) []Token (the lexer alone, a fresh slice the caller owns), ParseWith /
 // NewDoc / NewDocWith (CST). The CLI runner (stdin → CST JSON) is goTarget.emitRunner(): the
 // verification gates compile it with this file as one \`package main\`.

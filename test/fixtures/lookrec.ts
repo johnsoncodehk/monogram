@@ -1,4 +1,4 @@
-// A lookahead's body is printed in recognize form (emit-portable.ts, Forms): it advances and
+// A lookahead's body is printed in recognize form (parser-ir.ts, Forms): it advances and
 // reports whether it matched, building nothing. Each shape below fails if a form is missing or
 // does not do what the building form does:
 //   • a rule reached both from a lookahead and from a consuming position (`Head`: the `if` arm's
@@ -15,7 +15,7 @@
 //     before the second `in`.
 //   • a left-recursive rule whose continuations end in a POSITIVE lookahead (`Target`, Python's
 //     t_primary: `&t_lookahead`) asserts that a trailer follows, so the tail stays open: `set a.b.c[1] = x;`
-//     (only a trailing negative lookahead closes it: gen-parser.ts negativeLook).
+//     (only a trailing negative lookahead closes it: interpreter.ts negativeLook).
 import { token, rule, defineGrammar, left, op, seq, oneOf, range, star, many, opt, not, exclude, alt } from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');

@@ -1,4 +1,4 @@
-// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.targets), planned onto the portable IR.
+// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.assignTargets), planned onto the portable IR.
 //
 // A context is a predicate over nodes: a node passes iff its arm is one of the context's leaves,
 // or one of its containers whose named children all pass; a node of one child and nothing else
@@ -6,8 +6,8 @@
 // the final child with no ',' after it. The engine computes it as a SYNTHESIZED ATTRIBUTE in the
 // form it already returns from every Pratt call (`_form`, FORM_*): the low two bits keep their
 // meaning (FORM_LOW), and context i has a PASS bit and a LAST bit above them (formPass, formLast).
-// So a head is parsed once and checked only where a target is taken: a `target(ctx)` step tests
-// the pass bit of the node just returned, a `targetOps` operator that of its left operand.
+// So a head is parsed once and checked only where a target is taken: a `assignTarget(ctx)` step tests
+// the pass bit of the node just returned, a `assignTargetOps` operator that of its left operand.
 //
 // What each arm contributes is decided here, once, for every target:
 // - a leaf arm (and every arm of no context): a constant (ArmForm 'const'); a Pratt arm keeps its
@@ -28,17 +28,17 @@
 // mechanism writes FORM_TARGET / FORM_NOT_TARGET / FORM_UNARY or tests them: with contexts
 // declared a reader compares `form & 3` (target-ts.ts lowTs, target-go.ts lowGo, target-rust.ts
 // lowRs), a writer ORs the arm's leaf / last bits in (ArmForm, PrattRule.ledForm / postForm /
-// binForm / preLeaf). Readers: the prefix operand's requireTarget test (nudPrefix, commitPrefix),
-// the postfix operator's (postfixOp), the binary operator's requireTarget and noUnaryLhs tests
-// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`; a prefix-shaped bracket / sequence arm, ending in an `atLevel` operand, has FORM_UNARY low bits: PrattRule.nudBracketForm / nudSeqForm, emit-portable nudLowForm), the
+// binForm / preLeaf). Readers: the prefix operand's requireAssignTarget test (nudPrefix, commitPrefix),
+// the postfix operator's (postfixOp), the binary operator's requireAssignTarget and noUnaryLhs tests
+// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`; a prefix-shaped bracket / sequence arm, ending in an `atLevel` operand, has FORM_UNARY low bits: PrattRule.nudBracketForm / nudSeqForm, parser-ir nudLowForm), the
 // prefix node (PrattOpTables pre.form), every led (ledForm), a postfix token / template arm
 // (postfixTokForm), the postfix operator node (postForm), the binary node (binForm), an rd rule of
 // the closure (altForm). Not yet: the recovery encoding (recoveryTables refuses contexts) and the
 // typed-AST forms (they refuse them by name). The interpreter computes the predicate as a CST walk
-// (declared-targets-cst.ts), not from these bits.
+// (assign-targets-cst.ts), not from these bits.
 import type { Grammar } from './types.ts';
-import type { RuleIR, Step, RdRule, PrattRule, TargetsIR, DemandTwin } from './emit-portable.ts';
-import { formPass, formLast, FORM_MAX_CONTEXTS, nudLowForm, DEFER_SHIFT, DEMAND_ASSIGNED, DEMAND_MAX_TWINS } from './emit-portable.ts';
+import type { RuleIR, Step, RdRule, PrattRule, AssignTargetsIR, DemandTwin } from './parser-ir.ts';
+import { formPass, formLast, FORM_MAX_CONTEXTS, nudLowForm, DEFER_SHIFT, DEMAND_ASSIGNED, DEMAND_MAX_TWINS } from './parser-ir.ts';
 
 // acc: init, the bits the arm starts from (its container contexts' pass bits and its leaf bits); low,
 // its FORM_LOW bits; last, its last bits (kept where it passes).
@@ -46,7 +46,7 @@ export type ArmForm = { k: 'const'; v: number } | { k: 'unit' } | { k: 'acc'; in
 
 type Role = { leaf: number; acc: number; field: Map<number, string>; last: number };
 
-const ZERO_WIDTH = new Set<Step['t']>(['look', 'ahead', 'aheadCtx', 'sameLine', 'target']);
+const ZERO_WIDTH = new Set<Step['t']>(['look', 'ahead', 'aheadCtx', 'sameLine', 'assignTarget']);
 
 /** Every step inside a step list, outermost first (a `look` body is a lookahead of its own). */
 function* walk(steps: Step[]): Generator<Step> {
@@ -70,15 +70,15 @@ function unitCall(steps: Step[]): string | null {
   return s.t === 'rule' || s.t === 'ruleBp' ? s.name : s.t === 'seq' ? unitCall(s.steps) : null;
 }
 
-/** Plan the grammar's declared target contexts onto its rules (in place); null without `targets`. */
-export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null {
-  const decl = grammar.targets;
+/** Plan the grammar's declared target contexts onto its rules (in place); null without `assignTargets`. */
+export function planAssignTargets(grammar: Grammar, rules: RuleIR[]): AssignTargetsIR | null {
+  const decl = grammar.assignTargets;
   if (decl === undefined) return null;
   const names = Object.keys(decl);
   if (names.length === 0) return null;
   const ir = { rules };
   if (names.some((n) => decl[n]!.when === 'demand')) return planDemand(grammar, rules, names);
-  if (names.length > FORM_MAX_CONTEXTS) throw new Error(`targets: ${names.length} contexts declared (${names.join(', ')}); the engine's form holds at most ${FORM_MAX_CONTEXTS}`);
+  if (names.length > FORM_MAX_CONTEXTS) throw new Error(`assignTargets: ${names.length} contexts declared (${names.join(', ')}); the engine's form holds at most ${FORM_MAX_CONTEXTS}`);
   let passes = 0;
   names.forEach((_, i) => { passes |= formPass(i); });
   // arm name -> its role in every context
@@ -95,13 +95,13 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
     for (const arm of c.last ?? []) roleOf(arm).last |= formLast(i);
     for (const arm of [...c.leaves, ...Object.keys(c.containers ?? {})]) {
       const r = roleOf(arm);
-      if ((r.leaf & r.acc) !== 0) throw new Error(`targets: arm ${arm} is both a leaf and a container of context ${n}`);
+      if ((r.leaf & r.acc) !== 0) throw new Error(`assignTargets: arm ${arm} is both a leaf and a container of context ${n}`);
     }
   });
   const used = new Set<string>();
   const ctxIndex = (ctx: string): number => {
     const i = names.indexOf(ctx);
-    if (i < 0) throw new Error(`targets: no context named ${ctx} (declared: ${names.join(', ')})`);
+    if (i < 0) throw new Error(`assignTargets: no context named ${ctx} (declared: ${names.join(', ')})`);
     return i;
   };
   const byName = new Map(ir.rules.map((r) => [r.name, r] as const));
@@ -123,7 +123,7 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
     for (const [i, field] of role.field) {
       if (field === 'all') continue;
       if (![...walk(steps)].some((s) => (s.t === 'rule' || s.t === 'ruleBp') && s.field === field)) {
-        throw new Error(`targets: container ${arm} of context ${names[i]} names child ${field}, which arm ${arm} of rule ${rule} does not call as a rule`);
+        throw new Error(`assignTargets: container ${arm} of context ${names[i]} names child ${field}, which arm ${arm} of rule ${rule} does not call as a rule`);
       }
     }
   };
@@ -131,7 +131,7 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
     const role = roles.get(arm);
     if (role) used.add(arm);
     if (role && role.acc !== 0) {
-      if (steps === null) throw new Error(`targets: arm ${arm} of rule ${rule} is a container but has no steps of its own (an operator form)`);
+      if (steps === null) throw new Error(`assignTargets: arm ${arm} of rule ${rule} is a container but has no steps of its own (an operator form)`);
       markAcc(rule, arm, steps, role);
       return { k: 'acc', init: role.acc | role.leaf, low, last: role.last };
     }
@@ -141,14 +141,14 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
     return { k: 'const', v: low };
   };
   // target steps: what they read is the rule just before them (checked statically)
-  const markTargets = (steps: Step[]): void => {
-    for (const s of walk(steps)) if (s.t === 'target') s.mask = formPass(ctxIndex(s.ctx));
+  const markAssignTargets = (steps: Step[]): void => {
+    for (const s of walk(steps)) if (s.t === 'assignTarget') s.mask = formPass(ctxIndex(s.ctx));
   };
 
   for (const r of ir.rules) {
     if (r.kind === 'rd') {
       r.altForm = r.alts.map((alt, i) => armForm(r.name, r.altNames[i]!, alt, 1));
-      r.alts.forEach(markTargets);
+      r.alts.forEach(markAssignTargets);
     } else planPratt(r);
   }
   function planPratt(r: PrattRule): void {
@@ -162,10 +162,10 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
         case 'prefix': return armForm(r.name, arm, null, 0);   // its low bits are the operator's (PrattRule.prefix form)
       }
     });
-    for (const b of [...r.nudBrackets.map((x) => x.steps), ...r.nudSeqs, ...r.nudCapped.map((x) => x.steps), ...r.leds.map((x) => x.steps)]) markTargets(b);
+    for (const b of [...r.nudBrackets.map((x) => x.steps), ...r.nudSeqs, ...r.nudCapped.map((x) => x.steps), ...r.leds.map((x) => x.steps)]) markAssignTargets(b);
     r.ledForm = r.leds.map((l, i) => {
       const f = armForm(r.name, r.ledNames[i]!, null, r.ledForm[i]!);
-      if (f.k !== 'const') throw new Error(`targets: led ${r.ledNames[i]} of rule ${r.name} as a container is not supported`);
+      if (f.k !== 'const') throw new Error(`assignTargets: led ${r.ledNames[i]} of rule ${r.name} as a container is not supported`);
       return f.v;
     });
     r.postfixTokForm = r.postfixTokNames.map((arm) => { const f = armForm(r.name, arm, null, 0); return f.k === 'const' ? f.v : 0; });
@@ -175,7 +175,7 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
       const leftOf = (arm: string, role: Role): number => {
         let m = 0;
         for (const [i, field] of role.field) {
-          if (field !== 'left') throw new Error(`targets: the binary node ${arm} of rule ${r.name} is a container only of its left operand ('left'), not ${field}`);
+          if (field !== 'left') throw new Error(`assignTargets: the binary node ${arm} of rule ${r.name} is a container only of its left operand ('left'), not ${field}`);
           m |= formPass(i);
         }
         return m;
@@ -185,11 +185,11 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
       r.binForm = { leaf: bin ? bin.leaf | bin.last : 0, accLeft: bin ? leftOf(r.opNames.binary, bin) : 0 };
       for (const b of r.binary) {
         const own = roles.get(b.op);
-        if (own) { used.add(b.op); b.accLeft = leftOf(b.op, own); if (own.leaf | own.last) throw new Error(`targets: operator ${b.op} of rule ${r.name} as a leaf: name the operator form ${r.opNames.binary}`); }
+        if (own) { used.add(b.op); b.accLeft = leftOf(b.op, own); if (own.leaf | own.last) throw new Error(`assignTargets: operator ${b.op} of rule ${r.name} as a leaf: name the operator form ${r.opNames.binary}`); }
       }
       const post = roles.get(r.opNames.postfix), pre = roles.get(r.opNames.prefix);
       if (post) used.add(r.opNames.postfix);
-      if ((post?.acc ?? 0) !== 0 || (pre?.acc ?? 0) !== 0) throw new Error(`targets: a prefix / postfix operator form of rule ${r.name} as a container is not supported`);
+      if ((post?.acc ?? 0) !== 0 || (pre?.acc ?? 0) !== 0) throw new Error(`assignTargets: a prefix / postfix operator form of rule ${r.name} as a container is not supported`);
       r.postForm = 1 | (post ? post.leaf | post.last : 0);
       r.preLeaf = pre ? pre.leaf | pre.last : 0;
       for (const b of r.binary) {
@@ -224,8 +224,8 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
     let prev = prevIn;
     for (const s of steps) {
       switch (s.t) {
-        case 'target':
-          if (prev === null) throw new Error(`targets: target('${s.ctx}') must follow a rule reference (with only literals between, in its sequence or the one enclosing its opt / alternation branch)`);
+        case 'assignTarget':
+          if (prev === null) throw new Error(`assignTargets: assignTarget('${s.ctx}') must follow a rule reference (with only literals between, in its sequence or the one enclosing its opt / alternation branch)`);
           need(prev);
           break;
         case 'rule': case 'ruleBp': prev = s.name; break;
@@ -255,7 +255,7 @@ export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null
   }
   for (const r of ir.rules) if (r.kind === 'rd' && !closure.has(r.name)) delete r.altForm;
   const unknown = [...roles.keys()].filter((arm) => !used.has(arm));
-  if (unknown.length) throw new Error(`targets: no arm named ${unknown.join(', ')} in the grammar`);
+  if (unknown.length) throw new Error(`assignTargets: no arm named ${unknown.join(', ')} in the grammar`);
   return { names, passes, lastCtx };
 }
 
@@ -264,11 +264,11 @@ function bodies(r: RuleIR): Step[][] {
 }
 
 function grammarOpCtx(g: Grammar, op: string): string | undefined {
-  for (const level of g.precs) for (const o of level.operators) if (o.value === op && o.position === 'infix' && o.targetCtx !== undefined) return o.targetCtx;
+  for (const level of g.precs) for (const o of level.operators) if (o.value === op && o.position === 'infix' && o.assignTargetCtx !== undefined) return o.assignTargetCtx;
   return undefined;
 }
 
-// THE ON-DEMAND FORM (TargetContext.when 'demand'; emit-portable.ts DemandIR). The normal parse
+// THE ON-DEMAND FORM (AssignTargetContext.when 'demand'; parser-ir.ts DemandIR). The normal parse
 // computes nothing: every arm keeps the form it has without contexts, a container arm adds its
 // twin's number (a constant), a demand operator's node ASSIGNED. Its twins are the EAGER plan of
 // the same context, made on a copy of the rules: each container arm's steps and each rd rule of
@@ -276,20 +276,20 @@ function grammarOpCtx(g: Grammar, op: string): string | undefined {
 // must take exactly the arms the context passes as they are: in every Pratt rule a twin reads (and
 // the demand operators' own), an arm the shallow check takes (FORM_TARGET low bits, not capped) is
 // a leaf or a container, and a leaf is such an arm; anything else is refused by name.
-function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): TargetsIR {
+function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): AssignTargetsIR {
   const ctx = names[0]!;
-  const c = grammar.targets![ctx]!;
-  if (names.length !== 1) throw new Error(`targets: the demand context ${ctx} must be the grammar's only context (declared: ${names.join(', ')})`);
+  const c = grammar.assignTargets![ctx]!;
+  if (names.length !== 1) throw new Error(`assignTargets: the demand context ${ctx} must be the grammar's only context (declared: ${names.join(', ')})`);
   for (const r of rules) for (const b of bodies(r)) for (const s of walk(b)) {
-    if (s.t === 'target') throw new Error(`targets: the demand context ${ctx} is read by a target('${s.ctx}') marker in rule ${r.name}: a marker reads the form the normal parse computes (declare it eager)`);
+    if (s.t === 'assignTarget') throw new Error(`assignTargets: the demand context ${ctx} is read by an assignTarget('${s.ctx}') marker in rule ${r.name}: a marker reads the form the normal parse computes (declare it eager)`);
   }
   const clones = structuredClone(rules) as RuleIR[];
-  const eager = planTargets({ ...grammar, targets: { [ctx]: { ...c, when: 'eager' } } }, clones)!;
+  const eager = planAssignTargets({ ...grammar, assignTargets: { [ctx]: { ...c, when: 'eager' } } }, clones)!;
   const cloneOf = new Map(clones.map((r) => [r.name, r] as const));
   // The demand operators, then what their twins reach: each Pratt rule a twin reads the form of
   // (its container arms are twins), each closure rd rule a twin calls (its twin), transitively.
   const ops: Array<{ rule: string; op: string }> = [];
-  for (const r of rules) if (r.kind === 'pratt') for (const b of r.binary) if (grammarOpCtx(grammar, b.op) === ctx) { b.requireTarget = true; ops.push({ rule: r.name, op: b.op }); }
+  for (const r of rules) if (r.kind === 'pratt') for (const b of r.binary) if (grammarOpCtx(grammar, b.op) === ctx) { b.requireAssignTarget = true; ops.push({ rule: r.name, op: b.op }); }
   const twins: DemandTwin[] = [];
   const rd: RdRule[] = [];
   const fix = new Set<string>();
@@ -314,7 +314,7 @@ function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): Targets
         if (f.k !== 'acc') return;
         const n = r.nudOrder[i]!;
         const steps = n.kind === 'bracket' ? r.nudBrackets[n.index]!.steps : n.kind === 'seq' ? r.nudSeqs[n.index]! : n.kind === 'capped' ? r.nudCapped[n.index]!.steps : null;
-        if (steps === null) throw new Error(`targets: container ${r.nudNames[i]} of rule ${r.name} has no steps`);
+        if (steps === null) throw new Error(`assignTargets: container ${r.nudNames[i]} of rule ${r.name} has no steps`);
         rewrite(steps);
         twins.push({ k: twins.length, rule: r.name, arm: r.nudNames[i]!, steps, form: f });
       });
@@ -329,7 +329,7 @@ function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): Targets
     rd.push(r);
   }
   for (const r of rd) { r.twinOf = r.name; r.name = `${r.name}__twin`; }
-  if (twins.length > DEMAND_MAX_TWINS) throw new Error(`targets: the demand context ${ctx} has ${twins.length} container arms a twin reaches; the form numbers at most ${DEMAND_MAX_TWINS}`);
+  if (twins.length > DEMAND_MAX_TWINS) throw new Error(`assignTargets: the demand context ${ctx} has ${twins.length} container arms a twin reaches; the form numbers at most ${DEMAND_MAX_TWINS}`);
   // The real rules: each container arm's twin number.
   const byName = new Map(rules.map((r) => [r.name, r] as const));
   for (const r of rules) {
@@ -337,9 +337,9 @@ function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): Targets
     const mine = twins.filter((t) => t.rule === r.name);
     if (mine.length) r.nudForm = r.nudOrder.map((_, i) => { const t = mine.find((x) => x.arm === r.nudNames[i]); return { k: 'const', v: nudLowForm(r, i) | (t ? (t.k + 1) << DEFER_SHIFT : 0) }; });
   }
-  if (ops.length === 0) throw new Error(`targets: no targetOps operator reads the demand context ${ctx}`);
+  if (ops.length === 0) throw new Error(`assignTargets: no assignTargetOps operator reads the demand context ${ctx}`);
   const leaf = new Set(c.leaves), cont = new Set(Object.keys(c.containers ?? {}));
-  for (const a of c.last ?? []) if (!cont.has(a)) throw new Error(`targets: the last arm ${a} of the demand context ${ctx} must be a container (a leaf keeps the form it has without contexts)`);
+  for (const a of c.last ?? []) if (!cont.has(a)) throw new Error(`assignTargets: the last arm ${a} of the demand context ${ctx} must be a container (a leaf keeps the form it has without contexts)`);
   const bad: string[] = [];
   for (const name of new Set([...fix, ...ops.map((o) => o.rule)])) {
     const r = byName.get(name) as PrattRule;
@@ -357,7 +357,7 @@ function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): Targets
     r.postfixTokNames.forEach((arm) => check(arm, true, false));
     if (r.opNames) { check(r.opNames.binary, false, false); check(r.opNames.postfix, false, false); }
   }
-  if (bad.length) throw new Error(`targets: the demand context ${ctx}'s leaves must be the arms the shallow check takes: ${bad.join('; ')}`);
+  if (bad.length) throw new Error(`assignTargets: the demand context ${ctx}'s leaves must be the arms the shallow check takes: ${bad.join('; ')}`);
   return { names, passes: eager.passes, lastCtx: eager.lastCtx, demand: { pass: formPass(0), assigned: DEMAND_ASSIGNED, defer: 7 << DEFER_SHIFT, twins, rd, fix: [...fix], ops } };
 }
 

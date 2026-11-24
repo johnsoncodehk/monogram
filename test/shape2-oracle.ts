@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { scratchDir } from './scratch.ts';
-import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
+import { createParser, type CstLeaf, type CstNode } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape2-eval.ts';
 import { nodeKeysOf } from '../src/shape2-schema.ts';

@@ -2,7 +2,7 @@
 //
 // A highlighter back end turns ONE grammar into the files an editor engine loads (TextMate's JSON,
 // Monarch's tokenizer, tree-sitter's highlight queries). It differs from a parser target
-// (`defineParserTarget`, src/define-target.ts): a parser target prints one parser over the shared
+// (`defineParserTarget`, src/define-parser-target.ts): a parser target prints one parser over the shared
 // algorithm IR; a highlighter renders what is KNOWN about the grammar's tokens (the facts) into an
 // engine that sees only text, line by line, with that engine's own means of context. So a back end
 // declares what its engine can express (`capabilities`, never faked), renders from the shared facts

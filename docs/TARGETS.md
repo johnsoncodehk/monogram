@@ -38,7 +38,7 @@ and markup modes) carry the interpreter's lexer inlined into the module.
 
 The portable targets (`tsTarget` / `goTarget` / `rustTarget`) implement the token-stream and
 newline modes. They refuse indent and markup grammars (`buildIR` in
-[`src/emit-portable.ts`](../src/emit-portable.ts)) rather than emit a lexer that would
+[`src/parser-ir.ts`](../src/parser-ir.ts)) rather than emit a lexer that would
 mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only.
 
 They parse grammars with element regions (`elements`, [docs/REGIONS.md](REGIONS.md)): the
@@ -156,7 +156,7 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   | javascript (787) | 25.0% | 14.0% | 8.6% | 75.3% | 33.9% |
   | typescript (1827) | 22.6% | 12.7% | 7.9% | 76.8% | 28.7% |
 
-  The option also carries the parse plan as one int table (`emit-portable.ts` recoveryTables) and
+  The option also carries the parse plan as one int table (`parser-ir.ts` recoveryTables) and
   ONE interpreter of it (`src/recovery-family.ts`, printed for each target), which later stages
   make repair: TS `parseInterpreted(src, builder, depth)`, Go `ParseInterpreted`, Rust
   `parse_interpreted` parse as `parseWith` does (the same verdict and tree) with `depth` rule

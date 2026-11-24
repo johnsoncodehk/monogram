@@ -8,7 +8,7 @@
 //      (no `JSX*` rules, a declared tag-name scope, no upper/lower-case convention, `"`-only
 //      strings, no entities, no fragments; and a `[tag]…[/tag]` bracket syntax) must get its
 //      vocabulary from the grammar, in the spirit of test/agnostic.ts.
-//   3. PARSE rows: the interpreter (src/gen-parser.ts) parses the dialect source of part 1. The
+//   3. PARSE rows: the interpreter (src/interpreter.ts) parses the dialect source of part 1. The
 //      fixture declares an element region with code children (docs/REGIONS.md), so these rows
 //      gate the lexer's region frames on a grammar that is not JSX, beside the highlighter's.
 //
@@ -24,7 +24,7 @@ import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import { token, rule, defineGrammar, seq, oneOf, range, star, sep, opt, many, alt, noneOf } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import dialect from './fixtures/elementdialect.ts';
 import textDialect from './fixtures/textdialect.ts';

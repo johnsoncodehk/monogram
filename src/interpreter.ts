@@ -2,7 +2,7 @@ import type { Grammar, RuleExpr, RuleDecl } from './types.ts';
 import { CTX_SPAN, ctxReserves, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
-import { targetWalker } from './declared-targets-cst.ts';
+import { assignTargetWalker } from './assign-targets-cst.ts';
 
 // ── CST output ──
 
@@ -60,8 +60,8 @@ export function createParser(grammar: Grammar) {
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     firstSets, exprFirst, exprSecond, ctxObserve,
   } = analyzeGrammar(grammar);
-  // Declared target contexts (declared-targets-cst.ts): the predicate as a walk over the CST; absent, nothing is recorded.
-  const tw = grammar.targets && Object.keys(grammar.targets).length ? targetWalker(grammar, ruleByName.values(), tokenNames) : null;
+  // Declared target contexts (assign-targets-cst.ts): the predicate as a walk over the CST; absent, nothing is recorded.
+  const tw = grammar.assignTargets && Object.keys(grammar.assignTargets).length ? assignTargetWalker(grammar, ruleByName.values(), tokenNames) : null;
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
   // The packrat memo's soundness, as a witness (docs/CORRECTNESS.md, the memo row): with
@@ -160,7 +160,7 @@ export function createParser(grammar: Grammar) {
   }
   // An operand of this rule read at an operator's level (`atLevel(op, $)`): a NUD ending in one is
   // PREFIX-SHAPED (the type assertion `<T>e`, a capped prefix `not e`): its node closes the tail and
-  // has the prefix-unary form (not a target, no noUnaryLhs left operand), as emit-portable derives.
+  // has the prefix-unary form (not a target, no noUnaryLhs left operand), as parser-ir derives.
   function selfAtLevel(e: RuleExpr | undefined, ruleName: string): boolean {
     return !!e && e.type === 'group' && e.atLevel !== undefined && selfRefName(e.body, ruleName);
   }
@@ -440,8 +440,8 @@ export function createParser(grammar: Grammar) {
     // operand of a non-op LED) resets it — matching the spec's [~In] propagation.
     let suppressNext: Set<string> | null = null;
     // The node before the item the current sequence is matching, for a target check that opens an
-    // opt / alternation branch (matchSeqTargets); undefined at a rule's start.
-    let targetPrev: CstChild | undefined;
+    // opt / alternation branch (matchSeqAssignTargets); undefined at a rule's start.
+    let assignTargetPrev: CstChild | undefined;
     let suppressCur: Set<string> | null = null;
 
     // A reference to the template token, matched at the current position: the token itself (a
@@ -755,7 +755,7 @@ export function createParser(grammar: Grammar) {
               const rhs = parsePratt(rule, info.rbp);
               // A target-requiring prefix (`++`/`--`) operand must be a LeftHandSideExpression
               // (`++-x`, `++ ++x`, `++x--` are syntax errors). Fail hard like noUnaryLhs.
-              if (rhs && info.requireTarget && notAssignTarget(rhs)) return null;
+              if (rhs && info.requireAssignTarget && notAssignTarget(rhs)) return null;
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 if (info.capBp !== undefined) unaryNodes.add(lhs);
@@ -879,7 +879,7 @@ export function createParser(grammar: Grammar) {
             if (!tailClosed && !(postfixSameLine && tok.newlineBefore)) {
               // A target-requiring postfix (`++`/`--`) operand must be a LeftHandSideExpression
               // (`++x++`, `x++ ++` are syntax errors). Fail hard like noUnaryLhs.
-              if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
+              if (info.requireAssignTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
               pos += tokKey === tok.text ? 1 : tokKey.length;
               if (pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
@@ -891,9 +891,9 @@ export function createParser(grammar: Grammar) {
           } else {
             // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
             // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Fail hard like noUnaryLhs.
-            if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
-            // A `targetOps` infix (Grammar.targets): its left operand must pass the declared context.
-            if (info.targetCtx !== undefined && !tw!.passes(lhs, info.targetCtx, source)) return null;
+            if (info.requireAssignTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
+            // A `assignTargetOps` infix (Grammar.assignTargets): its left operand must pass the declared context.
+            if (info.assignTargetCtx !== undefined && !tw!.passes(lhs, info.assignTargetCtx, source)) return null;
             // A `noUnaryLhs` op (e.g. `**`) may not take a bare unary-prefix expression
             // (`-x`, `typeof x` — a prefix-op node whose op is NOT also a postfix, i.e.
             // not an update `++`/`--`) as its LEFT operand. Fail the whole expression
@@ -964,9 +964,9 @@ export function createParser(grammar: Grammar) {
           // match empty) — avoids speculatively parsing+failing rules like
           // DecoratorExpr/TypeParams at every position.
           if (!ruleMightStart(expr.name, peek())) return null;
-          const outerPrev = targetPrev; targetPrev = undefined;   // a rule's body starts with no node before it
+          const outerPrev = assignTargetPrev; assignTargetPrev = undefined;   // a rule's body starts with no node before it
           const node = parseRule(expr.name);
-          targetPrev = outerPrev;
+          assignTargetPrev = outerPrev;
           if (node && tw) tw.produced(node, expr);
           return node ? [node] : null;
         }
@@ -991,9 +991,9 @@ export function createParser(grammar: Grammar) {
           if (lvl !== null) {
             const r = (expr.body as { name: string }).name;
             if (!ruleMightStart(r, peek())) return null;
-            const outerPrev = targetPrev; targetPrev = undefined;
+            const outerPrev = assignTargetPrev; assignTargetPrev = undefined;
             const node = parsePratt(ruleByName.get(r)!, lvl);
-            targetPrev = outerPrev;
+            assignTargetPrev = outerPrev;
             return node ? [node] : null;
           }
           // A `suppress`-carrying group disables the listed LED connectors for the
@@ -1065,7 +1065,7 @@ export function createParser(grammar: Grammar) {
     function matchSeq(items: RuleExpr[]): CstChild[] | null {
       const saved = pos;
       const children: CstChild[] = [];
-      if (tw) return matchSeqTargets(items, saved, children);
+      if (tw) return matchSeqAssignTargets(items, saved, children);
       for (const item of items) {
         // Skip op/prefix/postfix markers in sequence (handled by Pratt)
         if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
@@ -1075,26 +1075,26 @@ export function createParser(grammar: Grammar) {
       }
       return children;
     }
-    // matchSeq in a grammar that declares target contexts (Grammar.targets): a target check
+    // matchSeq in a grammar that declares target contexts (Grammar.assignTargets): a target check
     // reads the last NODE before it, in this sequence or, through an opt / alternation branch /
-    // group, in the one enclosing it (`targetPrev`: what the enclosing sequence had matched when
-    // it entered the item this sequence belongs to). declared-targets.ts admits a target only
+    // group, in the one enclosing it (`assignTargetPrev`: what the enclosing sequence had matched when
+    // it entered the item this sequence belongs to). assign-targets.ts admits a target only
     // where that node is statically one rule's and the portable engine's form register holds it.
-    function matchSeqTargets(items: RuleExpr[], saved: number, children: CstChild[]): CstChild[] | null {
-      const outer = targetPrev;
+    function matchSeqAssignTargets(items: RuleExpr[], saved: number, children: CstChild[]): CstChild[] | null {
+      const outer = assignTargetPrev;
       const last = (): CstChild | undefined => {
         for (let k = children.length - 1; k >= 0; k--) if (!('tokenType' in children[k]!)) return children[k];
         return outer;
       };
       for (const item of items) {
         if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
-        if (item.type === 'target') {
+        if (item.type === 'assignTarget') {
           if (!tw!.passes(last(), item.ctx, source)) { pos = saved; return null; }
           continue;
         }
-        targetPrev = last();
+        assignTargetPrev = last();
         const result = matchExpr(item);
-        targetPrev = outer;
+        assignTargetPrev = outer;
         if (result === null) { pos = saved; return null; }
         children.push(...result);
       }

@@ -1,5 +1,5 @@
 // The emit layer's core: the `Target` interface and `emitParser`, with no target attached. Each
-// target's module (emit-parser.ts, target-ts.ts, target-go.ts, target-rust.ts) imports only this,
+// target's module (target-js.ts, target-ts.ts, target-go.ts, target-rust.ts) imports only this,
 // so a consumer that uses one target loads one target: the test runner (test/gate-deps.ts) reads
 // a gate's inputs from its imports, and a gate of one target must not depend on the others.
 // src/emit.ts is the public surface: this module and every target.
