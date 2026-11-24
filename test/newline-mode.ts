@@ -131,6 +131,8 @@ function grammarExecutes(src: string): { ok: boolean; err?: string } {
     seq: mk('seq'), choice: mk('choice'), optional: mk('optional'),
     repeat: mk('repeat'), repeat1: mk('repeat1'), token: mk('token'),
     field: mk('field'), blank: mk('blank'), prec,
+    // tree-sitter-cli's pattern the DSL hands to its regex parser as written (the identifier tokens).
+    RustRegex: class { value: string; constructor(value: string) { this.value = value; } },
   };
   vm.createContext(sandbox);
   try { vm.runInContext(src, sandbox, { filename: 'grammar.js' }); return { ok: true }; }
