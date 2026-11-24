@@ -142,6 +142,35 @@ bracketed forms, the prefix-operator arm, arrow-like capped forms). Its continua
 and the first that matches is taken. An inline `alt(...)` inside an alternative is ordered
 choice too: the first branch that matches.
 
+## Operator levels beyond binary and unary
+
+Two declarations let one expression rule carry a ladder whose levels are not all reachable from
+every operand position (Python's, [`python.ts`](../python.ts); fixture
+[`test/fixtures/cappedcalc.ts`](../test/fixtures/cappedcalc.ts)):
+
+- `cappedPrefix(...ops)` in a precedence level declares prefix operators capped at that level.
+  Such an operator begins an operand only where an operator of its level or a looser one could
+  stand. A plain `prefix(...)` binds at any operand position (`2 ** -1`), which suits a tight unary
+  and is wrong for a loose one:
+
+  ```ts
+  prec: [left('or'), left('and'), right(cappedPrefix('not')), left('==', '<'), left('+'), right(prefix('-'))],
+  // a and not b, not a == b (= not (a == b)): parse.   a == not b, -not a: no parse.
+  ```
+
+  Its node is the sequence `op operand` with the operator as a literal leaf, so the operand-shape
+  checks (`lhsTarget`, `noUnaryLhs`) do not treat it as a unary.
+- `atLevel(op, Rule)` reads the expression rule `Rule` at `op`'s level: only that level's operators
+  and tighter ones continue it, as they would continue an operand of `op`. It is how a context
+  that a reference grammar writes with a lower level's rule is written against one ladder:
+
+  ```ts
+  const StarExpression = rule(() => [['*', atLevel('|', Expression)], Expression]);
+  // *a | b: parses.   *a == b: no parse (a starred operand is a bitwise-or).
+  ```
+
+  The body must be a reference to a Pratt rule; anything else is refused by name.
+
 ## No nullable rule except the entry
 
 `defineGrammar` rejects a rule other than the entry that can match the **empty string**
