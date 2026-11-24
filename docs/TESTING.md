@@ -87,7 +87,9 @@ a defect every engine shares (all engines derive from one grammar and one set of
 disagreement falls in a CLASS with a disposition (engine / grammar / lexer / policy /
 oracle-tolerance / oracle-defect); the record `test/verdict-scan-record.txt` holds each class's count
 and shortest witness. Green: no disagreement outside a class and no class growing; a class that
-shrinks or vanishes is a fix and is re-recorded (`--write`), so the record's diff shows it. Its
+shrinks or vanishes is a fix: a landing that fixes a class re-records the scan in the same landing
+(`node test/verdict-scan.ts --write`, and `--python --write` in the Python job's environment, a CPython
+3.10.12 named by `MONOGRAM_PYTHON`), and the diff of the record is the evidence. Its
 Python half (`--python`, record `test/verdict-scan-python-record.txt`) runs in the `python` CI job,
 against `ast.parse` of the same Python 3.10.12.
 

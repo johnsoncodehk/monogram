@@ -341,7 +341,7 @@ function main(): void {
   for (const c of classes) {
     const now = by.get(c.id)?.length ?? 0, was = rec.get(c.id) ?? 0;
     if (now > was) bad.push(`class ${c.id} (${c.disposition}) grew ${was} -> ${now}: ${JSON.stringify(shortest(by.get(c.id)!).src)}`);
-    if (now < was) bad.push(`class ${c.id} (${c.disposition}) shrank ${was} -> ${now}: a fix; re-record (--write)`);
+    if (now < was) bad.push(`class ${c.id} (${c.disposition}) shrank ${was} -> ${now}: a fix. A landing that fixes a class re-records the scan in the same landing: ${side === 'py' ? 'node --stack-size=7000 test/verdict-scan.ts --python --write (with MONOGRAM_PYTHON = CPython 3.10.12, as the python CI job has)' : 'node test/verdict-scan.ts --write'}; the diff of the record is the evidence`);
   }
   if (bad.length) { for (const b of bad.slice(0, 40)) console.log(`✗ ${b}`); if (bad.length > 40) console.log(`… ${bad.length - 40} more`); console.log(summary); process.exit(1); }
   console.log(`✓ verdicts against ${side === 'py' ? 'ast.parse' : 'tsc / acorn'} match the record: ${summary}`);
