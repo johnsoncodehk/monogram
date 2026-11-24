@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type Step, type LexTok, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type AssignTargetsIR } from '../ir/parser-ir.ts';
 import type { ArmForm } from '../ir/assign-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
+import { prattTail, hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
 import type { Grammar } from '../grammar/types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1543,7 +1543,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tp.scratch = append(p.scratch, rhs)
 \t\tleft = ${fin}
 \t\tif p.capped { p.form = ${T.bin}; return left }
-\t\tform = ${T.bin}; tailClosed = true
+\t\tform = ${T.bin}${prattTail(r) === 'none' ? '' : '; tailClosed = true'}
 \t}`,
     entry: (bp) => `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
 func (p *engine) parse${r.name}() int32 {
@@ -1554,14 +1554,13 @@ func (p *engine) parse${r.name}() int32 {
 \tp.suppressCur = prev
 \treturn r
 }`,
-    bpOpen: (label, nudBp, bp) => `func (p *engine) bp_${r.name}(${bp ? 'minBp int' : ''}) int32 {${T.p0}
+    bpOpen: (label, nudBp, bp, tail) => `func (p *engine) bp_${r.name}(${bp ? 'minBp int' : ''}) int32 {${T.p0}
 \tleft := p.nud_${r.name}(${nudBp ? 'minBp' : ''})
 \tif left < 0 { return -1 }
 \tform := p.form
 \tif p.capped { return left }
-\ttailClosed := p.tail
-\t_ = tailClosed // Go refuses an unread local: a rule without postfix or binary operators may not read it
-${label ? 'LedLoop:\n' : ''}\tfor {
+${tail === 'none' ? '' : `\ttailClosed := p.tail
+`}${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
     bpClose: `\tp.capped = false
@@ -2238,7 +2237,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = ${fin}
 \t\tif p.capped { p.form = ${T.bin}; return left, true }
-\t\tform = ${T.bin}; tailClosed = true
+\t\tform = ${T.bin}${prattTail(r) === 'none' ? '' : '; tailClosed = true'}
 \t}`,
     entry: (bp) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tprev := p.suppressCur
@@ -2248,14 +2247,13 @@ ${kids.map((k) => `\t\tcase ${k}:
 \tp.suppressCur = prev
 \treturn r, ok
 }`,
-    bpOpen: (label, nudBp, bp) => `func (p *${recv}) bpW_${r.name}(${bp ? 'minBp int' : ''}) (spanned, bool) {${T.p0}
+    bpOpen: (label, nudBp, bp, tail) => `func (p *${recv}) bpW_${r.name}(${bp ? 'minBp int' : ''}) (spanned, bool) {${T.p0}
 \tleft, ok := p.nudW_${r.name}(${nudBp ? 'minBp' : ''})
 \tif !ok { return spanned{}, false }
 \tform := p.form
 \tif p.capped { return left, true }
-\ttailClosed := p.tail
-\t_ = tailClosed // Go refuses an unread local: a rule without postfix or binary operators may not read it
-${label ? 'LedLoop:\n' : ''}\tfor {
+${tail === 'none' ? '' : `\ttailClosed := p.tail
+`}${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
     bpClose: `\tp.capped = false

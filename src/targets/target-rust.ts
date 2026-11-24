@@ -14,7 +14,7 @@
 import { dropUnreferencedRs } from './rs-unreferenced.ts';
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type LexTok, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type AssignTargetsIR } from '../ir/parser-ir.ts';
 import type { ArmForm } from '../ir/assign-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
+import { prattTail, hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
 import type { Grammar } from '../grammar/types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -48,8 +48,8 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 // A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[] =>
-  g === null ? [] : [...(keyed || g.first === null ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.second_in(${g.second.id})`] : []), ...g.lead.map((l) => leadRs(l, t, recv)),
-    ...(g.pairs ?? []).map((x) => `${recv}.pair_in(${x.when.id}, &${t}, ${x.second.id})`)];
+  g === null ? [] : [...(keyed || g.first === null ? [] : [`in_token_set(${g.first.id}, &${t})`]), ...(g.second !== null ? [`${recv}.${rsLib('second_in')}(${g.second.id})`] : []), ...g.lead.map((l) => leadRs(l, t, recv)),
+    ...(g.pairs ?? []).map((x) => `${recv}.${rsLib('pair_in')}(${x.when.id}, &${t}, ${x.second.id})`)];
 // A guard's lead test (parser-ir.ts LeadTest) on the buffered token t.
 const leadRs = (l: LeadTest, t: string, recv: string): string => {
   const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx & ${CTX_WORD_BITS} != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
@@ -86,8 +86,9 @@ const commitSwRs: CommitLowering = {
 };
 // A committed candidate's statement: `body` when conds hold, then `fail` (unless body always returns).
 // With no condition the body's block is the statement's own (blockBody).
-const commitRs = (conds: string[], body: string, fail: string, returns = false) =>
-  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? ` ${fail}` : ''} }`;
+// `fail` is called only when the failure is printed (it may record a library method: nudFailRs).
+const commitRs = (conds: string[], body: string, fail: string | (() => string), returns = false) =>
+  `{ ${conds.length ? `if ${conds.join(' && ')} ${body.startsWith('{') ? body : `{ ${body} }`}` : blockBody(body) ?? body}${conds.length || !returns ? ` ${typeof fail === 'string' ? fail : fail()}` : ''} }`;
 // Whether candidate i, just ended at pos, beats the best so far: it ends past it, or — a Dispatch
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
@@ -125,6 +126,20 @@ const rsMacro = (form: 'cand' | 'cand_last' | 'undo' | 'undo_ne' | 'clean' | 'nu
   rsMacroUses.add(form);
   return form === 'cand' ? '' : form === 'cand_last' ? 'last ' : form;
 };
+// The Parser library's methods that a grammar may not need (the star / opt / sep_by forms, the
+// guards, nud_none ...) likewise: the emission point that spells a call records it (rsLib), with the
+// library methods its body calls (RS_LIB_DEPS), and the library prints only those (rsNeed).
+let rsLibUses = new Set<string>();
+const RS_LIB_DEPS: Record<string, string[]> = {
+  star_in: ['ahead'], star_in_r: ['ahead'], star_in_c: ['ahead'], star_in_l: ['ahead'],
+  pair_in: ['second_in'], nll_blocked: ['head_leaf_text'],
+  sep_by_r: ['match_lit_r'], sep_by_out_r: ['match_lit_r'], sep_by_c_r: ['match_lit_r'], sep_by_out_c_r: ['match_lit_r'], alt_lit_r: ['match_lit_r'],
+};
+const rsLib = (name: string): string => {
+  if (!rsLibUses.has(name)) { rsLibUses.add(name); for (const d of RS_LIB_DEPS[name] ?? []) rsLib(d); }
+  return name;
+};
+const rsNeed = (name: string): boolean => rsLibUses.has(name);
 const ckLetRs = (d: Dispatch) => `let ${d.sections.some((sec) => (sec.by === 'rest' ? sec.arms : sec.groups.flatMap((g) => g.arms)).some((i) => !d.final.includes(i))) ? 'mut ' : ''}ck = self.b.checkpoint();`;
 // The candidate frame as a macro, not a method: a helper over the list's state was measured to
 // cost instructions (+2 to +9%: LLVM does not treat the call as it treats the frame in place),
@@ -1204,10 +1219,10 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
   const L: StepLowering = {
     inner: () => (recv === 'p' ? L : rsSteps(ids, 'p', r, guards)),
     shared: (id) => `${recv}.sub_${id}${R}()`,
-    lit: (s) => (gtCompLit(ids, s) ? `${recv}.match_comp(${lidOf(ids, s.value)})` : `${recv}.match_lit${R}(${lidOf(ids, s.value)})`),
-    tok: (name) => `${recv}.match_tok${R}(${kidOf(ids, name)})`,
+    lit: (s) => (gtCompLit(ids, s) ? `${recv}.${rsLib('match_comp')}(${lidOf(ids, s.value)})` : `${recv}.${rsLib(`match_lit${R}`)}(${lidOf(ids, s.value)})`),
+    tok: (name) => `${recv}.${rsLib(`match_tok${R}`)}(${kidOf(ids, name)})`,
     // Recognized, an interpolated template runs its building matcher and its node is dropped.
-    template: (name, hole) => `(${recv}.match_tok${R}(${kidOf(ids, name)}) || ${r ? `${recv}.match_template(Parser::parse_${hole}).is_some()` : `${recv}.call_rule(|p| p.match_template(Parser::parse_${hole}))`})`,
+    template: (name, hole) => `(${recv}.${rsLib(`match_tok${R}`)}(${kidOf(ids, name)}) || ${r ? `${recv}.match_template(Parser::parse_${hole}).is_some()` : `${recv}.call_rule(|p| p.match_template(Parser::parse_${hole}))`})`,
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
@@ -1239,20 +1254,20 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     // no builder checkpoint; recognizing, every mark is the position alone already (`_r`).
     star: (body, g, mk) => {
       const C = mk === 'none' ? '_c' : mk === 'leaves' && !r ? '_l' : R;
-      return g === null || !guards ? `${recv}.star${C}(|p| ${body})` : `${recv}.star_in${C}(${g}, |p| ${body})`;
+      return g === null || !guards ? `${recv}.${rsLib(`star${C}`)}(|p| ${body})` : `${recv}.${rsLib(`star_in${C}`)}(${g}, |p| ${body})`;
     },
     opt: (body, g, mk) => {
       const C = mk === 'none' ? '_c' : mk === 'leaves' && !r ? '_l' : R;
-      return g === null || !guards ? `${recv}.opt${C}(|p| ${body})` : `(!${recv}.ahead(${g}, true) || ${recv}.opt_out${C}(|p| ${body}))`;
+      return g === null || !guards ? `${recv}.${rsLib(`opt${C}`)}(|p| ${body})` : `(!${recv}.${rsLib('ahead')}(${g}, true) || ${recv}.${rsLib(`opt_out${C}`)}(|p| ${body}))`;
     },
     sep: (elem, delim, g, mk) => {
       const C = mk === 'none' ? `_c${R}` : mk === 'leaves' && !r ? '_l' : R;
-      return g === null || !guards ? `${recv}.sep_by${C}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.ahead(${g}, true) || ${recv}.sep_by_out${C}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`;
+      return g === null || !guards ? `${recv}.${rsLib(`sep_by${C}`)}(|p| ${elem}, ${sepDelimLid(ids, delim)})` : `(!${recv}.${rsLib('ahead')}(${g}, true) || ${recv}.${rsLib(`sep_by_out${C}`)}(|p| ${elem}, ${sepDelimLid(ids, delim)}))`;
     },
-    altlit: (values) => `${recv}.alt_lit${R}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
+    altlit: (values) => `${recv}.${rsLib(`alt_lit${R}`)}(&[${values.map((v) => lidOf(ids, v)).join(', ')}])`,
     look: (id, is) => `${is ? '' : '!'}${recv}.look_${id}()`,
-    ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
-    aheadCtx: (set, is) => (is ? `(${recv}.ahead(${set}, true) || ${recv}.ctx_word())` : `(${recv}.ahead(${set}, false) && !${recv}.ctx_word())`),
+    ahead: (set, is) => `${recv}.${rsLib('ahead')}(${set}, ${is})`,
+    aheadCtx: (set, is) => (rsLib('ahead'), rsLib('ctx_word'), is ? `(${recv}.ahead(${set}, true) || ${recv}.ctx_word())` : `(${recv}.ahead(${set}, false) && !${recv}.ctx_word())`),
     sameLine: () => `matches!(${recv}.peek(), Some(t) if !t.nl)`,
     when: (mask, val) => `(${recv}.ctx & ${mask} == ${val})`,
     inPlace: (kind, stmts) => (kind === 'alt' ? `(|p: &mut Parser<'a, B>| -> bool { ${stmts} })(${recv})` : stmts),
@@ -1441,7 +1456,7 @@ ${topOne}
     headSeg: (rule) => `    fn parse_head_seg(&mut self) -> Option<EntryMeta> {
         self.look_reset();
         let before = self.scratch.len();
-        self.opt(|p| p.call_rule(Parser::parse_${rule}));
+        self.${rsLib('opt')}(|p| p.call_rule(Parser::parse_${rule}));
         if self.scratch.len() == before { return None; }
         let n = self.scratch[before];
         let (tok_start, tok_end) = self.b.tok_range(n);
@@ -1461,7 +1476,7 @@ ${topOne}
             self.back(sp); self.scratch.truncate(before); self.b.restore(ck);
             return None;
         }
-        self.opt(|p| p.call_rule(Parser::parse_${rule}));
+        self.${rsLib('opt')}(|p| p.call_rule(Parser::parse_${rule}));
         let leaf = self.scratch[before];
         let (tok_start, mut tok_end) = self.b.tok_range(leaf);
         let count = self.scratch.len() - before;
@@ -1489,7 +1504,7 @@ ${headUse}        loop {
   });
 }
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRule's nudClose).
-const NUD_FAIL_RS = 'return self.nud_none();';
+const nudFailRs = (): string => `return self.${rsLib('nud_none')}();`;
 // The mixfix operand re-bind (rebind-family.ts, the one `rb_scan`): each led that has one is a site,
 // its four steps (connector, operand, L2, the rest) the cases of `rb_step`. The engine's part: a mark
 // is mark() as four ints; the cap is the tail split off for the operand's call, then appended back
@@ -1632,9 +1647,9 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     dispatch: dispatchRsL('t', false),
     // A committed arm (parser-ir.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, t.off as usize, save')}; self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
+    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, t.off as usize, save')}; self.form = ${fm(i)}; self.tail = false; return Some(n); }`, nudFailRs, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
-    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `nud${i}`, rid), cond, undo, nullable, cap === 'tail' ? `{ self.form = ${fm(i)}; self.tail = ${tail}; }` : fm(i) === '0' ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${fm(i)}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), NUD_FAIL_RS),
+    commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `nud${i}`, rid), cond, undo, nullable, cap === 'tail' ? `{ self.form = ${fm(i)}; self.tail = ${tail}; }` : fm(i) === '0' ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${fm(i)}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), nudFailRs),
     commitPrefix: (i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid${preGated ? ', self.ctx' : ''}) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
@@ -1643,15 +1658,15 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
                 Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, self.off_at(save), save')}; self.form = pform; self.tail = true; self.capped = false; return Some(n); }
                 None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); }
             }
-        }`, NUD_FAIL_RS),
-    commitFail: NUD_FAIL_RS,
+        }`, nudFailRs),
+    get commitFail() { return nudFailRs(); },
     nudEnd: '    }',
     commitSw: commitSwRs,
     led: {
       tailOpen: '!tail_closed',
       lbpAbove: (lbp) => `${lbp} > min_bp`,
       sameLine: '!t.nl',
-      notLeftLeaf: (words) => `!self.nll_blocked(&[${words.map(J).join(', ')}], &left)`,
+      notLeftLeaf: (words) => `!self.${rsLib('nll_blocked')}(&[${words.map(J).join(', ')}], &left)`,
       notSuppressed: (set) => `self.suppress_cur != ${set}`,
       ifAll: (parts) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
@@ -1694,7 +1709,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
             if self.capped { self.form = ${binF}; return Some(left); }
-            form = ${binF}; tail_closed = true;
+            form = ${binF};${prattTail(r) === 'none' ? '' : ' tail_closed = true;'}
         }`,
     entry: (bp) => `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let prev = self.suppress_cur;
@@ -1706,14 +1721,14 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     }
     /// The operator row per lid (parser-ir prattOpRow: binary lbp / rbp / flags, postfix lbp / target, composite lead, led index).
     const ${r.name}_ROW: [u32; ${row.size}] = [${row.rows.join(', ')}];
-    fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
-`,
+${preArms ? `    fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}, _ => None } }
+` : '' /* no prefix operator: no prefix arm calls it */}`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
-    bpOpen: (_label, nudBp, bp, closesTail) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
+    bpOpen: (_label, nudBp, bp, tail) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
         let mut left = self.${r.name}_nud(${nudBp ? 'min_bp' : ''})?;
         let mut form = self.form;
-        if self.capped { return Some(left); }
-        let ${closesTail ? 'mut ' : ''}tail_closed = self.tail;
+        if self.capped { return Some(left); }${tail === 'none' ? '' : `
+        let ${tail === 'reassigned' ? 'mut ' : ''}tail_closed = self.tail;`}
         loop {
             let t = match self.peek() { Some(t) => t, None => break };`,
     bpClose: `        self.capped = false;
@@ -2147,12 +2162,11 @@ function tokenSetRuntimeRust(ir: ParserIR, ids: LexIdPlan): string {
   const b = tokenSetBits(ids, ir.tokenSets);
   const rows: string[] = [];
   for (let r = 0; r * b.width < b.words.length; r++) rows.push(`[${b.words.slice(r * b.width, (r + 1) * b.width).join(', ')}]`);
-  return `#[allow(dead_code)]
-const TOKEN_SET_KID: usize = ${b.kidBase};
-#[allow(dead_code)]
+  // each item is kept only where something reaches it (rs-unreferenced.ts)
+  const words = ctxWordLids(ir, ids);
+  return `const TOKEN_SET_KID: usize = ${b.kidBase};
 static TOKEN_SETS: [[u32; ${b.width}]; ${rows.length}] = [${rows.join(', ')}];
 #[inline(always)]
-#[allow(dead_code)]
 fn in_token_set(k: usize, t: &Tok) -> bool {
     // Rows are exact-size (one per lid, then one per kid) and a token's ids are always in range,
     // as for the lexer's flag tables; k is a constant at every call site, so is word k >> 5.
@@ -2161,20 +2175,26 @@ fn in_token_set(k: usize, t: &Tok) -> bool {
 }
 // Whether t is a word the context ctx reserves (ParserIR.ctxWords): with the \`ahead\` test of the
 // guard's own set, an \`aheadCtx\` test.
-#[inline(always)]
-#[allow(dead_code)]
-fn in_ctx_words(ctx: u8, t: &Tok) -> bool { let _ = (ctx, t); false${ctxWordLids(ir, ids).map((w) => ` || (ctx & ${w.bit} != 0 && t.lid == ${w.lid})`).join('')} }`;
+${words.length ? `#[inline(always)]
+fn in_ctx_words(ctx: u8, t: &Tok) -> bool { ${words.map((w) => `(ctx & ${w.bit} != 0 && t.lid == ${w.lid})`).join(' || ')} }` : '// no context reserves a word: ctx_word is false'}`;
 }
 
-function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean, shared: SharedAlgorithms): string {
+// The library methods the recovery engine (recoveryRegionRust's Recov, printed after the library)
+// calls among those printed by need.
+const RECOV_LIB_USES = ['ahead', 'ctx_word', 'second_in', 'match_comp', 'head_leaf_text'];
+function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean, shared: SharedAlgorithms, recovery: boolean): string {
   const reuse = ir.reuse;
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
   rsMacroUses = new Set();
+  rsLibUses = new Set();
+  if (recovery) for (const m of RECOV_LIB_USES) rsLib(m);
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRule(r, ir, ids, ar);
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
     return rdRule(r, ids, ar);
   }), ...ir.rules.filter((r) => ir.forms.recognizeRules.includes(r.name)).map((r) => ruleR(r, ids))].join('\n\n');
+  // before the library: their steps record the combinators they call (rsLib)
+  const lookSharedFns = lookFns(ir, ids, ar) + sharedFns(ir, ids, ar);
   const matchTemplate = ir.tpl ? `    // interp: the rule that parses each \`\${…}\` hole — the one the matching reference declares
     // (the grammar's expression rule, or the rule a withHoles reference names).
     fn match_template(&mut self, interp: fn(&mut Parser<'a, B>) -> Option<Spanned<B::H>>) -> Option<Spanned<B::H>> {
@@ -2628,36 +2648,31 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn look_end(&self) -> usize { if self.peek_end > self.max_look { self.peek_end } else { self.max_look } }
     /// Start recording an entry's extent.
     #[inline(always)]
-    fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }
+    fn look_reset(&mut self) { self.max_look = 0; self.peek_end = 0; }${rsNeed('nud_none') ? `
     /// A NUD that matched nothing, from its commit switch: the state its frame leaves then (prattRule's nudClose).
     #[inline(always)]
-    #[allow(dead_code)]
-    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }${targetRuntimeRs(ir)}${rebindRuntimeRs(ir, ids, shared)}${demandFnsRs(ir, ids, ar, shared)}
+    fn nud_none(&mut self) -> Option<Spanned<B::H>> { self.capped = false; self.form = 0; self.tail = false; None }` : ''}${targetRuntimeRs(ir)}${rebindRuntimeRs(ir, ids, shared)}${demandFnsRs(ir, ids, ar, shared)}
     #[inline(always)]
     fn mark(&self) -> Mark { Mark { pos: self.pos, sb: self.scratch.len(), ck: self.b.checkpoint() } }
     /// Undo everything since m: the position (as back), the scratch list and the builder.
     #[inline(always)]
     fn reset(&mut self, m: Mark) { self.back(m.pos); self.scratch.truncate(m.sb); self.b.restore(m.ck); }
-    #[inline(always)]
-    #[allow(dead_code)]
+${rsNeed('ahead') ? `    #[inline(always)]
     fn ahead(&mut self, k: usize, is: bool) -> bool { match self.peek() { Some(t) => in_token_set(k, &t) == is, None => !is } }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('ctx_word') ? `    #[inline(always)]
     /// Whether the next token is a word the context in force reserves; outside every context it reads nothing.
-    fn ctx_word(&mut self) -> bool { self.ctx & ${CTX_WORD_BITS} != 0 && match self.peek() { Some(t) => in_ctx_words(self.ctx, &t), None => false } }
-    /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
+    fn ctx_word(&mut self) -> bool { ${ctxWordLids(ir, ids).length ? `self.ctx & ${CTX_WORD_BITS} != 0 && match self.peek() { Some(t) => in_ctx_words(self.ctx, &t), None => false }` : 'false'} }
+` : ''}${rsNeed('second_in') ? `    /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
-    #[allow(dead_code)]
     fn second_in(&mut self, k: usize) -> bool {
         let i = self.pos + 1;
         if i + 1 > self.max_look { self.max_look = i + 1; }
         i < self.toks.len() && in_token_set(k, &self.toks[i])
     }
-    /// A pair test (Guard.pairs): when t is in tokenSets[w], the token after it must be in tokenSets[s].
+` : ''}${rsNeed('pair_in') ? `    /// A pair test (Guard.pairs): when t is in tokenSets[w], the token after it must be in tokenSets[s].
     #[inline(always)]
-    #[allow(dead_code)]
     fn pair_in(&mut self, w: usize, t: &Tok, s: usize) -> bool { !in_token_set(w, t) || self.second_in(s) }
-    #[inline(always)]
+` : ''}    #[inline(always)]
     fn off_at(&self, i: usize) -> usize { if i < self.toks.len() { self.toks[i].off as usize } else { 0 } }
     #[inline(always)]
     fn push_leaf(&mut self, tt_id: u16, tok_idx: u32, off: u32, end: u32) {
@@ -2678,25 +2693,25 @@ impl<'a, B: Builder> Parser<'a, B> {
         );
         Spanned { h, off, tok_start: tok_start as u32, present }
     }
-    #[inline(always)]
+${rsNeed('head_leaf_text') ? `    #[inline(always)]
     fn head_leaf_text(&self, f: &Spanned<B::H>) -> &'a str {
         if !f.present { return ""; }
         let (a, b) = self.b.head_span(f.h, &self.toks);
         let a = a as usize; let b = b as usize;
         if a <= b && b <= self.src.len() { &self.src[a..b] } else { "" }
     }
-    #[inline(always)]
+` : ''}${rsNeed('nll_blocked') ? `    #[inline(always)]
     fn nll_blocked(&self, words: &[&str], left: &Spanned<B::H>) -> bool {
         let h = self.head_leaf_text(left); words.iter().any(|w| *w == h)
     }
-    #[inline(always)]
+` : ''}    #[inline(always)]
     fn match_lit(&mut self, lid: u16) -> bool {
         match self.peek() {
             Some(t) if t.lid == lid => { self.push_leaf(if lid >= LID_KW { ${ttIdOf(ar, '$keyword')} } else { ${punctId} }, self.pos as u32, t.off, t.end); self.pos += 1; true }
             _ => false
         }
     }
-    /// Match a composite '>'-led literal (a lookahead operand; never a tree leaf).
+${rsNeed('match_comp') ? `    /// Match a composite '>'-led literal (a lookahead operand; never a tree leaf).
     #[inline(always)]
     fn match_comp(&mut self, lid: u16) -> bool {
         if self.peek().is_none() { return false; }
@@ -2706,7 +2721,7 @@ impl<'a, B: Builder> Parser<'a, B> {
         self.pos += n;
         true
     }
-    /// The binary operator read at pos (t = toks[pos]): its lid, token count and end offset. A '>'
+` : ''}    /// The binary operator read at pos (t = toks[pos]): its lid, token count and end offset. A '>'
     /// read counts the tokens it inspected toward max_look.
     #[inline(always)]
     fn op_read(&mut self, t: Tok) -> (u16, usize, u32) {
@@ -2730,7 +2745,7 @@ impl<'a, B: Builder> Parser<'a, B> {
             None => false
         }
     }
-    #[inline(always)]
+${rsNeed('star') ? `    #[inline(always)]
     fn star(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop {
             let m = self.mark();
@@ -2738,13 +2753,13 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(always)]
+` : ''}${rsNeed('opt') ? `    #[inline(always)]
     fn opt(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let m = self.mark();
         if !body(self) { self.reset(m); }
         true
     }
-    #[inline(always)]
+` : ''}${rsNeed('sep_by') ? `    #[inline(always)]
     fn sep_by(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
@@ -2755,10 +2770,9 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The guarded forms: the body is attempted only where the next token is in tokenSets[k]. Out of
+` : ''}${rsNeed('star_in') ? `    // The guarded forms: the body is attempted only where the next token is in tokenSets[k]. Out of
     // line and generic over the body, so each site is its own small function with the body inlined.
     #[inline(never)]
-    #[allow(dead_code)]
     fn star_in<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) {
             let m = self.mark();
@@ -2766,14 +2780,12 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
+` : ''}${rsNeed('opt_out') ? `    // The attempt of a guarded opt / sep whose guard the caller tested: out of line, per site.
     #[inline(never)]
-    #[allow(dead_code)]
     fn opt_out<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
         let m = self.mark(); if !body(self) { self.reset(m); } true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out') ? `    #[inline(never)]
     fn sep_by_out<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         let m0 = self.mark();
         if !elem(self) { self.reset(m0); return true; }
@@ -2784,13 +2796,11 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_out_r') ? `    #[inline(never)]
     fn opt_out_r<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
         let sp = self.pos; if !body(self) { self.back(sp); } true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_r') ? `    #[inline(never)]
     fn sep_by_out_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
@@ -2801,73 +2811,61 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_in_r') ? `    #[inline(never)]
     fn star_in_r<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
-    // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo; the same
+` : ''}${rsNeed('star_c') ? `    // A clean body (Step.clean) leaves no trace when it fails: no mark, nothing to undo; the same
     // code builds or recognizes (the body is the form's own), except a delimiter's match.
     #[inline(always)]
-    #[allow(dead_code)]
     fn star_c(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool { while once(self) {} true }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_c') ? `    #[inline(always)]
     fn opt_c(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool { body(self); true }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_c') ? `    #[inline(always)]
     fn sep_by_c(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         if elem(self) { while self.match_lit(delim) && elem(self) {} }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_c_r') ? `    #[inline(always)]
     fn sep_by_c_r(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         if elem(self) { while self.match_lit_r(delim) && elem(self) {} }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_in_c') ? `    #[inline(never)]
     fn star_in_c<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) && once(self) {}
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_out_c') ? `    #[inline(never)]
     fn opt_out_c<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool { body(self); true }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_c') ? `    #[inline(never)]
     fn sep_by_out_c<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         if elem(self) { while self.match_lit(delim) && elem(self) {} }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_c_r') ? `    #[inline(never)]
     fn sep_by_out_c_r<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         if elem(self) { while self.match_lit_r(delim) && elem(self) {} }
         true
     }
-    #[inline(always)]
+` : ''}${rsNeed('alt_lit') ? `    #[inline(always)]
     fn alt_lit(&mut self, lids: &[u16]) -> bool {
         for lid in lids { if self.match_lit(*lid) { return true; } }
         false
     }
-    // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
+` : ''}${rsNeed('star_l') ? `    // A body that fails with leaves only (Step.leaves) changes nothing but the position and the
     // scratch list when it fails: its mark is those two, with no builder checkpoint.
     #[inline(always)]
-    #[allow(dead_code)]
     fn star_l(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop { let sp = self.pos; let sb = self.scratch.len(); if !once(self) { self.back(sp); self.scratch.truncate(sb); break; } }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_l') ? `    #[inline(always)]
     fn opt_l(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let sp = self.pos; let sb = self.scratch.len(); if !body(self) { self.back(sp); self.scratch.truncate(sb); } true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_l') ? `    #[inline(always)]
     fn sep_by_l(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let sp0 = self.pos; let sb0 = self.scratch.len();
         if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); return true; }
@@ -2878,19 +2876,16 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_in_l') ? `    #[inline(never)]
     fn star_in_l<F: Fn(&mut Self) -> bool>(&mut self, k: usize, once: F) -> bool {
         while self.ahead(k, true) { let sp = self.pos; let sb = self.scratch.len(); if !once(self) { self.back(sp); self.scratch.truncate(sb); break; } }
         true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_out_l') ? `    #[inline(never)]
     fn opt_out_l<F: Fn(&mut Self) -> bool>(&mut self, body: F) -> bool {
         let sp = self.pos; let sb = self.scratch.len(); if !body(self) { self.back(sp); self.scratch.truncate(sb); } true
     }
-    #[inline(never)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_out_l') ? `    #[inline(never)]
     fn sep_by_out_l<F: Fn(&mut Self) -> bool>(&mut self, elem: F, delim: u16) -> bool {
         let sp0 = self.pos; let sb0 = self.scratch.len();
         if !elem(self) { self.back(sp0); self.scratch.truncate(sb0); return true; }
@@ -2901,30 +2896,25 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}    // The recognize forms (ParserIR.forms): the same tokens examined, nothing built.
+${rsNeed('match_lit_r') ? `    #[inline(always)]
     fn match_lit_r(&mut self, lid: u16) -> bool {
         match self.peek() { Some(t) if t.lid == lid => { self.pos += 1; true } _ => false }
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('match_tok_r') ? `    #[inline(always)]
     fn match_tok_r(&mut self, kid: u16) -> bool {
         match self.peek() { Some(t) if t.kid == kid => { self.pos += 1; true } _ => false }
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('star_r') ? `    #[inline(always)]
     fn star_r(&mut self, once: fn(&mut Parser<'a, B>) -> bool) -> bool {
         loop { let sp = self.pos; if !once(self) { self.back(sp); break; } }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('opt_r') ? `    #[inline(always)]
     fn opt_r(&mut self, body: fn(&mut Parser<'a, B>) -> bool) -> bool {
         let sp = self.pos; if !body(self) { self.back(sp); } true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('sep_by_r') ? `    #[inline(always)]
     fn sep_by_r(&mut self, elem: fn(&mut Parser<'a, B>) -> bool, delim: u16) -> bool {
         let sp0 = self.pos;
         if !elem(self) { self.back(sp0); return true; }
@@ -2935,14 +2925,13 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
         true
     }
-    #[inline(always)]
-    #[allow(dead_code)]
+` : ''}${rsNeed('alt_lit_r') ? `    #[inline(always)]
     fn alt_lit_r(&mut self, lids: &[u16]) -> bool {
         for lid in lids { if self.match_lit_r(*lid) { return true; } }
         false
     }
-
-${matchTemplate}${lookFns(ir, ids, ar)}${sharedFns(ir, ids, ar)}${ruleFns}
+` : ''}
+${matchTemplate}${lookSharedFns}${ruleFns}
 }
 `;
 }
@@ -5804,7 +5793,7 @@ fn leaf_end(toks: &[Tok], ti: u32, tt: u8) -> u32 {
     if tt == ${ttIdOf(ar, '$operator')} && ${rsLeadEq(ids, 't.lid')} { gt_op(toks, ti as usize).2 } else { t.end }
 }
 
-${emitParserMachine(ir, ids, ar, shapeB, shared)}${hasRebind(ir) ? shared.rebindFamily(ir, 'free') : ''}
+${emitParserMachine(ir, ids, ar, shapeB, shared, recovery)}${hasRebind(ir) ? shared.rebindFamily(ir, 'free') : ''}
 
 fn write_json_kid(nodes: &[Node], kids: &[i32], toks: &[Tok], kid: i32, out: &mut String) {
     if kid < 0 {
