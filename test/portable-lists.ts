@@ -151,13 +151,15 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // Every module of this gate is emitted with total parsing (the emit option `recovery`), whose
   // region is added to the default module and changes none of it but the rule-name table, which
   // names the reserved rules after the grammar's (parser-ir.ts RESERVED_RULES): each module,
-  // that table read without them, has every word of the default emission, in order (a helper or
-  // a variable only the region reads is between them: an emission keeps only what something
-  // reaches, src/targets/js-unreferenced.ts).
+  // that table read without them, has every token (a word or a punctuation character) of the
+  // default emission, in order (a helper, a variable, a field, a parameter or a lifetime only the
+  // region reads is between them: an emission keeps only what something reaches,
+  // src/targets/js-unreferenced.ts, and the Rust printer prints by need: target-rust.ts rsLib).
+  const tokens = (s: string): string[] => s.match(/[\w']+|[^\s\w']/g) ?? [];
   const hasInOrder = (rec: string, def: string): boolean => {
-    const r = rec.split(/\s+/);
+    const r = tokens(rec);
     let i = 0;
-    for (const w of def.split(/\s+/)) { while (i < r.length && r[i] !== w) i++; if (i++ >= r.length) return false; }
+    for (const w of tokens(def)) { while (i < r.length && r[i] !== w) i++; if (i++ >= r.length) return false; }
     return true;
   };
   for (const e of emitted) {
