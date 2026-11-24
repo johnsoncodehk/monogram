@@ -428,9 +428,7 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       ]),
       if_(and(not(v('ok')), ge(call('enPeekKid'), n(0)), call('riRep', v('p0'))), [
         let_('ke', call('enMark')),
-        let_('ce', call('enSh')),
-        run('enLeafKid'),
-        run('riErrNode', v('ce'), v('p0')),
+        run('riErrTok', v('p0')),
         set('ok', call('riTry', S2R, v('d'), fls, tru)),
         if_(v('ok'), [run('enUnmark', v('ke'))], [undo('ke')]),
       ]),
@@ -454,9 +452,7 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       let_('rp', fls, 'bool'),
       if_(and(not(v('dl')), ge(call('enPeekKid'), n(0)), call('riRep', v('pd'))), [
         set('rp', tru),
-        let_('ce', call('enSh')),
-        run('enLeafKid'),
-        run('riErrNode', v('ce'), v('pd')),
+        run('riErrTok', v('pd')),
         set('dl', call('enLit', S3)),
         if_(not(v('dl')), [run('enReset', v('km')), run('riRepNode', T(TR(1)), n(DK_MISS_LIT), S3), set('dl', tru)]),
       ]),
@@ -655,9 +651,7 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
   if_(and(eq(fld(v('best'), 'won'), n(0)), or(call('riNear', sub(v('save'), n(1))), call('riRep', v('save')))), [
     if_(ge(v('kid'), n(0)), [
       let_('ke', call('enMark')),
-      let_('ce', call('enSh')),
-      run('enLeafKid'),
-      run('riErrNode', v('ce'), v('save')),
+      run('riErrTok', v('save')),
       let_('eo', call('enFinOff')),
       // (not across a line break: a token that ends its line ends an unfinished construct, `x = ;`)
       let_('oke', fls, 'bool'),
@@ -823,6 +817,12 @@ const riNear = method('riNear', [['p', 'int']], ['bool'], [
   let_('pr', rm(RM_PROBE)),
   ret(and(or(lt(v('pr'), n(0)), gt(v('p'), v('pr'))), call('riBarIn', v('p'), add(v('p'), n(2))))),
 ]);
+// The token at the position, extra: an `$error` node over its leaf (the tokens from p), and its repair.
+const riErrTok = method('riErrTok', [['p', 'int']], [], [
+  let_('c', call('enSh')),
+  run('enLeafKid'),
+  run('riErrNode', v('c'), v('p')),
+]);
 // An `$error` node over the leaves from height c, the tokens from p to the position, and its repair.
 const riErrNode = method('riErrNode', [['c', 'int'], ['p', 'int']], [], [
   run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
@@ -844,9 +844,7 @@ const riMiss = method('riMiss', [['op', 'int'], ['x', 'int']], ['bool'], [
   if_(not(call('riRep', v('p'))), [ret(fls)]),
   if_(ge(call('enPeekKid'), n(0)), [
     let_('k', call('enMark')),
-    let_('c', call('enSh')),
-    run('enLeafKid'),
-    run('riErrNode', v('c'), v('p')),
+    run('riErrTok', v('p')),
     if_(call('riMatch', v('op'), v('x')), [run('enUnmark', v('k')), ret(tru)]),
     undo('k'),
   ]),
@@ -1028,7 +1026,7 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 // marks, printed with the native forms).
 export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): Fn[] {
   return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riFrame, riFrameIn, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBpOf(rebind),
-    riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
+    riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, riErrTok, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 
