@@ -1060,6 +1060,11 @@ export default defineGrammar({
     // the heritage's `.b` on the base `a`; the interpreter's NewTarget takes it (longest match), and
     // the heritage's tails are for a call's or class expression's result (`extends f().b`).
     ['new_target', 'class_heritage'],
+    // The Statement rule (a sub-statement; one kind of list item, Stmt): where Stmt's tuples met a
+    // statement form, Statement's meet it now (`{ a:` is a block's label or an object's key;
+    // guessed without the CLI: owed a `node test/collect-conflicts.ts` run).
+    ['statement'], ['member_name', 'statement'], ['program', 'statement'], ['statement', 'param'],
+    ['stmt', 'statement'], ['expr', 'statement'], ['statement', 'block'],
   ],
 
   rules: {

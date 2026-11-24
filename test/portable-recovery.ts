@@ -65,7 +65,12 @@ const TOTAL_K = 4;
 // javascript 5412 -> 5349, typescript 6051 -> 6388 (land/grammar-decorators-2, on master 3587831d): `@`
 // joins the grammar's literals and typescript's decorator list gains accepts, so both mutant sets are
 // drawn again: javascript 5,349 of 5,850 rejects agree (91.4%, was 91.7%), typescript 6,388 of 6,845 (93.3%).
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6388 };
+// javascript 5349 -> 5329, typescript 6388 -> 6372 (land/grammar-statement-declaration): no literal
+// changes, but the mutants' verdicts do (a declaration in a sub-statement position, `export` and a
+// statement that begins with a declaration word, no longer parse): javascript 5,329 of 5,991 rejects
+// agree (88.9%, was 91.4% of 5,850), typescript 6,372 of 6,847 (93.1%). The javascript share falls:
+// the new rejects' farthest hints are not yet classified (owed to the recovery lane).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5329, typescript: 6372 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is

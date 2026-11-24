@@ -34,6 +34,9 @@ import { compareTrees, conformanceFiles, nestValue, type Divergence, type NTree,
 
 export const REALJS_LIST = '/home/linuxuser/.cache/monogram-agents/scratch/fix-grammar-queue-2/realjs-files.txt';
 const RECORD = new URL('./shape2-oracle-record.json', import.meta.url);
+/** The rule whose `expr` arm is the expression statement: JavaScript's Statement, TypeScript's Stmt
+ * (tsc's parser takes a declaration in a sub-statement position, so TypeScript has one rule). */
+const STATEMENT_RULES = new Set(['Statement', 'Stmt']);
 /** The corpus each shape is gated on, available in CI: the JavaScript of installed packages
  * (PACKAGES) for acorn, the pinned TypeScript checkout's expression cases for tsc. */
 const CI_CORPUS: Record<string, string> = { estree: 'node_modules', tsc: 'conformance/expressions' };
@@ -159,7 +162,7 @@ export function runShape(shape: OracleShape, corpus: string, paths: string[], sa
     const got = new Map<number, CstNode>();
     const walk = (x: CstNode | CstLeaf): void => {
       if ('tokenType' in x) return;
-      if (x.rule === 'Stmt' && armNameOf(loaded, x, src) === 'expr') got.set(x.offset, x);
+      if (STATEMENT_RULES.has(x.rule) && armNameOf(loaded, x, src) === 'expr') got.set(x.offset, x);
       x.children.forEach(walk);
     };
     walk(cst);
@@ -207,7 +210,7 @@ export async function runBuilt(shape: OracleShape, corpus: string, paths: string
     const units: CstNode[] = [];
     const walk = (x: CstNode | CstLeaf): void => {
       if ('tokenType' in x) return;
-      if (x.rule === 'Stmt' && armNameOf(shape.shape, x, src) === 'expr') units.push(x);
+      if (STATEMENT_RULES.has(x.rule) && armNameOf(shape.shape, x, src) === 'expr') units.push(x);
       x.children.forEach(walk);
     };
     walk(cst);
