@@ -5992,8 +5992,8 @@ struct Diag { kind: isize, off: isize, end: isize, rel_off: isize, rel_end: isiz
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 struct BestCand { pos: isize, off: isize, won: isize, form: isize, tail: isize, capped: isize, h0: isize, hb: isize }
 // The words of a repair's message: a literal's text (by lid), a token kind's name, a rule's name.
-const LID_TEXTS: &[&str] = &[${ids.lids.map(J).join(', ')}];
-fn lit_text(x: isize) -> &'static str { LID_TEXTS[x as usize] }
+// (the lexer's literal table _LIDS)
+fn lit_text(x: isize) -> &'static str { _LIDS[x as usize] }
 fn kind_text(x: isize) -> &'static str { KIND_STR[x as usize] }
 fn rule_text(x: isize) -> &'static str { RULE_NAMES[x as usize] }
 ${shared.recoveryFamily(ir, false)}

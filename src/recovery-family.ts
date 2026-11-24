@@ -602,21 +602,32 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
         ]),
         inc('x', n(1)),
       ], [
-        if_(eq(v('tag'), n(REC_N_BRACKET)), [
-          if_(eq(v('lid'), at(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
-          inc('x', n(5)),
+        // A bracket arm (its first literal), a sequence arm (its guard; with cappedSeq its cap) or a
+        // capped arm (its cap and guard): its steps from the cell after; the bracket and sequence
+        // arms' node takes the tail they close and the capped flag their trailing operand left
+        // (fromTail), the capped arm's node is capped.
+        let_('hit', or(
+          and(eq(v('tag'), n(REC_N_BRACKET)), eq(v('lid'), at(v('x'), 1))),
+          and(eq(v('tag'), n(REC_N_SEQ)), ...(cappedSeq ? [or(lt(at(v('x'), 5), n(0)), lt(v('minBp'), at(v('x'), 5)))] : []), call('riGuard', atR(v('x'), 1))),
+          and(eq(v('tag'), n(REC_N_CAPPED)), lt(v('minBp'), at(v('x'), 3)), call('riGuard', atR(v('x'), 1))),
+        ), 'bool'),
+        if_(v('hit'), [
+          let_('c', call('enSh')),
+          let_('k', call('enMark')),
+          let_('ok', call('riList', atR(v('x'), 2), v('d')), 'bool'),
+          let_('tl', n(0)),
+          let_('cp', n(1)),
+          if_(ne(v('tag'), n(REC_N_CAPPED)), [
+            set('tl', at(v('x'), 3)),
+            set('cp', n(0)),
+            if_(and(isT(v('x'), 4), ne(call('enSt', n(ST_CAPPED)), n(0))), [set('cp', n(1))]),
+          ]),
+          run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), n(0), v('tl'), v('cp'), v('best')),
         ]),
-        if_(eq(v('tag'), n(REC_N_SEQ)), cappedSeq ? [
-          if_(and(or(lt(at(v('x'), 5), n(0)), lt(v('minBp'), at(v('x'), 5))), call('riGuard', atR(v('x'), 1))), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
-          inc('x', n(6)),
-        ] : [
-          if_(call('riGuard', atR(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
-          inc('x', n(5)),
-        ]),
-        if_(eq(v('tag'), n(REC_N_CAPPED)), [
-          if_(and(lt(v('minBp'), at(v('x'), 3)), call('riGuard', atR(v('x'), 1))), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), n(0), n(1))),
-          inc('x', n(4)),
-        ]),
+        let_('w', n(5)),
+        if_(eq(v('tag'), n(REC_N_CAPPED)), [set('w', n(4))]),
+        ...(cappedSeq ? [if_(eq(v('tag'), n(REC_N_SEQ)), [set('w', n(6))])] : []),
+        inc('x', v('w')),
       ]),
     ]),
     inc('i'),
