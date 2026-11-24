@@ -294,13 +294,18 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
       gate.failures++;
       console.log(`  ${c.grammar}/js: ACCEPT ${want.ok === got.ok ? 'CST' : 'verdict'} mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, js ok=${got.ok})`);
     }
+    // A grammar whose contexts are all on demand: jsTarget keeps the shallow check (emit-parser.ts
+    // shallowDemand), so a reject the context alone refuses may parse there (docs/CORRECTNESS.md).
+    const shallow = grammar.targets !== undefined && Object.values(grammar.targets).every((t) => t.when === 'demand');
+    let wide = 0;
     for (const src of c.reject) {
       const want = oracleOut(src), got = jsOut(src);
       if (!want.ok && !got.ok) { rej++; continue; }
+      if (shallow && !want.ok) { wide++; continue; }
       gate.failures++;
       console.log(`  ${c.grammar}/js: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, js ok=${got.ok})`);
     }
-    console.log(`  ${c.grammar}/js: ${acc}/${c.accept.length} accept ≡ oracle CST · ${rej}/${c.reject.length} reject ≡ oracle`);
+    console.log(`  ${c.grammar}/js: ${acc}/${c.accept.length} accept ≡ oracle CST · ${rej}/${c.reject.length} reject ≡ oracle${wide ? ` · ${wide} taken by the shallow check (the recorded divergence)` : ''}`);
   }
 
   for (const r of runners) {
