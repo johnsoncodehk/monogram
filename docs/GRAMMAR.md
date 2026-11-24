@@ -191,18 +191,27 @@ A condition is a conjunction of `+p` / `~p` over the parameters of
 no items, `when(cond)` is a zero-width test. tree-sitter, TextMate and Monarch erase the
 condition: they render the items everywhere.
 
-**Transition** (step 1 of the declared-contexts design): the end state is one mechanism, named
-boolean parameters declared by the grammar, set / cleared at a reference (`ctx({p: true}, ...)`),
-read by `when`, held as one word in every engine (it replaces the rule fork of
-[`src/await-yield-fork.ts`](../src/await-yield-fork.ts), `reservableNot` and `exclude`). Today the
-parameters are the fixed `CTX_PARAMS`; the portable parsers test the word at run time, while the
-interpreter, the jsTarget parser and cst-match keep the fork and evaluate `when` once per rule
-family (a family is a word, so the condition is a constant there). `syncFn` stands in for the
-script / module goal: it is set in a non-async function body, so the top level reads `await` both
-ways (`await x` as in a module, `await = 1` as in a script) and `await(x)` at the top level is
-still the operator. Exit: step 2 moves the interpreter, jsTarget and cst-match onto the word and
-deletes the fork; the goals step sets `await` in the Module goal's entry word, the gate becomes
-`when('+await')` and `syncFn` is deleted.
+Every engine holds the context as ONE word (step 2): the interpreter, the jsTarget parser and the
+portable parsers set it at a context marker for the marker's body and put it back after, and read
+it at a `when`, a gated operator and the reserved-word guard (`reservableNot`, whose context words
+are `CTX_WORDS`). A rule's parse is a function of its position and of the word masked by the bits
+the rule can read (`ctxObserves`, computed once from the grammar: a `when`, a gated operator or the
+guard reachable from the rule without a marker in between); that pair is the key of the
+interpreter's and jsTarget's packrat memo, and jsTarget's incremental rows carry the masked word
+(`rowCtx`) beside the rule, compared by every reuse check. Rules are the grammar's own (no copies
+per context).
+
+**Transition** (declared contexts; step 2 of the design landed): the end state is named boolean
+parameters declared by the grammar, set / cleared at a reference (`ctx({p: true}, ...)`), read by
+`when`, held as the one word in every engine. Reached: the one word in every engine (the rule fork
+is deleted). Owed, each with its step: `in` as a parameter, which needs the set / clear equations
+(`ctx(...)` replacing the four markers, which today set the whole word) and deletes `exclude` and
+the suppress machinery (step 3); the guard's context words written as `when` items inside it,
+deleting `reservableNot` and `CTX_WORDS` (step 3, with `ctx(...)`); TypeScript's contexts (step 4);
+the script / module goals: `syncFn` stands in for them (set in a non-async function body, so the
+top level reads `await` both ways and `await(x)` at the top level is still the operator); the goals
+step sets `await` in the Module goal's entry word, the gate becomes `when('+await')` and `syncFn` is
+deleted (step 5); `??` mixing is not a context (a form, step 6).
 
 ## Declared assignment-target contexts
 
