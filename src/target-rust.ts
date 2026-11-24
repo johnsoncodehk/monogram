@@ -91,7 +91,7 @@ const commitRs = (conds: string[], body: string, fail: string, returns = false) 
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
 const beatsRs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > best_pos || ${pos} == best_pos && ${i} < bi)` : `${pos} > best_pos`;
-const markRs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const markRs = (d: Dispatch, i: number) => (d.marked.includes(i) ? ` bi = ${i};` : '');
 const biRs = (d: Dispatch) => (d.ranked.length ? ' let mut bi: i32 = -1;' : '');
 // ── The two frames of a construct that may have to undo what it tried ──
 // Every one is printed by one of these, so what a frame costs in the output is decided here.
@@ -109,35 +109,57 @@ const branchRs = (cond: string, r = false, clean = false) => clean ? `{ if ${con
 // rule's NUD arms) of rule `rid`, tried from `save`: when it matched and beats the best so far,
 // its node is finished as the best, `more` records its index / form, and `ck` moves past the node;
 // else what it built is dropped; either way the position goes back to `save` for the next
-// candidate. Printed as the `cand!` macro (CAND_MACRO_RS), which expands to exactly that frame.
+// candidate. Printed as the `cand!` macro (macrosRs), which expands to exactly that frame.
 const lostRs = `self.scratch.truncate(sb); self.b.restore(ck);`;
 const candRs = (d: Dispatch, i: number, cond: string, rid: number, more: string) =>
-  `{ cand!(self, sb, ck, save, best, best_pos, ${rid}, ${cond} && ${beatsRs(d, 'self.pos', i)}, {${more}}); }`;
+  `{ cand!(${rsMacro(d.final.includes(i) ? 'cand_last' : 'cand')}self, sb, ck, save, best, best_pos, ${rid}, ${cond} && ${beatsRs(d, 'self.pos', i)}, {${more}}); }`;
+// `ck` moves past a winner only where a later candidate may be tried (Dispatch.final: else the
+// macro's `last` form), and so is reassigned only in a list with such a candidate.
+const ckPastRs = (d: Dispatch, i: number) => (d.final.includes(i) ? '' : ' ck = self.b.checkpoint();');
+// The macro rules the printed rules call, recorded as they are printed (candRs, commitBodyRs):
+// emitParserMachine prints the rules first and then only the macro rules they called.
+let rsMacroUses = new Set<string>();
+// Records the use of macro rule `form` and returns the call's form word (cand: none).
+const rsMacro = (form: 'cand' | 'cand_last' | 'undo' | 'undo_ne' | 'clean' | 'nud'): string => {
+  rsMacroUses.add(form);
+  return form === 'cand' ? '' : form === 'cand_last' ? 'last ' : form;
+};
+const ckLetRs = (d: Dispatch) => `let ${d.sections.some((sec) => (sec.by === 'rest' ? sec.arms : sec.groups.flatMap((g) => g.arms)).some((i) => !d.final.includes(i))) ? 'mut ' : ''}ck = self.b.checkpoint();`;
 // The candidate frame as a macro, not a method: a helper over the list's state was measured to
 // cost instructions (+2 to +9%: LLVM does not treat the call as it treats the frame in place),
 // and a macro expands to the frame in place. The list's locals are passed by name (hygiene).
-const CAND_MACRO_RS = `/// A longest-match candidate (target-rust.ts candRs): if \`$c\` (it matched and beats the best so far),
-/// node \`$rid\` is finished as the best and the checkpoint moves past it, else what it built is dropped;
+// The two macros, with only the rules in `uses` (rsMacroUses); a macro none of whose rules is used is not printed.
+const macrosRs = (uses: Set<string>): string => {
+  const cand = (last: boolean) => `    (${last ? 'last ' : ''}$p:ident, $sb:ident, $ck:ident, $save:ident, $best:ident, $best_pos:ident, $rid:expr, $c:expr, $more:block) => {
+        if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more${last ? '' : ' $ck = $p.b.checkpoint();'} } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
+    };`;
+  const candRules = [...(uses.has('cand_last') ? [cand(true)] : []), ...(uses.has('cand') ? [cand(false)] : [])];
+  const commitRules: Record<string, string> = {
+    nud: `    ($p:ident, $rid:expr, $c:expr, $m:ident, nud $t:tt $cp:tt) => { commit!($p, $rid, $c, $m, { $p.form = 0; $p.tail = $t; $p.capped = $cp; }) };`,
+    undo: `    ($p:ident, $rid:expr, $c:expr, undo, { $($set:tt)* }) => {{ let m = $p.mark(); if $c { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};`,
+    undo_ne: `    ($p:ident, $rid:expr, $c:expr, undo_ne, { $($set:tt)* }) => {{ let m = $p.mark(); if $c && $p.pos > m.pos { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};`,
+    clean: `    ($p:ident, $rid:expr, $c:expr, clean, { $($set:tt)* }) => {{ let save = $p.pos; let sb = $p.scratch.len(); if $c { let n = $p.finish($rid, sb, $p.off_at(save), save); $($set)* return Some(n); } }};`,
+  };
+  const commits = Object.keys(commitRules).filter((k) => uses.has(k)).map((k) => commitRules[k]!);
+  return `${candRules.length ? `/// A longest-match candidate (target-rust.ts candRs): if \`$c\` (it matched and beats the best so far),
+/// node \`$rid\` is finished as the best, \`$more\` records its index / form and (not the \`last\` form: a
+/// candidate after which none is tried) the checkpoint moves past it, else what it built is dropped;
 /// then the position goes back to the list's start.
 macro_rules! cand {
-    ($p:ident, $sb:ident, $ck:ident, $save:ident, $best:ident, $best_pos:ident, $rid:expr, $c:expr, $more:block) => {
-        if $c { $best = Some($p.finish($rid, $sb, $p.off_at($save), $save)); $best_pos = $p.pos; $more $ck = $p.b.checkpoint(); } else { $p.scratch.truncate($sb); $p.b.restore($ck); } $p.back($save);
-    };
+${candRules.join('\n')}
 }
-/// A committed candidate (parser-ir.ts Commit; target-rust.ts commitBodyRs): \`$c\` from here;
+` : ''}${commits.length ? `/// A committed candidate (parser-ir.ts Commit; target-rust.ts commitBodyRs): \`$c\` from here;
 /// matched (\`undo_ne\`: and past its start), node \`$rid\` is returned after \`$set\` (a NUD's form, tail
 /// and capped flag), else what it did is undone to the checkpoint (\`clean\`: a clean failure left
 /// nothing to undo, so none is taken) and the statement after the macro runs.
-#[allow(unused_macros)]
 macro_rules! commit {
-    ($p:ident, $rid:expr, $c:expr, $m:ident, nud $t:tt $cp:tt) => { commit!($p, $rid, $c, $m, { $p.form = 0; $p.tail = $t; $p.capped = $cp; }) };
-    ($p:ident, $rid:expr, $c:expr, undo, { $($set:tt)* }) => {{ let m = $p.mark(); if $c { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
-    ($p:ident, $rid:expr, $c:expr, undo_ne, { $($set:tt)* }) => {{ let m = $p.mark(); if $c && $p.pos > m.pos { let n = $p.finish($rid, m.sb, $p.off_at(m.pos), m.pos); $($set)* return Some(n); } $p.reset(m); }};
-    ($p:ident, $rid:expr, $c:expr, clean, { $($set:tt)* }) => {{ let save = $p.pos; let sb = $p.scratch.len(); if $c { let n = $p.finish($rid, sb, $p.off_at(save), save); $($set)* return Some(n); } }};
-}`;
+${commits.join('\n')}
+}
+` : ''}`;
+};
 // A committed candidate's body in the building form: the \`commit!\` macro (as \`cand!\`: expanded in place);
 // \`set\`: the statements after its node is made (\`nud <tail> <capped>\`: a NUD arm's state, spelled by the macro).
-const commitBodyRs = (rid: number, cond: string, undo: boolean, nullable: boolean, set = '{}') => `commit!(self, ${rid}, ${cond}, ${nullable ? 'undo_ne' : undo ? 'undo' : 'clean'}, ${set});`;
+const commitBodyRs = (rid: number, cond: string, undo: boolean, nullable: boolean, set = '{}') => `commit!(self, ${rid}, ${cond}, ${rsMacro(nullable ? 'undo_ne' : undo ? 'undo' : 'clean')}, ${set.startsWith('nud ') ? rsMacro('nud') + set.slice(3) : set});`;
 // The typed-AST layer's form of a Guard over the token t: its parser keeps no lookahead mark, so
 // the second token is read directly. null: no guard.
 const astGuardRs = (g: Guard, t: string): string | null =>
@@ -1030,7 +1052,7 @@ ${uniIdentOrPanic}`;
     const rxLoopBody = `        let c = b[pos] as u32;
 ${nlWs}${cascade}
 ${uniIdentOrPanic}`;
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Option<LexErr>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -1052,7 +1074,7 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
   }
   if (tplOnly) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>, Option<LexErr>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${tplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, Vec<i64>, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -1073,7 +1095,7 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 }`;
   }
   if (rxTpl) {
-    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, mut pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, mut paren_head: Vec<bool>, mut last_close: bool, mut last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>, Option<LexErr>) {
+    return `${renderIdTablesRust(ids)}${lexStacks}${scans}${rxConsts}${tplFn}${rxTplScanImpl}${LEX_FROM_ATTR}fn lex_from<'a>(src: &'a str, mut pos: usize, pending_nl: bool, prev_lid: u16, prev_kid: u16, bp_lid: u16, has_prev: bool, has_prev2: bool, paren_head: Vec<bool>, last_close: bool, last_bang: bool, template_stack: Vec<i64>, acc: &mut Vec<Tok>, limit: usize) -> (usize, bool, u16, u16, u16, bool, bool, Vec<bool>, bool, bool, Vec<i64>, Option<LexErr>) {
     let b = src.as_bytes();
     let n = b.len();
     let base = acc.len();
@@ -1368,7 +1390,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     open: (clean) => `        let save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}`,
     peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
     fail: (clean) => (clean ? '        None' : '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None'),
-    openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}${F.best}`,
+    openBest: (d) => `        let save = self.pos; let sb = self.scratch.len(); ${ckLetRs(d)}\n        let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}${F.best}`,
     cand: (d, i, cond) => candRs(d, i, cond, aid(r.name, `alt${i}`, rid), `${markRs(d, i)}${F.keep(i)}`),
     closeBest: `        self.pos = best_pos;${F.close}\n        best`,
     commit: (i, conds, cond, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `alt${i}`, rid), cond, undo, nullable, F.set(i) ? `{ ${F.set(i)}}` : undefined), 'return None;'),
@@ -1567,6 +1589,8 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const D = ir.assignTargets?.demand, dem = demandLids(r, ids, D);
   const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : dem.length ? `(if tgt && (${dem.map((l) => `op_lid == ${l}`).join(' || ')}) { ${1 | D!.assigned} } else { 1 })` : '1';
   const tgtDem = dem.length ? `(${lf('form')} != 0 || (form & ${D!.defer}) != 0 && !self.demand_${r.name}(op_lid as isize, form as isize, p0, self.pos as isize))` : tgtFail;
+  // the operator's lid is read by a target context's switch and by a demand operator's test
+  const binLid = leftOps.length > 0 || dem.length > 0;
   // A gated prefix operator (`await`, PrattRule.prefix's `when`) is one only where the context word
   // passes: a guard on its own arm, so no other operator's lookup reads the word.
   const preArms = ops.pre.map((p) => `${p.lid}${p.when ? ` if ctx & ${p.when.mask} == ${p.when.val}` : ''} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
@@ -1574,7 +1598,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops
   // what the arm built. A sequence arm's frame is the `cand!` macro (candRs).
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
-    `best_pos = self.pos;${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
+    `best_pos = self.pos;${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};${ckPastRs(d, i)}`;
   const lost = lostRs;
   const finK = (key: string) => finRs(aid(r.name, key, rid), 'sb, left.off as usize, left.tok_start as usize');
   const fin = finK('bin');
@@ -1660,7 +1684,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     postfixOp: `            if row & ${OP_ROW.bpMask << OP_ROW.postShift} != 0 && ((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) as i64 > min_bp && !tail_closed${r.postfixSameLine ? ' && !t.nl' : ''} { if row & ${OP_ROW.postTgt} != 0 && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; }`,
     noBinary: `            break;
         }`,
-    binary: `            let (op_lid, op_n, op_end, row) = if row & ${OP_ROW.lead} != 0 { let (l, n, e) = self.op_read(t); (l, n, e, ${rowAt('l')}) } else { (t.lid, 1, t.end, row) };
+    binary: `            let (${binLid ? 'op_lid, ' : ''}op_n, op_end, row) = if row & ${OP_ROW.lead} != 0 { let (l, n, e) = self.op_read(t); (${binLid ? 'l, ' : ''}n, e, ${rowAt('l')}) } else { (${binLid ? 't.lid, ' : ''}1, t.end, row) };
             let lbp = (row & ${OP_ROW.bpMask}) as i64;
             if lbp <= min_bp { break; }
             let rbp = ((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.bpMask}) as i64; let tgt = row & ${OP_ROW.test} != 0; let no_unary = row & ${OP_ROW.noUnary} != 0;
@@ -1688,11 +1712,11 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
 `,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
-    bpOpen: (_label, nudBp, bp) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
+    bpOpen: (_label, nudBp, bp, closesTail) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
         let mut left = self.${r.name}_nud(${nudBp ? 'min_bp' : ''})?;
         let mut form = self.form;
         if self.capped { return Some(left); }
-        let mut tail_closed = self.tail;
+        let ${closesTail ? 'mut ' : ''}tail_closed = self.tail;
         loop {
             let t = match self.peek() { Some(t) => t, None => break };`,
     bpClose: `        self.capped = false;
@@ -1702,7 +1726,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     nudEnter: (bp) => `    fn ${r.name}_nud(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {
         self.capped = false;
         let t = self.peek()?;`,
-    nudOpen: `        let save = self.pos; let sb = self.scratch.len(); let mut ck = self.b.checkpoint();
+    nudOpen: `        let save = self.pos; let sb = self.scratch.len(); ${ckLetRs(d)}
         let mut best: Option<Spanned<B::H>> = None; let mut best_pos = save;${biRs(d)}
         let (mut bf, mut bt, mut bc) = (0u8, false, false);`,
     nudClose: `        // A sub-parse may leave self.capped set: only a capped arm that won makes THIS node capped.
@@ -2148,6 +2172,7 @@ fn in_ctx_words(ctx: u8, t: &Tok) -> bool { let _ = (ctx, t); false${ctxWordLids
 function emitParserMachine(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shapeB: boolean, shared: SharedAlgorithms): string {
   const reuse = ir.reuse;
   const entriesField = reuse ? '\n    entries: Vec<EntryMeta>,' : '';
+  rsMacroUses = new Set();
   const ruleFns = [...ir.rules.filter((r) => ir.forms.buildRules.includes(r.name)).map((r) => {
     if (r.kind === 'pratt') return prattRule(r, ir, ids, ar);
     if (reuse && r.name === ir.entry) return rdEntryWithReuse(r, reuse, ids, ar);
@@ -2330,7 +2355,7 @@ fn copy_kids(kids: &mut Vec<i32>, s: &[i32]) {
         kids.set_len(n + s.len());
     }
 }
-${SHAPE_RS ? CAND_MACRO_RS.replace(/\$p\.finish\(\$rid, /g, '$p.fin::<{ $rid }>(') : CAND_MACRO_RS}
+${SHAPE_RS ? macrosRs(rsMacroUses).replace(/\$p\.finish\(\$rid, /g, '$p.fin::<{ $rid }>(') : macrosRs(rsMacroUses)}
 
 #[derive(Default)]
 pub struct CstBuilder {

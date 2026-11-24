@@ -84,7 +84,7 @@ const commitGo = (conds: string[], body: string, fail: string, returns = false) 
 // Dispatch `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is
 // kept only in a list that has ranked candidates.
 const beatsGo = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} == bestPos && ${i} < bi)` : `${pos} > bestPos`;
-const markGo = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const markGo = (d: Dispatch, i: number) => (d.marked.includes(i) ? ` bi = ${i};` : '');
 const biGo = (d: Dispatch) => (d.ranked.length ? '; bi := -1' : '');
 // ── The two frames of a construct that may have to undo what it tried ──
 // Every one is printed by one of these, so what a frame costs in the output is decided here. The

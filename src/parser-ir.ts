@@ -237,9 +237,14 @@ export type RdRule = {
 // `rest` candidate: two different literals or two different kinds never admit one token). Only
 // those compare declaration indices on a tie; every other candidate wins only by ending past the
 // best so far, as in a declaration-order loop. Empty: no candidate needs the index.
+// `marked`: the candidates whose index a ranked candidate tried after them may compare (the best's
+// index is recorded only by these); `final`: the candidates after which no candidate is tried on
+// any path (two candidates of one section's different groups are never both tried), so a winner
+// there leaves nothing a later candidate reads (Rust: no builder checkpoint past it).
 export type DispatchGroup = { key: string; arms: number[] };
 export type DispatchSection = { by: 'lid' | 'kid'; groups: DispatchGroup[] } | { by: 'rest'; arms: number[] };
-export type Dispatch = { sections: DispatchSection[]; ranked: number[] };
+export type Dispatch = { sections: DispatchSection[]; ranked: number[]; marked: number[]; final: number[] };
+const NO_DISPATCH: Dispatch = { sections: [], ranked: [], marked: [], final: [] };
 /** The Dispatch of a candidate list from each candidate's key (null: in `rest`). */
 export function dispatchOf(keys: ReadonlyArray<TokenSet | null>): Dispatch {
   const byLid = new Map<string, number[]>(), byKid = new Map<string, number[]>(), rest: number[] = [];
@@ -256,17 +261,26 @@ export function dispatchOf(keys: ReadonlyArray<TokenSet | null>): Dispatch {
   if (byKid.size) sections.push({ by: 'kid', groups: groups(byKid) });
   if (rest.length) sections.push({ by: 'rest', arms: rest });
   sections.sort((x, y) => first(x) - first(y));
-  return { sections, ranked: rankedOf(sections) };
+  return dispatchFrom(sections);
 }
-/** Dispatch.ranked of sections tried in their order. */
-function rankedOf(sections: DispatchSection[]): number[] {
+/** The Dispatch of sections tried in their order: its ranked, marked and final candidates. */
+function dispatchFrom(sections: DispatchSection[]): Dispatch {
   // Each candidate in trying order, with the section kind and key it is reached by.
   type Tried = { i: number; by: DispatchSection['by']; key: string };
   const tried: Tried[] = sections.flatMap((sec): Tried[] => sec.by === 'rest'
     ? sec.arms.map((i) => ({ i, by: sec.by, key: '' }))
     : sec.groups.flatMap((g) => g.arms.map((i) => ({ i, by: sec.by, key: g.key }))));
+  // Whether one token can reach both (and so both are tried, in their order).
   const mayShare = (x: Tried, y: Tried) => x.by === 'rest' || y.by === 'rest' || x.by !== y.by || x.key === y.key;
-  return tried.filter((x, n) => tried.slice(0, n).some((y) => y.i > x.i && mayShare(x, y))).map((x) => x.i).sort((a, b) => a - b);
+  const rankedT = tried.filter((x, n) => tried.slice(0, n).some((y) => y.i > x.i && mayShare(x, y)));
+  const after = (n: number) => tried.slice(n + 1).filter((z) => mayShare(tried[n]!, z));
+  const sorted = (xs: Tried[]) => xs.map((x) => x.i).sort((a, b) => a - b);
+  return {
+    sections,
+    ranked: sorted(rankedT),
+    marked: sorted(tried.filter((_, n) => after(n).some((z) => rankedT.includes(z)))),
+    final: sorted(tried.filter((_, n) => after(n).length === 0)),
+  };
 }
 // The tokens outside which a candidate only repeats an earlier candidate of its list (null: it
 // never does, as far as this can tell). A candidate that opens with optional steps (`?` / `*`)
@@ -375,7 +389,7 @@ export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) =>
   const kidAct = (k: string): CommitCase['act'] => { const x = c.kid.find((y) => y.keys.includes(k)); return x === undefined ? 'frame' : x.act; };
   const lidDead = (l: string) => { const a = lidAct(l); return a !== undefined ? decided(a) : [...kindsOf(l)].every((k) => decided(kidAct(k))); };
   const kidDead = (k: string) => decided(kidAct(k)) && c.lid.every((x) => decided(x.act) || !x.keys.some((l) => kindsOf(l).has(k)));
-  if (c.lid.every((x) => decided(x.act)) && ['', ...kinds].every((k) => decided(kidAct(k)))) return { sections: [], ranked: [] };
+  if (c.lid.every((x) => decided(x.act)) && ['', ...kinds].every((k) => decided(kidAct(k)))) return NO_DISPATCH;
   let pruned = false;
   const sections = d.sections.flatMap((sec): DispatchSection[] => {
     if (sec.by === 'rest') return [sec];
@@ -383,7 +397,7 @@ export function frameDispatch(d: Dispatch, c: Commit, kindsOf: (text: string) =>
     if (groups.length < sec.groups.length) pruned = true;
     return groups.length ? [{ by: sec.by, groups }] : [];
   });
-  return pruned ? { sections, ranked: rankedOf(sections) } : d;
+  return pruned ? dispatchFrom(sections) : d;
 }
 export function commitOf(cands: CommitCand[], P: CommitTables): Commit | undefined {
   // A token class: a literal the tests read (or none of them: null) and a kind.
@@ -1188,7 +1202,7 @@ function buildIR(grammar: Grammar, facts: PortableFacts): ParserIR {
     // A single alternative is no candidate (ruleShell SINGLE): it has no guard to take tests over.
     const altGuards = items.map((e, i) => altGuard(e, items.slice(0, i)));
     if (items.length > 1) rdItems.set(r.name, items);
-    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: { sections: [], ranked: [] }, clean: false };
+    return { kind: 'rd', name: r.name, alts, altNames, altFirst: [], predictive: false, altGuard: items.length > 1 ? altGuards.map((g, i) => leadOf(g, alts[i]!)) : altGuards, altDispatch: NO_DISPATCH, clean: false };
   });
   // Longest match never picks an alternative that advances nothing, and only the entry rule
   // may match the empty input: an entry that must CHOOSE its empty alternative has no rendering.
@@ -1986,7 +2000,7 @@ export type PrattLowering = {
   binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry(bp: boolean): string;                    // the entry function (and the operator tables, where the target prints them beside it); bp: `bp` takes the binding power
-  bpOpen(label: boolean, nudBp: boolean, bp: boolean): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power; bp: `bp` takes it)
+  bpOpen(label: boolean, nudBp: boolean, bp: boolean, closesTail: boolean): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power; bp: `bp` takes it; closesTail: a binary / postfix operator or a led closes the tail, so the tail flag is reassigned)
   bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
   nudEnter(bp: boolean): string;                 // `nud` up to its buffered token `t` (none: no match); bp: it takes the binding power (a capped arm reads it)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
@@ -2089,7 +2103,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'rules' | 'lookahead
   // field, and a test that never passes still costs its instructions on every iteration.
   const hasBin = r.binary.length > 0, hasPost = r.postfix.length > 0;
   const nudBp = nudTakesBp(r), takesBp = prattTakesBp(r, ir);
-  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp, takesBp), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp, takesBp, hasBin || hasPost || r.ledClosesTail.some((c) => c)), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
   // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
   // decides it, its guard's remaining tests, a capped arm's binding power.
   const tests = (t: CommitTest): string[] => {

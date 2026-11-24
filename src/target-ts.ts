@@ -66,7 +66,7 @@ const commitTs = (conds: string[], body: string, fail: string, returns = false) 
 // `ranked` candidate — ties it and was declared earlier. `bi` (the best one's index) is kept only
 // in a list that has ranked candidates.
 const beatsTs = (d: Dispatch, pos: string, i: number) => d.ranked.includes(i) ? `(${pos} > bestPos || ${pos} === bestPos && ${i} < bi)` : `${pos} > bestPos`;
-const markTs = (d: Dispatch, i: number) => (d.ranked.length ? ` bi = ${i};` : '');
+const markTs = (d: Dispatch, i: number) => (d.marked.includes(i) ? ` bi = ${i};` : '');
 const biTs = (d: Dispatch) => (d.ranked.length ? ', bi = -1' : '');
 // How a step is printed: 'w' builds through the builder (onto the engine's child stack, see
 // engineRuntime), 'r' only recognizes (ParserIR.forms: advances, builds nothing).
