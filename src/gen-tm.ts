@@ -5764,12 +5764,9 @@ export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
 
   // ── 4d. Type annotation scope (let/const/var x: Type) ──
   if (hasTypeAnnotations) {
-    // Variable-declaration keywords: those with exactly `storage.type` scope
-    // (not storage.type.X), and not already handled as declaration keywords.
-    const usedVarDecls = [...allLiterals].filter(l => {
-      const scope = getScope(scopeOverrides,l);
-      return scope === 'storage.type' && !declarationKeywords.has(l);
-    });
+    // Variable-declaration keywords (highlight-facts' varDeclarationKeywords, which
+    // Monarch's declaration heads read too).
+    const usedVarDecls = [...facts.varDeclarationKeywords];
 
     if (usedVarDecls.length > 0) {
       const kwAlt = usedVarDecls.map(escapeRegex).join('|');
