@@ -118,7 +118,8 @@ writeFileSync('parser.rs', emitParser(grammar, rustTarget));  // of monogram
 
 **Changed interface (Rust):** the emitted Rust parser's `tokenize(src)` returns
 `Result<Vec<Token>, LexError>` since `f5a1c3e`; before, it returned `Vec<Token>` and panicked on
-input it cannot tokenize. `parse_with`, `parse` and `Doc::new` still panic. The TS and Go
+input it cannot tokenize. `parse_with` and `parse` still panic. In every target a `Doc` created
+from a text that does not lex has no tree (it panicked / threw before); the other TS and Go
 surfaces are unchanged ([docs/TARGETS.md](docs/TARGETS.md#errors-and-tokens)).
 
 The CST holds every token, punctuation and keywords included, which is what highlighting and

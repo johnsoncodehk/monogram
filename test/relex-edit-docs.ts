@@ -36,4 +36,7 @@ export const LOOK_EDIT_DOCS: { doc: string; ins: string[] }[] = [
   { doc: 'x = a\\u0041;', ins: ['b', '{', '}', '\\', 'u'] },
   { doc: 'x = y /* c', ins: ['*/', '*', '/'] },
   { doc: 'x = y / 2; /* c\nz', ins: ['*/', '/'] },
+  // A document that does not lex (an unterminated template): a Doc exists for it all the same,
+  // and an edit that closes the template (or deletes its opener) makes it parse.
+  { doc: 'x = `a;', ins: ['`', '$'] },
 ];
