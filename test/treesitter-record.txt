@@ -76,8 +76,6 @@ javascript | test262 | rejects | unclassified | test/annexB/language/statements/
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/var-arraybindingpattern-initializer.js
 javascript | test262 | rejects | unclassified | test/annexB/language/statements/for-in/var-objectbindingpattern-initializer.js
 javascript | test262 | rejects | unclassified | test/language/block-scope/syntax/for-in/disallow-initialization-assignment.js
-javascript | test262 | rejects | unclassified | test/language/comments/hashbang/line-terminator-line-separator.js
-javascript | test262 | rejects | unclassified | test/language/comments/hashbang/line-terminator-paragraph-separator.js
 javascript | test262 | rejects | unclassified | test/language/expressions/assignment/white-space.js
 javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 javascript | test262 | rejects | unclassified | test/language/expressions/class/elements/after-same-line-gen-rs-private-getter-alt.js
@@ -776,7 +774,7 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
 javascript | test262 | spans | other | files 49
-javascript | test262 | spans | totals | span-equal 22531 of 22580, interpreter spans missing 8, extra tree-sitter spans 77
+javascript | test262 | spans | totals | span-equal 22533 of 22582, interpreter spans missing 8, extra tree-sitter spans 77
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
