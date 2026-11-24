@@ -1,6 +1,5 @@
 # test/verdict-scan.ts: class, disposition, count, shortest witness (re-record: add --write)
 arrow-body-ctx	grammar	8	"async function* g() { () => await a; }"
-logical-assign-level	grammar	36	"c &&= a = b;"
 coalesce-mix	grammar	4	"a || b ?? c;"
 number-then-ident	lexer	9	"1.x;"
 regex-after-update	lexer	8	"++/r/;"
