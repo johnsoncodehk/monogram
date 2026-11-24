@@ -62,7 +62,10 @@ const TOTAL_K = 4;
 // interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
 // interpreter's message on these inputs is master's. Re-measured on master 6cf16d04 (land/recovery-stage3)
 // merged in: javascript 5,412 of 5,902 rejects agree, typescript 6,051 of 6,868.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 6051 };
+// javascript 5412 -> 5349, typescript 6051 -> 6388 (land/grammar-decorators-2, on master 3587831d): `@`
+// joins the grammar's literals and typescript's decorator list gains accepts, so both mutant sets are
+// drawn again: javascript 5,349 of 5,850 rejects agree (91.4%, was 91.7%), typescript 6,388 of 6,845 (93.3%).
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5349, typescript: 6388 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -86,9 +89,14 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // the `asserts` and `declare` entries are no longer drawn; drawn instead, the same class:
 // 'for (x = () => { for (accessor a in b); } in c);' (`accessor => a in b in x`) and
 // 'for (global of of x);' (`global => of => of => x in x`).
+// land/grammar-decorators-2 (`@` joins the literals: both sets drawn again): javascript draws neither
+// 'for (from x = function () { return a in b; } in c);' nor 'for (of of async y);' and draws
+// 'for (of of as y);' (`of => of => as => y in x`); typescript no longer draws 'for (global of of x);'
+// and draws 'for (x = (y = (a in b)) constructor c);' (`… => constructor => c in x`) and
+// 'for (get of of x);' (`get => of => of => x in x`): the same class, an arrow body taking the `in`.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
-  javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = () => { for (accessor a in b); } in c);', 'for (global of of x);'],
+  javascript: ['for (async of x);', 'for (async of => 1 of x);', 'for (of of as y);'],
+  typescript: ['for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = () => { for (accessor a in b); } in c);', 'for (x = (y = (a in b)) constructor c);', 'for (get of of x);'],
 };
 // LOOKAHEAD BYPASS: a lookahead passed on the real tokens, and a repair then supplied a token among
 // the tokens it read, so the substituted text is not the one it judged. `class C { default class)
@@ -105,18 +113,17 @@ const P10_GREEDY_CAPTURE: Record<string, string[]> = {
 // -> 14.4%; stable 76.8% -> 76.6%; 39 mutants worse, 3 better; javascript 14.0% -> 14.1%): the
 // member-start lookaheads read past what they match, so the extent seals the member. The seal must
 // be the span the lookahead MATCHED, which the native lookahead functions do not report.
-const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {
-  typescript: ['f(class extends a?.b{ () {});'],
-};
+// land/grammar-decorators-2's draw holds none of them (`f(class extends a?.b{ () {});` is not drawn).
+const P10_LOOKAHEAD_BYPASS: Record<string, string[]> = {};
 // NOT YET CLASSIFIED: drawn for the first time by the mutant set of land/sound-lt-compose-row (none
 // holds a `<`, so that change does not touch their tokens or their parse: only the draw moved; the
 // `default class)` lookahead bypass above left the draw with it). `class C { static export case
 // type\nx = 1 }` is repaired to `static export * case ( type\n ,\nx = 1 ) }` and
 // `export await using from x = y;` to `export await : using : from : x = y;`; the repaired texts
 // are rejected. Owed to the recovery lane: name each one's class (or fix it) and move it.
-const P10_UNCLASSIFIED: Record<string, string[]> = {
-  typescript: ['class C { static export case type\nx = 1 }', 'export await using from x = y;', 'export await using meta x = y;'],
-};
+// land/grammar-decorators-2's draw holds none of the three (the `export await using …` kind is the
+// grammar's `export` lookahead admitting a Stmt; it leaves with the Statement / Declaration split).
+const P10_UNCLASSIFIED: Record<string, string[]> = {};
 const P10_EXPECTED: [string, Record<string, string[]>][] = [['greedy captures', P10_GREEDY_CAPTURE], ['lookahead bypasses', P10_LOOKAHEAD_BYPASS], ['unclassified redrawn mutants', P10_UNCLASSIFIED]];
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
@@ -170,6 +177,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
     const p10Lists = P10_EXPECTED.map(([name, l]): [string, string[]] => [name, l[c.grammar] ?? []]);
     const greedy = p10Lists.flatMap(([, l]) => l);
     const p10Hits = p10Lists.map(() => 0);
+    const p10Failing = new Set<string>();
     const bad: string[] = [];
     let acc = 0, rec = 0, lexEq = 0, maxK = 0, maxAtt = 0, maxScope = 0;
     const rows: (ContractRow | null)[] = [];
@@ -227,7 +235,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
         const strict = r.interp([srcs[i]!], 1 << 30)[0]!.steps;
         const row = checkContract(srcs[i]!, toks, JSON.parse(g.cst), g.errors.map((e) => [e[0], e[1], e[2]]), g.steps, g.attempts, strict, samples,
           (s) => oracleOut(s).ok, bad, (k) => k === 'missing-only' && !greedy.includes(srcs[i]!));
-        if (greedy.includes(srcs[i]!)) { if (row && row.p10 === 'missing-only' && !row.p10ok) p10Lists.forEach(([, l], j) => { if (l.includes(srcs[i]!)) p10Hits[j]!++; }); }
+        if (greedy.includes(srcs[i]!)) { if (row && row.p10 === 'missing-only' && !row.p10ok) p10Failing.add(srcs[i]!), p10Lists.forEach(([, l], j) => { if (l.includes(srcs[i]!)) p10Hits[j]!++; }); }
         const m = editOf.get(srcs[i]!), o = m && got[index.get(m.orig) ?? -1];
         if (row && m && o?.ok && o.cst !== undefined) Object.assign(row, damage(JSON.parse(g.cst), JSON.parse(o.cst), toks, m.at, m.ins, srcs[i]!.length - m.orig.length));
         if (mutantSet.has(srcs[i]!)) rows.push(row);
@@ -247,7 +255,7 @@ function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOu
     }
     interpCheck(c, grammar, r, srcs, own, tokenize, bad);
     if (knownHits !== known.length) bad.push(`expected-fail: ${knownHits} of ${known.length} listed verdict divergences remain: remove the ones that agree now`);
-    if (r.lexToks) p10Lists.forEach(([name, l], j) => { if (p10Hits[j] !== l.length) bad.push(`P10 expected-fail: ${p10Hits[j]} of ${l.length} listed ${name} remain: remove the ones that hold now`); });
+    if (r.lexToks) p10Lists.forEach(([name, l], j) => { if (p10Hits[j] !== l.length) bad.push(`P10 expected-fail: ${p10Hits[j]} of ${l.length} listed ${name} remain: remove the ones that hold now (${JSON.stringify(l.filter((x) => !p10Failing.has(x)))})`); });
     if (farEq < (RECOVERY_FARTHEST_FLOOR[c.grammar] ?? 0)) bad.push(`farthest agreement ${farEq} dropped below its recorded floor ${RECOVERY_FARTHEST_FLOOR[c.grammar]}`);
     console.log(`  ${c.grammar}/${r.label}: recovery ${bad.length ? `${bad.length} MISMATCH` : 'ok'} over ${srcs.length} inputs (${mutants.length} mutants): ${acc} accepted with no errors, ${rec} rejected and recovered (lexer ≡ oracle ${lexEq}; strict error ≡ interpreter ${primary}, farthest ≡ its hint on ${farEq}/${farN} (counted); the first repair at the strict error ${firstEq}, before it ${firstBefore}, after it ${firstAfter}; at its farthest token ${farFirstEq}, before ${farFirstBefore}, after ${farFirstAfter}); steps ≤ ${maxK.toFixed(3)} × attempts × (tokens + 1) × rules; attempts per input ≤ ${maxAtt}, per scope ≤ ${maxScope}`);
     if (r.lexToks) console.log(summarize(`  ${c.grammar}/${r.label} on the mutants`, rows).split('\n').map((l, j) => (j ? `    ${l}` : l)).join('\n'));
