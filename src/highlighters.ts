@@ -1,9 +1,9 @@
 // The registered highlighter back ends (src/define-highlighter.ts): TextMate, Monarch and
 // tree-sitter's highlight queries. `src/cli.ts` writes what each renders. No construct is under
-// the shared context IR yet, so none renders from one and none refuses one.
+// the shared context IR yet; Monarch lists what it declines (gen-monarch monarchRefusals).
 import { defineHighlighter } from './define-highlighter.ts';
 import { generateTmLanguage, generateMarkupInjection, generateAliasGrammar, generateContributes } from './gen-tm.ts';
-import { generateMonarch } from './gen-monarch.ts';
+import { generateMonarch, monarchRefusals } from './gen-monarch.ts';
 import { generateTreeSitter } from './gen-treesitter.ts';
 import type { CstGrammar } from './types.ts';
 
@@ -40,7 +40,7 @@ export const monarch = defineHighlighter({
     embed: true, stateStack: true, unicodeClasses: 'u-mode', treeQuery: false,
   },
   render: ({ grammar, name }) => [{ path: `${name}.monarch.json`, content: json(generateMonarch(grammar)) }],
-  refusals: () => [],
+  refusals: ({ grammar }) => monarchRefusals(grammar),
 });
 
 // tree-sitter's generator writes the parser (grammar.js, scanner, package files: the tree-sitter
