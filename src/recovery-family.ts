@@ -549,6 +549,9 @@ const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr
 // token) when that matches, else the operand is supplied, a zero-width `$missing` node and its
 // repair record `expected <rule>`, a target (form 0, so an operator that requires one takes it).
 // The one that matches ends farther, so the order is the longest match's.
+// The window reaches back one token (a bar at the token before: the operator): a native-first
+// operand that dropped its operator (`price * ;` matches `price`) records its failure at the
+// operator, not at the operand.
 // cappedSeq: the grammar has a capped prefix operator (cappedPrefix), lowered to a sequence arm with a
 // cap: each REC_N_SEQ entry then carries one more cell, the cap (-1: none). Absent, the code and the
 // tables are as before.
@@ -609,14 +612,19 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
     ]),
     inc('i'),
   ]),
-  if_(and(eq(fld(v('best'), 'won'), n(0)), call('riRep', v('save'))), [
+  if_(and(eq(fld(v('best'), 'won'), n(0)), or(call('riNear', sub(v('save'), n(1))), call('riRep', v('save')))), [
     if_(ge(v('kid'), n(0)), [
       let_('ke', call('enMark')),
       let_('ce', call('enSh')),
       run('enLeafKid'),
       run('riErrNode', v('ce'), v('save')),
       let_('eo', call('enFinOff')),
-      ...probe('pr', [{ k: 'letCall', names: ['oke', '_'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) }]),
+      // (not across a line break: a token that ends its line ends an unfinished construct, `x = ;`)
+      let_('oke', fls, 'bool'),
+      if_(not(call('enPeekNl')), [
+        ...probe('pr', [{ k: 'letCall', names: ['ok3', '_'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) }]),
+        set('oke', v('ok3')),
+      ]),
       if_(v('oke'), [
         run('enUnmark', v('ke')),
         { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
