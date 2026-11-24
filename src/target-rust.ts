@@ -18,7 +18,7 @@ import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX } from './recovery-family.ts';
-import { beginRsShape, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
+import { beginRsShape, RS_SLOT, rsIsPlanFn, rsPlanFns, rsShapeCall, rsShapeLowering, rsShapeRuntime, setRsShape, type RsShape } from './rust-shape.ts';
 import { ATOM, COMPARISON, findAnyName, stopBytes, unitMask, isList, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type ListTy, type Lowering, type MetaInt, type MkMeta, type R, type TokInt } from './algo-ir.ts';
 import { uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { type TextUnits, firstUnit, unitLen } from './text-units.ts';
@@ -1167,6 +1167,10 @@ fn lex_into<'a>(src: &'a str, toks: &mut Vec<Tok>, ${stkParam}: &mut LexStacks) 
 // rule's node: the builder's \`node\` receives the arm id where the CST builder receives the rule id.
 let SHAPE_RS: RsShape | null = null;
 const aid = (rule: string, key: string, rid: number): number => (SHAPE_RS ? SHAPE_RS.plan.armId(rule, key) : rid);
+// An accept site's finish of node `id`. With a shape the arm is known here, so the site names it as
+// a const argument: the builder's finish_arm::<id> calls that arm's construct plan directly (no
+// dispatch on the arm at run time; rust-shape.ts).
+const finRs = (id: number | string, rest: string, p = 'self'): string => (SHAPE_RS ? `${p}.fin::<{ ${id} }>(${rest})` : `${p}.finish(${id}, ${rest})`);
 // The step walk's Rust spelling (emit-portable.ts, StepLowering), over the receiver `recv`: `self`
 // at a rule's top level (children accumulate on `self.scratch`), `p` inside a closure or a method
 // that took `let p = self`; `r`: in recognize form (ParserIR.forms), advancing and building
@@ -1349,7 +1353,7 @@ function rdRule(r: RdRule, ids: LexIdPlan, ar: ArenaIdPlan): string {
     ...rsRuleBase(ids, 'self'),
     steps: rsSteps(ids, 'self', false),
     fn: (lines) => `${sig}\n${lines.join('\n')}\n    }`,
-    accept: (i) => `{ ${F.set(i)}return Some(self.finish(${aid(r.name, `alt${i}`, rid)}, sb, self.off_at(save), save)); }`,
+    accept: (i) => `{ ${F.set(i)}return Some(${finRs(aid(r.name, `alt${i}`, rid), 'sb, self.off_at(save), save')}); }`,
     open: (clean) => `        let save = self.pos; let sb = self.scratch.len();${clean ? '' : ' let ck = self.b.checkpoint();'}`,
     peekOrFail: '        let t = match self.peek() { Some(t) => t, None => return None };',
     fail: (clean) => (clean ? '        None' : '        self.back(save); self.scratch.truncate(sb); self.b.restore(ck);\n        None'),
@@ -1514,7 +1518,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
     `best_pos = self.pos;${markRs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped}; ck = self.b.checkpoint();`;
   const lost = lostRs;
-  const finK = (key: string) => `self.finish(${aid(r.name, key, rid)}, sb, left.off as usize, left.tok_start as usize)`;
+  const finK = (key: string) => finRs(aid(r.name, key, rid), 'sb, left.off as usize, left.tok_start as usize');
   const fin = finK('bin');
   const postKey = (kid: number) => `post${r.postfixToks.findIndex((tok) => kidOf(ids, tok) === kid)}`;
   const L: PrattLowering = {
@@ -1526,10 +1530,10 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     nudGuard: (g, keyed) => guardCond(g, 't', keyed),
     beats: (i, end) => beatsRs(d, end, i),
     leafEnd: 'save + 1',
-    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, t.off as usize, save)); ${won(i, fm(i), false, false)} self.back(save); }`,
+    nudLeaf: (i) => `{ self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; best = Some(${finRs(aid(r.name, `nud${i}`, rid), 'sb, t.off as usize, save')}); ${won(i, fm(i), false, false)} self.back(save); }`,
     nudTpl: (i, hole) => `        if t.kid == ${kidOf(ids, '$templateHead')} {
             match self.match_template(Self::parse_${hole}) {
-                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, n.off as usize, n.tok_start as usize)); ${won(i, fm(i), false, false)} }
+                Some(n) if ${beatsRs(d, 'self.pos', i)} => { if n.present { self.scratch.push(n.h); } best = Some(${finRs(aid(r.name, `nud${i}`, rid), 'sb, n.off as usize, n.tok_start as usize')}); ${won(i, fm(i), false, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
@@ -1541,7 +1545,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && ${lf('self.form')} != 0 => { self.back(save); ${lost} self.capped = false; return None; }
-                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(self.finish(${aid(r.name, `nud${i}`, rid)}, sb, self.off_at(save), save)); ${won(i, 'pform', true, false)} }
+                Some(operand) if ${beatsRs(d, 'self.pos', i)} => { if operand.present { self.scratch.push(operand.h); } best = Some(${finRs(aid(r.name, `nud${i}`, rid), 'sb, self.off_at(save), save')}); ${won(i, 'pform', true, false)} }
                 _ => { ${lost} }
             }
             self.back(save);
@@ -1549,7 +1553,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     dispatch: dispatchRsL('t', false),
     // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node, form,
     // tail and capped flag; failing, no node and the frame's empty state.
-    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = self.finish(${aid(r.name, `nud${i}`, rid)}, sb, t.off as usize, save); self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
+    commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, t.off as usize, save')}; self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
     commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `nud${i}`, rid), cond, undo, nullable, cap === 'tail' ? `{ self.form = ${fm(i)}; self.tail = ${tail}; }` : fm(i) === '0' ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${fm(i)}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), NUD_FAIL_RS),
     commitPrefix: (i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
@@ -1557,7 +1561,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && ${lf('self.form')} != 0 => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); self.capped = false; return None; }
-                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = self.finish(${aid(r.name, `nud${i}`, rid)}, sb, self.off_at(save), save); self.form = pform; self.tail = true; self.capped = false; return Some(n); }
+                Some(operand) => { if operand.present { self.scratch.push(operand.h); } let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, self.off_at(save), save')}; self.form = pform; self.tail = true; self.capped = false; return Some(n); }
                 None => { self.back(save); self.scratch.truncate(sb); self.b.restore(ck); }
             }
         }`, NUD_FAIL_RS),
@@ -2201,7 +2205,12 @@ pub trait Builder {
     /// A shape's step: the slot just left gets grammar tag t (rust-shape.ts).
     #[inline(always)] fn tag(&mut self, _scratch: &mut Vec<Self::H>, _t: i32) {}
     /// A shape's marked iteration: a marker slot with tag mt goes before its slots (from c).
-    #[inline(always)] fn mark(&mut self, _scratch: &mut Vec<Self::H>, _c: usize, _mt: i32) {}` : ''}
+    #[inline(always)] fn mark(&mut self, _scratch: &mut Vec<Self::H>, _c: usize, _mt: i32) {}
+    /// A shape's finish of engine arm A, named at its accept site (finish's (H, off, present)).
+    #[inline(always)]
+    fn finish_arm<const A: u16>(&mut self, scratch: &mut Vec<Self::H>, sb: usize, fallback_off: u32, tok_start: u32, tok_end: u32, toks: &[Tok]) -> (Self::H, u32, bool) {
+        self.finish(scratch, sb, A, fallback_off, tok_start, tok_end, toks)
+    }` : ''}
 }
 
 /// The engine's transient buffers — the scratch stack of handles, the top-level entry list and the
@@ -2243,7 +2252,7 @@ fn copy_kids(kids: &mut Vec<i32>, s: &[i32]) {
         kids.set_len(n + s.len());
     }
 }
-${CAND_MACRO_RS}
+${SHAPE_RS ? CAND_MACRO_RS.replace(/\$p\.finish\(\$rid, /g, '$p.fin::<{ $rid }>(') : CAND_MACRO_RS}
 
 #[derive(Default)]
 pub struct CstBuilder {
@@ -2555,7 +2564,13 @@ impl<'a, B: Builder> Parser<'a, B> {
         let _ = self.b.leaf(&mut self.scratch, tt_id, tok_idx, off, end);
     }${SHAPE_RS ? `
     #[inline(always)]
-    fn sh_tag(&mut self, t: i32) -> bool { self.b.tag(&mut self.scratch, t); true }` : ''}
+    fn sh_tag(&mut self, t: i32) -> bool { self.b.tag(&mut self.scratch, t); true }
+    /// finish of engine arm A (an accept site's const argument: Builder::finish_arm).
+    #[inline(always)]
+    fn fin<const A: u16>(&mut self, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
+        let (h, off, present) = self.b.finish_arm::<{ A }>(&mut self.scratch, sb, fallback_off as u32, tok_start as u32, self.pos as u32, &self.toks);
+        Spanned { h, off, tok_start: tok_start as u32, present }
+    }` : ''}
     #[inline(always)]
     fn finish(&mut self, rule_id: u16, sb: usize, fallback_off: usize, tok_start: usize) -> Spanned<B::H> {
         let (h, off, present) = self.b.finish(
@@ -5628,7 +5643,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       return { c: `${side(a, false)} ${sp} ${side(b, true)}`, prec: p };
     },
     // An engine method is one of the recovery engine (`self`).
-    call: (name, args, method) => `${method || (SHAPE_RS && rsShapeCall(name)) ? 'self.' : ''}${name}(${args.join(', ')})`,
+    call: (name, args, method) => (SHAPE_RS && name in RS_SLOT ? RS_SLOT[name]!(args) : `${method || (SHAPE_RS && rsShapeCall(name)) ? 'self.' : ''}${name}(${args.join(', ')})`),
     len: (cx, l) => cx.atom(`${rsWrap(l, ATOM)}.len()`, 'int', 'usize'),
     code: (cx, s, i) => ({ c: `${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}] as u32`, ty: 'int', nat: 'u32', prec: RS_CAST }),
     hasAt: (cx, s, i, lit) => cx.atom(`${rsWrap(s, ATOM)}.as_bytes()[${cx.coerce(i, 'usize')}..].starts_with(${J(lit)}.as_bytes())`, 'bool', 'bool'),
@@ -5671,7 +5686,7 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
       // Out of line only: `#[cold]` on the identifier escape scanners moved lex_from's register layout
       // (+0.2% to +0.4% lexer instructions on real inputs, profile runs 45034540295 / 45035043707).
       ...(f.cold ? ['#[inline(never)]'] : []),
-      `fn ${f.name}(${[...(f.method ? [f.reads ? '&self' : '&mut self'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
+      `fn ${f.name}(${[...(f.method ? [f.reads ? '&self' : '&mut self'] : []), ...(SHAPE_RS && rsIsPlanFn(f.name) ? ['s: &[Slot]'] : []), ...f.params.map((p) => `${p.name}: ${p.type}`)].join(', ')})${f.rets.length === 0 ? '' : ` -> ${f.rets.length === 1 ? f.rets[0] : `(${f.rets.join(', ')})`}`} {`,
       ...rsBlock(f.body),
       '}',
     ].join('\n'),
@@ -5747,7 +5762,7 @@ export const rustTarget = defineParserTarget({
       const st = beginRsShape(plan, opts.shape, ir.entry);
       setRsShape(st); SHAPE_RS = st;
       try {
-        const fns = shared.shapeFamily({ ...plan, fns: rsPlanFns(plan.fns) });
+        const fns = shared.shapeFamily({ ...plan, fns: rsPlanFns(plan.fns, snake) });
         return emitRustLibrary(plan.ir, buildLexIdPlan(plan.ir), shared, false) + rsShapeRuntime(st, fns);
       } finally { setRsShape(null); SHAPE_RS = null; }
     }
