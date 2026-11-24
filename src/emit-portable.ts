@@ -127,8 +127,8 @@ export type Step = StepOp & {
 type StepOp =
   | { t: 'lit'; value: string; ttype: '$keyword' | '$punct'; accSep?: true }   // match a literal by text; accSep: a container's ',' after which no `last` child may stand (declared-targets.ts)
   | { t: 'tok'; name: string; hole?: string }                   // match a token kind; a template kind (TplCfg) carries the rule that parses its `${…}` holes and also matches an interpolated template
-  | { t: 'rule'; name: string; acc?: number }                  // call a rule, append its node; acc: a container's child (declared-targets.ts): the pass bits its form must have
-  | { t: 'ruleBp'; name: string; bp: number; acc?: number }     // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
+  | { t: 'rule'; name: string; acc?: number; dfix?: string }    // call a rule, append its node; acc: a container's child (declared-targets.ts): the pass bits its form must have; dfix: in a demand twin, the Pratt rule whose form the call's form is read as (DemandIR)
+  | { t: 'ruleBp'; name: string; bp: number; acc?: number; dfix?: string } // call a Pratt rule at a given binding power (chain-rhs led trailing operand)
   | { t: 'star'; step: Step; guard?: number; clean?: true; leaves?: true; share?: number }                   // repeat inner 0+
   | { t: 'opt'; steps: Step[]; guard?: number; clean?: true; leaves?: true; share?: number }                 // optional sub-sequence
   | { t: 'sep'; elem: Step; delim: string; guard?: number; clean?: true; leaves?: true; share?: number; accSep?: true }   // accSep: as a lit step's, for each delimiter (declared-targets.ts)     // elem (delim elem)*
@@ -213,6 +213,7 @@ export type RdRule = {
   altDispatch: Dispatch;    // how a target reaches the alts a token admits (unused when predictive / one alt)
   altCommit?: Commit;       // the keys at which one alternative is left (see Commit); absent: none
   altForm?: ArmForm[];      // parallel to alts: each one's form, present iff the rule is in the target closure (declared-targets.ts)
+  twinOf?: string;          // a demand twin (DemandIR.rd): `name` is its function's, twinOf the rule whose node it builds
   clean: boolean;           // every alternative fails clean (Step.clean): the PREDICTIVE / SINGLE form's entry takes no builder checkpoint and its failure undoes nothing
 };
 // The candidates of a longest-match list, by what the first token must be, as sections a target
@@ -682,7 +683,25 @@ export type ParserIR = {
   targets?: TargetsIR;
 };
 // passes: every context's pass bit; lastCtx: the pass bits of the contexts that have `last` arms.
-export type TargetsIR = { names: string[]; passes: number; lastCtx: number };
+export type TargetsIR = { names: string[]; passes: number; lastCtx: number; demand?: DemandIR };
+// The ON-DEMAND form of a target context (declared-targets.ts planDemand; TargetContext.when):
+// nothing is computed in the normal parse. A container arm's form is its low bits and its twin's
+// number k + 1 at DEFER_SHIFT (a constant, `defer`); a demand operator's node carries ASSIGNED.
+// At a demand operator whose left operand passes the shallow check, a form with a twin number
+// goes to the rule's cold `<rule>_demand` function: the left operand is parsed again by twin k
+// (reparseFrom: from its mark to the operator), the eager plan's accumulating steps, and its
+// pass bit decides. In a twin a call of a Pratt rule at a container child reads its form (dfix):
+// ASSIGNED passes; a twin number is parsed again by that twin; a capped node fails; a node with
+// the shallow check's target low bits passes.
+export type DemandTwin = { k: number; rule: string; arm: string; steps: Step[]; form: ArmForm & { k: 'acc' } };
+export type DemandIR = {
+  pass: number; assigned: number; defer: number;   // defer: the mask of the twin number's bits
+  twins: DemandTwin[];
+  rd: RdRule[];                                     // the twins of the rd rules a twin calls (twinOf)
+  fix: string[];                                    // the Pratt rules a twin reads the form of (dfix)
+  ops: Array<{ rule: string; op: string }>;         // the demand operators (each requireTarget)
+};
+export const DEFER_SHIFT = 4, DEMAND_ASSIGNED = 128, DEMAND_MAX_TWINS = 7;
 
 // The target-agnostic parse plan for a grammar, the IR each portable Target (ts/go/rust) renders.
 // The [Await]/[Yield] context is a word the parser holds (see Ctx), not a copy of each rule per
@@ -1595,6 +1614,7 @@ export type StepLowering = {
   acc?(call: string, mask: number): string;
   accSep?(): string;
   target?(mask: number): string;
+  dfix?(call: string, rule: string): string;    // a demand twin's Pratt call `call`, its form read as rule's (DemandIR): the position before it is the mark a re-parse starts from
   accRun?(cond: string, f: ArmForm & { k: 'acc' }): string;   // a container arm's steps `cond` in a fresh accumulator; matched, the arm's form is `armForm` of it
   armForm?(f: ArmForm, pratt: boolean): string;  // an arm's form when it won (a Pratt arm keeps its own low bits over a unit arm's)
   // body: the inner step, as a boolean expression; guard: the body is attempted only when the next
@@ -1643,8 +1663,11 @@ export function stepBody(s: Step, L: StepLowering): string {
   switch (s.t) {
     case 'lit': return s.accSep ? `(${L.lit(s)} && ${need(L.accSep, 'accSep')()})` : L.lit(s);
     case 'tok': return s.hole !== undefined ? L.template(s.name, s.hole) : L.tok(s.name);
-    case 'rule': return s.acc !== undefined ? need(L.acc, 'acc')(L.rule(s.name), s.acc) : L.rule(s.name);
-    case 'ruleBp': return s.acc !== undefined ? need(L.acc, 'acc')(L.ruleBp(s.name, s.bp), s.acc) : L.ruleBp(s.name, s.bp);
+    case 'rule': case 'ruleBp': {
+      const c0 = s.t === 'rule' ? L.rule(s.name) : L.ruleBp(s.name, s.bp);
+      const c = s.dfix !== undefined ? need(L.dfix, 'dfix')(c0, s.dfix) : c0;
+      return s.acc !== undefined ? need(L.acc, 'acc')(c, s.acc) : c;
+    }
     case 'star': return L.star(stepExpr(s.step, L.inner()), s.guard ?? null, markOf(s));
     case 'opt': { const I = L.inner(); return L.opt(s.steps.map((x) => stepExpr(x, I)).join(' && '), s.guard ?? null, markOf(s)); }
     case 'sep': { const I = L.inner(); return L.sep(`${s.accSep ? `${need(I.accSep, 'accSep')()} && ` : ''}${stepExpr(s.elem, I)}`, s.delim, s.guard ?? null, markOf(s)); }
@@ -1738,7 +1761,14 @@ export type RuleLowering = {
 function accCond(f: ArmForm | undefined, cond: string, S: StepLowering): string {
   return f?.k === 'acc' ? need(S.accRun, 'accRun')(cond, f) : cond;
 }
-/** An rd rule's function in the form `L` spells. */
+// ── The demand form of a target context (DemandIR), what every printer prints of it ──
+// A twin's body: its container arm's steps in the arm's accumulator (the building form's lowering:
+// a twin runs only inside reparseFrom, which puts the scratch list and the builder back).
+export const demandTwinCond = (t: DemandTwin, S: StepLowering): string => accCond(t.form, conjOf(t.steps, S), S);
+// The literal ids of rule r's demand operators (none: the rule has no demand operator).
+export function demandLids(r: PrattRule, ids: LexIdPlan, D: DemandIR | undefined): number[] {
+  return D ? D.ops.filter((o) => o.rule === r.name).map((o) => lidOf(ids, o.op)) : [];
+}/** An rd rule's function in the form `L` spells. */
 export function ruleShell(r: RdRule, ids: LexIdPlan, L: RuleLowering): string {
   // A container arm of a target context (RdRule.altForm) runs its steps inside its accumulator.
   const condAt = (i: number, steps: Step[], S = L.steps) => accCond(r.altForm?.[i], conjOf(steps, S), S);

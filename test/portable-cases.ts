@@ -30,6 +30,16 @@ export type Case = { grammar: string; path: string; parts?: Record<string, boole
 // `SpreadElement : ... AssignmentExpression`), so `a ? b : () => {} || x` is no derivation, and
 // after a line break the `+` begins the next statement. tsc rejects each reject; acorn accepts
 // `a ? b : () => {} ? c : d` (its defect: the arrow is the conditional's last AssignmentExpression).
+// The demand form's rows (test/fixtures/patterndemand.ts), for it and its eager twin: nested
+// containers re-parsed by their own twins (`[[[a]]]`), an `=` child (ASSIGNED), an inner demand
+// operator inside a twin's child (`[[a] = b] = x`), a container that is no `=` operand.
+const PATTERN_DEMAND = {
+  accept: ['a = 1;', 'a.b = 1;', '(a) = 1;', 'f() = 1;', '1 = x;', '[a, b] = x;', '[a = 1] = x;', '[...a] = x;', '[a,] = x;', '[[a], {b}] = x;',
+    '({a, b: c} = x);', '({...a} = x);', '({a: [b, ...c]} = x);', '[...[a, b]] = x;', '({a: b.c = 1} = x);', '[f(), 1] = x;', '({a: 1} = x);',
+    '[[[a]]] = x;', '[[a] = [b]] = x;', '[a = [b + c]] = x;', 'x = [a] = y;', '[a] + 1;', '[a + b];', '[...a, b];', 'a = b = c;', '([a + b]) = x;', '[a].b = x;'],
+  reject: ['[a + b] = x;', 'a + b = 1;', '[...a, b] = x;', '[...a,] = x;', '({...a, b} = x);', '({a: b + c} = x);', '[[a + 1]] = x;',
+    '[[[a + 1]]] = x;', '[[a + b] = c] = x;', '({a: [b + 1]} = x);', '[a, [b, [c + d]]] = x;', 'x = [a + b] = y;', '[[...a, b]] = x;'],
+};
 const CAP_PROPAGATION = {
   accept: ['x = (() => {}) || a;', 'x = f(() => {}) || a;', 'x = a || f(() => {}) || c;', 'x = [() => {}] || a;', 'x = a ? () => {} : b || c;', 'x = () => {}, y;',
     'a ? b : () => {};', 'x = a ? b : () => {}, y;', 'x = a ? b : c => d || e;', '[...() => {}];', 'a ? b : () => {}\n+x;', 'function* g() { a ? b : yield; }'],
@@ -610,6 +620,10 @@ export const CASES: Case[] = [
     accept: ['<T>a = x;', '[<T>a] = x;', '<T>a.b;', '(<T>a) ** b;', '++a;', '-a;', '<T>-a;', 'a ** -b;', '++(<T>a);'],
     reject: ['++<T>a;', '<T>a ** b;', '-a ** b;', '<T>a + b = x;', '++-a;', '[<T>a + b] = x;'],
   },
+  // The on-demand form (see the fixture) and the same context computed eagerly: one list of rows.
+  ...(['patterndemand', 'patterndemand-eager'] as const).map((f) => ({
+    grammar: f === 'patterndemand' ? 'patterndemand' : 'patterndemandeager', path: `./fixtures/${f}.ts`, ...PATTERN_DEMAND,
+  })),
   {
     // Three declared contexts in one grammar (see the fixture): star targets for `=`, a single
     // target for `+=`, del targets for `del`, each checked by a target() marker after the head.

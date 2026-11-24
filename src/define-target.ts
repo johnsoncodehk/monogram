@@ -13,6 +13,7 @@ import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
 import { emitRecoveryFamily } from './recovery-family.ts';
 import { emitRebindFamily } from './rebind-family.ts';
+import { emitReparseFamily } from './reparse-family.ts';
 import { printFns } from './algo-ir.ts';
 import { planShape, type ShapePlan } from './shape-plan.ts';
 import type { Shape } from './shape2-eval.ts';
@@ -32,6 +33,8 @@ export interface SharedAlgorithms {
   // (`free`, once per module) or its method; `L`: the engine form's lowering, where the target
   // spells a method's receiver per form (default: the target's lowering).
   rebindFamily(ir: ParserIR, part: 'free' | 'methods', L?: Lowering): string;
+  // The demand form's re-parse (src/reparse-family.ts): its method for one engine form.
+  reparseFamily(L?: Lowering): string;
   // The token scanners, the tokens they cover, and the printed name of the scanner a dispatch
   // site calls for a token. A lowering with `spliceInline` gets the scanner's statements for its
   // dispatch site instead (`out` declared and holding the scanner's result).
@@ -93,6 +96,7 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
       return emitReuseFamily(ir, lowering());
     },
     rebindFamily: (ir, part, L) => emitRebindFamily(L ?? lowering(), buildLexIdPlan(ir), part),
+    reparseFamily: (L) => emitReparseFamily(L ?? lowering()),
     recoveryFamily: (ir, methods) => {
       if (!lowering().record || !lowering().relex) throw new Error(`defineParserTarget: target ${def.name} supplies no record and token-stream Lowering for the recovery family`);
       const ids = buildLexIdPlan(ir);
