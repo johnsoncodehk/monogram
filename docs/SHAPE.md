@@ -294,8 +294,6 @@ and a specialized `parseAst` entry. Without a shape, `emitTs(grammar)` is
 byte-identical to `tsTarget.emitParser(...)`.
 
 Source of truth for types: [`src/shape-schema.ts`](../src/shape-schema.ts).
-Target-neutral contracts (custom context, fold markers, transaction rules):
-[`src/shape-machine.ts`](../src/shape-machine.ts).
 
 ---
 
@@ -384,7 +382,7 @@ rule, or the rule a `withHoles(token, rule)` reference names.
 
 ## Custom context (`AstCustomCtx`)
 
-Defined in [`src/shape-machine.ts`](../src/shape-machine.ts). Populated **only after**
+Populated **only after**
 the recognizer has successfully finished the current rule / Pratt event:
 
 ```ts
@@ -401,14 +399,8 @@ type AstCustomCtx = {
 type AstCustom = (ctx: AstCustomCtx) => unknown;
 ```
 
-`altPath` in the machine is a richer `AltPath` (RD / inline-alt / pratt-nud /
-pratt-led). The emitted TS `parseAst` surface exposes flattened numeric indices
-on the ctx object above — enough for arm selection in builders.
-
-Transaction rules for speculative append channels (same module):
-`SHAPE_TRANSACTION_CONTRACT` — append-only restore by length; overwrites via undo
-log or commit-on-success; Pratt locals commit on success; control flags restore
-with the checkpoint.
+The emitted TS `parseAst` surface exposes flattened numeric indices as `altPath`
+on the ctx object above, enough for arm selection in builders.
 
 ---
 
