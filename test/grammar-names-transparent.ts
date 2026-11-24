@@ -1,5 +1,5 @@
 // Gate `grammar-names`: grammar NAMES (`arm` / `field`, src/api.ts) are transparent to parsing,
-// and the shared deriver (src/grammar-names.ts) reads them.
+// and the shared deriver (src/grammar/grammar-names.ts) reads them.
 //   1. api: test/fixtures/namedcalc.ts (calc with every arm and child named) lowers to exactly
 //      calc's rules plus the names; every emitted parser is byte-identical to calc's; the
 //      interpreter's CSTs are identical; gen-cst-match names the arms and captures as written.
@@ -7,21 +7,21 @@
 //      branches and every other node, in memory) emit byte-identical parsers for every target.
 //   3. the deriver: a repeated derived name is suffixed and reported; an author-written name is
 //      never suffixed; two equal written names in one scope are an error.
-//   4. the portable IR carries the names (src/parser-ir.ts, Step NAMES): an rd rule's
+//   4. the portable IR carries the names (src/ir/parser-ir.ts, Step NAMES): an rd rule's
 //      `altNames`, a Pratt rule's `nudNames` / `ledNames` / `ledLeftNames` / `postfixTokNames` /
 //      `opNames`, a step's `field`, an inline alternation's `branchNames`, each the deriver's; with
 //      them dropped, the IR of a named grammar equals the unnamed one's.
 import { createHash } from 'node:crypto';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import { createParser } from '../src/interpreter.ts';
-import { generateCstMatch } from '../src/gen-cst-match.ts';
-import { nameReport, nameRule } from '../src/grammar-names.ts';
-import { portableIR, type RdRule, type PrattRule, type Step } from '../src/parser-ir.ts';
-import type { Grammar, RuleExpr } from '../src/types.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { generateCstMatch } from '../src/targets/gen-cst-match.ts';
+import { nameReport, nameRule } from '../src/grammar/grammar-names.ts';
+import { portableIR, type RdRule, type PrattRule, type Step } from '../src/ir/parser-ir.ts';
+import type { Grammar, RuleExpr } from '../src/grammar/types.ts';
 import { rule, alt, arm, field, defineGrammar, token, many, opt, seq, range, star } from '../src/api.ts';
 import calc from './fixtures/calc.ts';
 import namedCalc from './fixtures/namedcalc.ts';

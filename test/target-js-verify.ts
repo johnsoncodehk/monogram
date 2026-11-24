@@ -1,5 +1,5 @@
-// Correctness gate for the EMITTED parser (src/target-js.ts) against the RUNTIME
-// INTERPRETER (src/interpreter.ts createParser) — the oracle.
+// Correctness gate for the EMITTED parser (src/targets/target-js.ts) against the RUNTIME
+// INTERPRETER (src/interpreter/interpreter.ts createParser) — the oracle.
 //
 // For each input it runs BOTH parsers and compares (a) accept/reject (throw vs not)
 // and (b) the produced CST, JSON-stringified, byte-for-byte. The HARD gate is the
@@ -12,9 +12,9 @@
 //   node test/target-js-verify.ts all        # also sweep EVERY external file (no stride)
 //   node test/target-js-verify.ts <N>        # external sweep stride N (default ~400 files)
 import { objectify } from './emitted-obj.ts';
-import { createParser } from '../src/interpreter.ts';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
 import { scratchDir } from './scratch.ts';

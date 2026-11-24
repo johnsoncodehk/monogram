@@ -9,15 +9,15 @@ generators need from it. [`docs/GRAMMAR.md`](GRAMMAR.md) has the grammar author'
 
 ## Status
 
-Built (the interpreter's lexer, `src/lexer.ts`, which the emitted JS parser shares):
-- **Element regions** (`ElementRegion`, grammar field `elements`, `src/types.ts`): elements entered
+Built (the interpreter's lexer, `src/interpreter/lexer.ts`, which the emitted JS parser shares):
+- **Element regions** (`ElementRegion`, grammar field `elements`, `src/grammar/types.ts`): elements entered
   from code, with text or code children, holes, close / self-close tokens that exist only inside
   an element, and TypeScript's type-parameter vetoes. JSX / TSX declare one (`withJsx` in
   `javascriptreact.ts`); so does the dialect fixture `test/fixtures/elementdialect.ts`.
 - **Tag tokens** (`tagTokens`): tokens lexed only inside a tag (JSX's attribute string, no escapes).
 - **Code children**: without a `text` token, children are lexed by the ordinary scan.
 - **Derived entry**: how code enters a region is a fact of the grammar
-  (`tagOpenOnlyOpensTags`, `src/grammar-analysis.ts`).
+  (`tagOpenOnlyOpensTags`, `src/grammar/grammar-analysis.ts`).
 - **Raw text** (`rawText`): an element whose tag name is declared raw has its whole body as ONE
   token, in a raw frame; the dialect fixture's `<style>`. A declaration's `unlessBodyStarts`
   makes the body ordinary children when the pattern matches at its start.
@@ -125,7 +125,7 @@ identifiers: a joiner that is one of the grammar's `regexContext.memberAccessTex
 accessor in a tag name, `.` in JSX's `a.b`; a joiner declared in `highlight.nameJoiners` splits off
 a prefix; any other joins within one name), the attribute rule and its assign
 literal, the value's openers, the tag tokens' quotes, a nameless arm `tagOpen tagClose` (a fragment),
-tag type arguments. `src/region-view.ts` normalises this for every generator. What a dialect's
+tag type arguments. `src/editor/region-view.ts` normalises this for every generator. What a dialect's
 highlighting adds beyond its rules is `highlight`, and a dialect that declares none gets none:
 - `tagName`: a tag name's scope, the first entry whose `match` matches the whole name. Without
   entries a name is `entity.name.tag`, or the `contextualScopes` scope declared for the tag-name
@@ -181,7 +181,7 @@ A grammar without `elements` gets the lexer it had before regions existed, byte 
 ## Entry from code
 
 How code enters an element is a fact of the grammar, computed once by
-`tagOpenOnlyOpensTags(grammar, region)` (`src/grammar-analysis.ts`) and recorded by
+`tagOpenOnlyOpensTags(grammar, region)` (`src/grammar/grammar-analysis.ts`) and recorded by
 `lexSpecOf` as `elementEntry: 'always'`. It is true when:
 - every occurrence of the `tagOpen` literal in a rule is the first item of a sequence that also
   references the region's close-tag or self-close token (an element arm);
@@ -224,7 +224,7 @@ Its head is code, its body is children closed by the hole closer. Nothing about 
 dialect-specific in the lexer; every literal comes from the grammar.
 
 **Declaration: none.** The directive table is DERIVED, as the entry is, by
-`directivesOf(grammar, region)` (`src/grammar-analysis.ts`) and recorded by `lexSpecOf` as
+`directivesOf(grammar, region)` (`src/grammar/grammar-analysis.ts`) and recorded by `lexSpecOf` as
 `elementDirectives` (absent when there is none, so the lexer is byte-identical); a region without
 `text` has none (code children lex a directive as code):
 - the CHILDREN items are the items repeated between an element arm's `tagClose` and its
@@ -342,11 +342,11 @@ reconstructed. Every token inside an undecided type-parameter signature, and the
 decides it, records one level deeper (the signature is lexer state, as a frame is).
 
 A token is also decided by what its lexer READ: its match, and the failed attempts before it at
-its start (the anchor rule, stated at the top of `src/relex-family.ts`). The read bounds are the
-shared functions of `src/lex-match-plan.ts`: `failRead` and `readEndWalk` for a failed attempt,
+its start (the anchor rule, stated at the top of `src/ir/relex-family.ts`). The read bounds are the
+shared functions of `src/grammar/lex-match-plan.ts`: `failRead` and `readEndWalk` for a failed attempt,
 `overTrigger` and `examinedUnits` for a match (a lazy repeat bounded as the regex runs it, so a
 block comment reads nothing past its `*/`). The portable relex checks them at relex time. The
-interpreter's lexer (`src/lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
+interpreter's lexer (`src/interpreter/lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
 exclusive end of the furthest read any decision so far made, and a token pushed while it is past
 the token's end + 1 carries flag 32: it is no restart anchor and no resync point. Such reads: a regex attempt that
 falls back to division (to the end of its line), an unterminated block comment (to the end of the
@@ -384,8 +384,8 @@ children with directives, dynamic tags and an element right after a value): edit
 
 ## The portable lexers
 
-Built from one plan (`ElementPlan`, `src/parser-ir.ts`) and one family of shared routines
-(`src/lex-family.ts`, `elementFns`), printed by each target:
+Built from one plan (`ElementPlan`, `src/ir/parser-ir.ts`) and one family of shared routines
+(`src/ir/lex-family.ts`, `elementFns`), printed by each target:
 - the frame step (`lexElFrame`): what an element frame on top of the stack lexes at a position
   (children: close tag, nested tag, hole, text run; tag: tag tokens, self-close, tag close with
   type-argument depth, nested element after `=`, hole), as (end, kind, literal, new top frame,
@@ -416,7 +416,7 @@ Differences from the interpreter, none visible in the token stream:
   step yields one token, so a Doc records the lexer state after each token as before. Rust has
   no catchable lexer error, so its error routines return a sentinel while a signature is
   undecided.
-- Relex: a token's depth (`relexDepth`, `src/relex-family.ts`) is the frames open after it, plus
+- Relex: a token's depth (`relexDepth`, `src/ir/relex-family.ts`) is the frames open after it, plus
   one when it ended an element, plus one when it starts before the look end: the furthest any
   lookahead read (the vetoes' patterns, a signature's group and the token deciding it, a tag
   token's failed attempt). Anchors and resync need depth 0, as for templates.
@@ -484,7 +484,7 @@ Differences from the interpreter, none visible in the token stream:
 - Root region: today's markup TextMate output is that case; nothing changes unless `html.ts`
   moves.
 
-**TextMate: built** (`src/gen-textmate.ts`, from `regionView` / `operandEntry` in `src/region-view.ts`
+**TextMate: built** (`src/editor/gen-textmate.ts`, from `regionView` / `operandEntry` in `src/editor/region-view.ts`
 and `directivesOf`): every item above except the root region, gated by `test/textmate-dialect.ts` on
 the two dialect fixtures (every row passes; a dialect needs only its grammar file). What a
 TextMate grammar cannot express, each a limitation stated where the pattern is built:
@@ -499,7 +499,7 @@ TextMate grammar cannot express, each a limitation stated where the pattern is b
 Each row was run on the text dialect fixture (`test/fixtures/textdialect.ts`) and the committed
 TSX grammar, against the interpreter's token stream.
 
-**Monarch: built for element regions** (`src/gen-monarch.ts`, `elementLayer`, from the same
+**Monarch: built for element regions** (`src/editor/gen-monarch.ts`, `elementLayer`, from the same
 `regionView`): one Monarch state per lexer state: `<name>_open` (the tag name by its name shape,
 a fragment's `tagClose`, a dynamic tag's hole), `<name>_tag` (attributes, the assign literal, the
 tag tokens' quoted forms, holes, tag type arguments, self-close, `tagClose`), `<name>_children`

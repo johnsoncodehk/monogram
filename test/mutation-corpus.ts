@@ -3,7 +3,7 @@
 // is a near miss of a valid text: most are rejected, at the place the edit broke, which is what
 // total parsing's diagnostics (and later its repairs) are measured on. Deterministic: the same
 // seed gives the same corpus.
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 
 // xorshift32: a small seeded generator, the same sequence on every machine.
 function rng(seed: number): () => number {

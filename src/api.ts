@@ -1,11 +1,11 @@
-import type { LedPrec, Grammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, AssignTargetContext } from './types.ts';
-import { computeNullableRules, findEntryRule } from './grammar-analysis.ts';
-import { whenTest } from './grammar-utils.ts';
+import type { LedPrec, Grammar, TokenDecl, PrecLevel, PrecOperator, RuleDecl, RuleExpr, MarkupConfig, ElementRegion, IndentConfig, NewlineConfig, StringInterpolation, TokenPattern, AssignTargetContext } from './grammar/types.ts';
+import { computeNullableRules, findEntryRule } from './grammar/grammar-analysis.ts';
+import { whenTest } from './grammar/grammar-utils.ts';
 import {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy,
   notPrecededBy, oneOf, optPattern, plus, precededBy, range, repeat,
   seq, star, start, lineStart, end,
-} from './token-pattern.ts';
+} from './grammar/token-pattern.ts';
 
 export {
   altPattern, anyChar, followedBy, never, noneOf, notFollowedBy, notPrecededBy, oneOf,
@@ -349,7 +349,7 @@ class HolesNode {
   constructor(token: TokenRef, rule: RuleRef) { this.token = token; this.rule = rule; }
 }
 
-// Names (read through src/grammar-names.ts). A name describes a SYNTAX role: the keyword or
+// Names (read through src/grammar/grammar-names.ts). A name describes a SYNTAX role: the keyword or
 // spec production an alternative is (`arm('if', ...)`, `arm('memberDot', ...)`), the role a
 // child plays (`field('condition', Expr)`, `field('then', Stmt)`), never one AST's node or
 // field names: each consumer's ShapeSpec maps the names to its own AST. A name is a property
@@ -695,7 +695,7 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   expression?: RuleRef;   // the rule that produces an EXPRESSION: parses the `${…}` holes of every bare template-token reference (see withHoles), and enables a derived `#expression` sub-grammar (expression-only embeds)
   aliasScopes?: { scope: string; file: string }[];  // extra grammars re-exposing this one under another scopeName (e.g. text.html.derivative)
   canonicalRepoNames?: Record<string, string | string[]>;  // official repo KEY NAME → structural key(s) for the SAME construct; gen-textmate RENAMES the structural key (or synthesises a union wrapper) to emit the official name natively (the 限制器; see Grammar.canonicalRepoNames)
-  manifest?: import('./types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
+  manifest?: import('./grammar/types.ts').ContributesManifest;  // VS Code `contributes` packaging (emits a pasteable snippet)
   treeSitterConflicts?: string[][];  // tree-sitter GLR conflict tuples for THIS grammar (see Grammar.treeSitterConflicts)
   treeSitterContextualNames?: string[] | 'all';  // keywords the tree-sitter grammar also reads as names (see Grammar.treeSitterContextualNames)
 }

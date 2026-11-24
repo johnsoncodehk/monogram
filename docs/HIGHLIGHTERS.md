@@ -8,21 +8,21 @@ A highlighter back end turns one grammar into the files an editor's highlighting
 | `monarch` | Monaco's Monarch (JavaScript RegExp) | `<name>.monarch.json` |
 | `treesitter-highlights` | tree-sitter queries | `tree-sitter/<name>/queries/highlights.scm` |
 
-Each one registers with `defineHighlighter` (src/define-highlighter.ts; the three are in
-src/highlighters.ts), and `src/cli.ts` writes what every registered back end renders.
+Each one registers with `defineHighlighter` (src/editor/define-highlighter.ts; the three are in
+src/editor/highlighters.ts), and `src/cli.ts` writes what every registered back end renders.
 
 ## How it differs from a parser target
 
-A parser target (`defineParserTarget`, src/define-parser-target.ts, docs/TARGETS.md) prints one PARSER:
+A parser target (`defineParserTarget`, src/targets/define-parser-target.ts, docs/TARGETS.md) prints one PARSER:
 it is handed the shared algorithm families already printed in its language and adds its own
 spelling, so every target runs the same algorithm. A highlighter has no parser to print. Its
 engine sees only text, line by line, and has its own means of keeping context: lookbehind and
 begin / end regions in TextMate, a state stack in Monarch, the syntax tree in tree-sitter. What the
 back ends share is what is KNOWN about the grammar, not an algorithm:
 
-- `facts`: `highlightFacts(grammar)` (src/highlight-facts.ts: every detector's answer, computed
+- `facts`: `highlightFacts(grammar)` (src/editor/highlight-facts.ts: every detector's answer, computed
   once per grammar, for example the member-access texts, the declaration keywords, the follower
-  sets of the keywords) and the role / classifier tables (src/highlight-roles.ts);
+  sets of the keywords) and the role / classifier tables (src/editor/highlight-roles.ts);
 - `ir`: the shared context IR, for the constructs moved into it (none yet; type context is the
   first). It holds facts and context boundaries, never a lowered pattern;
 - `capabilities`: what the engine can express (lookbehind, how a region ends, `while`, recursion,

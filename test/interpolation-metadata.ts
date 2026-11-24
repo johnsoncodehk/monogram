@@ -6,9 +6,9 @@
 //
 // Run with: node test/interpolation-metadata.ts
 import { defineGrammar, many, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, range, plus } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-textmate.ts';
-import { generateMonarch } from '../src/gen-monarch.ts';
-import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
+import { generateTmLanguage } from '../src/editor/gen-textmate.ts';
+import { generateMonarch } from '../src/editor/gen-monarch.ts';
+import { generateTreeSitter } from '../src/editor/gen-tree-sitter.ts';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

@@ -10,7 +10,7 @@
 // algorithm (that is not a context-free grammar); conformance is measured against
 // `parse5` on well-formed input. See memory: html-vue-markup.
 import { token, rule, defineGrammar, many, opt, alt, altPattern, seq, oneOf, noneOf, range, anyChar, star, plus, notFollowedBy } from './src/api.ts';
-import type { MarkupConfig } from './src/types.ts';
+import type { MarkupConfig } from './src/grammar/types.ts';
 
 // ── Tokens ──
 // ASCII word chars [A-Za-z0-9_] — NOT `\w` (Oniguruma treats `\w` as Unicode-aware); tag/attr

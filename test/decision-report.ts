@@ -1,6 +1,6 @@
 // The DECISION REPORT pages of the root grammars (docs/decisions/<grammar>.md) and of the example
 // fixture, and their gates. The page itself (how the parser decides every choice point, the static
-// findings and the action each suggests) is src/decision-report.ts, the module
+// findings and the action each suggests) is src/ir/decision-report.ts, the module
 // `node src/cli.ts <grammar.ts> --decisions` writes for any grammar. What this script adds is what
 // needs the parser to RUN:
 //   • the witness of every static tie: its token alone, parsed as the list's rule by the ParserIR
@@ -18,14 +18,14 @@
 //   node test/decision-report.ts --observe <grammar.ts> <input>...   # any grammar: its page with the ties observed on those inputs (stdout)
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { portableIR, type ParserIR } from '../src/parser-ir.ts';
-import { analyzeDecisions, renderDecisions, decisionReport, type DecisionFindings } from '../src/decision-report.ts';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { nameRule } from '../src/grammar-names.ts';
+import { portableIR, type ParserIR } from '../src/ir/parser-ir.ts';
+import { analyzeDecisions, renderDecisions, decisionReport, type DecisionFindings } from '../src/ir/decision-report.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { nameRule } from '../src/grammar/grammar-names.ts';
 import { engine, canon, type Tok } from './ir-engine.ts';
 import { scratchDir } from './scratch.ts';
-import type { Grammar, RuleExpr } from '../src/types.ts';
+import type { Grammar, RuleExpr } from '../src/grammar/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const NM = `${ROOT}node_modules`;
@@ -147,7 +147,7 @@ async function deadGate(): Promise<number> {
   const corpus = stride(filesUnder(CORPUS, /\.ts$/).filter((f) => statSync(f).size < 20000), 600);
   if (corpus.length === 0) { console.log(`decision-report --dead: NOT RUN: the conformance corpus ${CORPUS} is missing`); return 1; }
   const inputs: Record<string, string[]> = {
-    typescript: [...TS_PINNED, ...readdirSync(`${ROOT}src`).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}src/${f}`), ...corpus],
+    typescript: [...TS_PINNED, ...(readdirSync(`${ROOT}src`, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}src/${f}`), ...corpus],
     javascript: [...JS_PINNED, ...filesUnder(`${NM}/entities/dist`, /\.js$/), ...filesUnder(`${NM}/yaml/dist`, /\.js$/), ...corpus],
   };
   let failures = 0;

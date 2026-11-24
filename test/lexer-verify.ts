@@ -13,10 +13,10 @@
 //      character punctuation token per character, the first carrying the golden flags.
 //   node test/lexer-verify.ts
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { compileTokenizer, type LexSpec, type Token } from '../src/lexer.ts';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { gtComposites } from '../src/grammar-utils.ts';
+import { compileTokenizer, type LexSpec, type Token } from '../src/interpreter/lexer.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { gtComposites } from '../src/grammar/grammar-utils.ts';
 import { scratchDir } from './scratch.ts';
 
 const TMP = scratchDir('lexer-verify');
@@ -96,7 +96,7 @@ for (const name of ['typescript', 'typescriptreact', 'javascript', 'javascriptre
 // IdentifierPart run after it, ASCII included (`naïve`, `aé$`).
 {
   const { token, rule, defineGrammar, seq, oneOf, range, star, many } = await import('../src/api.ts');
-  const { lexSpecOf } = await import('../src/lexer.ts');
+  const { lexSpecOf } = await import('../src/interpreter/lexer.ts');
   const Ident = token(seq(oneOf(range('a', 'z'), '_'), star(oneOf(range('a', 'z'), range('0', '9'), '_'))), { identifier: true });
   const P = rule(() => [[many(Ident)]]);
   const tokenize = compileTokenizer(lexSpecOf(defineGrammar({ name: 'idtoy', tokens: { Ident }, rules: { P } })));

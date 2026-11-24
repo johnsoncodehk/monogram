@@ -4,12 +4,12 @@
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { emitTs } from '../src/target-ts.ts';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { calcShape } from '../src/shape-calc.ts';
-import { validateShape, validateShapeOrThrow } from '../src/shape-validate.ts';
-import type { ShapeSpec } from '../src/shape-schema.ts';
+import { emitTs } from '../src/targets/target-ts.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { calcShape } from '../src/shape/v1/shape-calc.ts';
+import { validateShape, validateShapeOrThrow } from '../src/shape/v1/shape-validate.ts';
+import type { ShapeSpec } from '../src/shape/v1/shape-schema.ts';
 import calcGrammar from './fixtures/calc.ts';
 import toyGrammar, {
   toyShape, toyCustoms, toyTaggedCustomShape, toyGolden, buildToyCorpus, type ToyAstCustoms,

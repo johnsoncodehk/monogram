@@ -1,12 +1,12 @@
 // REPORT (not a gate yet): for each grammar, the arms, inline branches and children whose name
-// src/grammar-names.ts can only derive POSITIONALLY (a numeric suffix: `export2`, `expr2`),
+// src/grammar/grammar-names.ts can only derive POSITIONALLY (a numeric suffix: `export2`, `expr2`),
 // i.e. the names an author must write with `arm(...)` / `field(...)` for the name to survive an
 // edit of an earlier arm or child. One line per finding:
 //   rule / arm index [/ branch index] [/ child index] / derived name / why / the arm's syntax
 //
 //   node test/grammar-names.ts [javascript] [typescript] [--json]
-import { nameReport, type NameFinding } from '../src/grammar-names.ts';
-import type { RuleExpr } from '../src/types.ts';
+import { nameReport, type NameFinding } from '../src/grammar/grammar-names.ts';
+import type { RuleExpr } from '../src/grammar/types.ts';
 
 const show = (e: RuleExpr, depth = 0): string => {
   if (depth > 3) return '…';

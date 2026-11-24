@@ -284,7 +284,7 @@ say();
 // The typed shape build against the CST build (run.sh phase shape; M only).
 const shapeLines = readFileSync(resultsFile, 'utf8').split('\n').filter((l) => /^(SHAPE|SHAPECOV|BUILT|MISSING) /.test(l));
 if (shapeLines.length) {
-  say('### Shape build (typed Rust AST, src/rust-shape.ts) against the CST build, M');
+  say('### Shape build (typed Rust AST, src/targets/rust-shape.ts) against the CST build, M');
   const rows = shapeLines.filter((l) => l.startsWith('SHAPE ') && / cst=/.test(l)).map((l) => { const p = l.split(/\s+/), f = kv(l); return [p[1]!, p[2]!, f.cst ?? '?', f.shape ?? '?', f.delta ?? '?']; });
   if (rows.length) table(['input', 'mode', 'CST build Ir', 'shape build Ir', 'Δ'], rows);
   for (const l of shapeLines.filter((x) => !(x.startsWith('SHAPE ') && / cst=/.test(x)))) say(`- \`${l.trim()}\``);

@@ -13,9 +13,9 @@
 //   node test/emit-reentrancy.ts
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import type { Grammar } from '../src/types.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
 

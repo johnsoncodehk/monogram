@@ -40,7 +40,7 @@ export function cachedEmit(grammarFile: string, target: string, opts: object, em
   const tfile = TARGET_FILE[target];
   if (process.env.MONOGRAM_EMIT_CACHE === '0' || !tfile) return emit();
   const g = grammarFile.startsWith('/') ? relative(ROOT, grammarFile) : grammarFile;
-  const key = buildKey('emit', target, JSON.stringify(opts), JSON.stringify(parts), g, hashGraph(g), hashGraph(tfile), hashGraph('src/target.ts'));
+  const key = buildKey('emit', target, JSON.stringify(opts), JSON.stringify(parts), g, hashGraph(g), hashGraph(tfile), hashGraph('src/targets/target.ts'));
   let fresh: string | undefined;
   const [dir] = buildAll([{ key, build: (out) => writeFileSync(join(out, 'src'), (fresh = emit())) }]);
   return fresh ?? readFileSync(join(dir!, 'src'), 'utf8');

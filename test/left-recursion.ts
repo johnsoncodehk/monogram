@@ -7,7 +7,7 @@
 // time, which is what the old syntactic check allowed (it only saw the length-1,
 // non-nullable case).
 import { token, rule, defineGrammar, range, opt } from '../src/api.ts';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { cond ? ok++ : (fail++, console.log('  ✗', label)); };

@@ -4,11 +4,11 @@
 // `tagStart`, a raw-text body condition (`unlessBodyStarts`). A row is `pass` or `xfail` (an
 // expected failure, with its cause); an xfail that passes fails the gate until its mark flips.
 //   node test/text-dialect.ts [--all]
-import { createParser } from '../src/interpreter.ts';
-import { directivesOf } from '../src/grammar-analysis.ts';
-import { lexSpecOf } from '../src/lexer.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { directivesOf } from '../src/grammar/grammar-analysis.ts';
+import { lexSpecOf } from '../src/interpreter/lexer.ts';
 import { token, rule, defineGrammar, seq, oneOf, range, star, plus, noneOf, many, alt } from '../src/api.ts';
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import dialect from './fixtures/textdialect.ts';
 
 type Row = { section: string; id: string; status: 'pass' | 'xfail'; why?: string; check: () => { ok: boolean; saw: string } };

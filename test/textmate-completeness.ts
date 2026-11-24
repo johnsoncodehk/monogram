@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  textmate-completeness.ts — the COMPLETENESS checker + ledger for src/gen-textmate.ts.
+//  textmate-completeness.ts — the COMPLETENESS checker + ledger for src/editor/gen-textmate.ts.
 //
 //  Issue #51: prove that the TextMate generator is COMPLETE — for every grammar
 //  shape that REQUIRES a TextMate construct, gen-textmate emits it AND it is reachable.
@@ -7,7 +7,7 @@
 //  WRONG paints): here we find UN-emitted / UN-reachable obligations.
 //
 //  The proof is structural, resting on the fact that the generator's INPUT is a
-//  CLOSED, FINITE algebra (RuleExpr / TokenPattern in src/types.ts) plus a finite
+//  CLOSED, FINITE algebra (RuleExpr / TokenPattern in src/grammar/types.ts) plus a finite
 //  set of config records (TokenDecl / Markup / Indent / Newline / …). Completeness
 //  reduces to three mechanically-checkable layers:
 //
@@ -43,11 +43,11 @@ import {
   oneOf, noneOf, seq, altPattern, optPattern, star, plus, repeat,
   followedBy, notFollowedBy, precededBy, notPrecededBy, start, end, never, anyChar, range, none, left,
 } from '../src/api.ts';
-import { tokenPatternToRegex, tokenPatternIsNever, tokenPatternLiteralText } from '../src/token-pattern.ts';
-import { collectLiterals, isKeywordLiteral } from '../src/grammar-utils.ts';
-import type { RuleExpr, TokenPattern, Grammar } from '../src/types.ts';
-import { generateTmLanguage } from '../src/gen-textmate.ts';
-import { createParser } from '../src/interpreter.ts';
+import { tokenPatternToRegex, tokenPatternIsNever, tokenPatternLiteralText } from '../src/grammar/token-pattern.ts';
+import { collectLiterals, isKeywordLiteral } from '../src/grammar/grammar-utils.ts';
+import type { RuleExpr, TokenPattern, Grammar } from '../src/grammar/types.ts';
+import { generateTmLanguage } from '../src/editor/gen-textmate.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -66,7 +66,7 @@ const check = (label: string, cond: boolean, detail = '') => {
 //  LAYER A — algebra closure
 // ════════════════════════════════════════════════════════════════════════════
 
-// The closed RuleExpr union, straight from src/types.ts (the proof's universe). If a
+// The closed RuleExpr union, straight from src/grammar/types.ts (the proof's universe). If a
 // constructor is added there without being produced by some api.ts combinator, the
 // closure witness below will report it as an unreachable constructor.
 const RULE_EXPR_UNION = [
@@ -422,7 +422,7 @@ export function literalDischarge(g: Grammar, tmJson: TmGrammarJson): LiteralDisc
 //  LAYER A (cont.) — the literal-collection backbone is total + drops nothing consumed
 //
 //  The flat keyword/operator scoping in gen-textmate.ts is driven by the SHARED primitive
-//  collectLiterals (src/grammar-utils.ts), looped over every rule body. So flat keyword
+//  collectLiterals (src/grammar/grammar-utils.ts), looped over every rule body. So flat keyword
 //  completeness reduces to: collectLiterals collects EVERY consumed literal — it recurses
 //  into all consuming structural constructors (seq/alt/quantifier/group/sep) and correctly
 //  omits only the non-consuming ones (`not` = negative lookahead, the literal must NOT be

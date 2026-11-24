@@ -11,14 +11,14 @@
 // Run with: node test/diagnostic-labels.ts
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { createParser } from '../src/interpreter.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import { objectify } from './emitted-obj.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range, type Grammar } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-textmate.ts';
-import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
-import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
+import { generateTmLanguage } from '../src/editor/gen-textmate.ts';
+import { generateTreeSitter } from '../src/editor/gen-tree-sitter.ts';
+import { generateLanguageConfig } from '../src/editor/gen-vscode-config.ts';
 import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;

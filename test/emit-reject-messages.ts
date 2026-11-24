@@ -15,9 +15,9 @@
 // is also swept when present. Corpus-free, so it runs in `npm run check` everywhere.
 //
 //   node test/emit-reject-messages.ts
-import { createParser } from '../src/interpreter.ts';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
 import { scratchDir } from './scratch.ts';

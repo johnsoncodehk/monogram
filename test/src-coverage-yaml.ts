@@ -12,7 +12,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { parse as yamlParse, parseAllDocuments } from 'yaml';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import { run, type AgreeResult, type CorpusItem } from './src-coverage.ts';
 
 const grammar = (await import('../yaml.ts')).default;

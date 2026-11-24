@@ -2,14 +2,14 @@
 
 > **Two generations.** A v2 shape (this section and the next) binds the grammar's stable NAMES and
 > is written with `defineShape` (`monogram/shape`, [`src/shape.ts`](../src/shape.ts)); it is a
-> closed calculus of plain data ([`src/shape2-schema.ts`](../src/shape2-schema.ts)) with no escape
+> closed calculus of plain data ([`src/shape/shape2-schema.ts`](../src/shape/shape2-schema.ts)) with no escape
 > to code. **What v2 does today:** it is checked against its grammar when it is defined, and
-> EVALUATED over the interpreter's CST ([`src/shape2-eval.ts`](../src/shape2-eval.ts), the
+> EVALUATED over the interpreter's CST ([`src/shape/shape2-eval.ts`](../src/shape/shape2-eval.ts), the
 > reference). `emitParser(g, tsTarget, { shape })` builds its AST directly in the parse
-> ([`src/shape-plan.ts`](../src/shape-plan.ts)); `emitParser(g, rustTarget, { shape })` builds it as
-> TYPED data ([`src/shape-types.ts`](../src/shape-types.ts) derives the types: a struct per node
+> ([`src/shape/shape-plan.ts`](../src/shape/shape-plan.ts)); `emitParser(g, rustTarget, { shape })` builds it as
+> TYPED data ([`src/shape/shape-types.ts`](../src/shape/shape-types.ts) derives the types: a struct per node
 > kind, an enum per union of kinds, closed string enums, lists, records; any site with no typed
-> form is a `ShapeTypeError` listing every one; [`src/rust-shape.ts`](../src/rust-shape.ts) prints
+> form is a `ShapeTypeError` listing every one; [`src/targets/rust-shape.ts`](../src/targets/rust-shape.ts) prints
 > them: one arena per kind, `Id<Kind>`, `parse_shape(src)` -> `Ast` with `root()` and
 > `to_json()`), for a shape with no inherited attribute yet (the typed target refuses variants).
 > Gate `shape-typed-rust`: the typed AST's JSON ≡ the evaluator. `emitTs` / `emitRust` with
@@ -85,7 +85,7 @@ term's order (an absent one left out). The keys default to `kind`, `start`, `end
 its own with `node: { kind, start, end }` (ESTree: `node: { kind: 'type' }`, so the value IS an
 ESTree node), and a node term with a field of one of those names is a load error.
 
-(`parse` is the interpreter's: `createParser(grammar).parse(src)` from `src/interpreter.ts`. The
+(`parse` is the interpreter's: `createParser(grammar).parse(src)` from `src/interpreter/interpreter.ts`. The
 parenthesised `1 + y` passes through: the Add node spans `1 + y`, not its parentheses.)
 
 What is checked, and where:
@@ -107,7 +107,7 @@ What is checked, and where:
 
 ### Names a shape depends on, and what renames them
 
-A shape is a contract against the grammar's names ([`src/grammar-names.ts`](../src/grammar-names.ts)).
+A shape is a contract against the grammar's names ([`src/grammar/grammar-names.ts`](../src/grammar/grammar-names.ts)).
 A name the grammar author WRITES, `arm('letDeclaration', ...)` or `field('binding', Ident)`, never
 changes unless the author changes it. A DERIVED name changes when:
 - an arm's first significant item changes (an arm is named from it: `if`, `led_dot` for a led
@@ -117,7 +117,7 @@ changes unless the author changes it. A DERIVED name changes when:
   alternation `alt`);
 - an earlier arm or child with the same derived name is added or removed: a repeated derived
   name gets a numeric suffix (`export2`, `expr2`), which is POSITIONAL. `nameReport` in
-  `src/grammar-names.ts` lists every such name.
+  `src/grammar/grammar-names.ts` lists every such name.
 
 To pin a name, write it in the grammar (`arm(name, ...)` / `field(name, item)`): naming is
 transparent (every generated parser and highlighter is byte-identical with or without names:
@@ -133,7 +133,7 @@ grammar names.
 ### Template literals
 
 A template reference (a `template` token) is read as a fixed inline alternation. It is a
-structure the calculus reads, not a new operator (`TemplateView` in `src/shape2-eval.ts`):
+structure the calculus reads, not a new operator (`TemplateView` in `src/shape/shape2-eval.ts`):
 
 | branch | children |
 |---|---|
@@ -171,7 +171,7 @@ The loader classifies every equation (`Shape.rightDependent`):
 | ESTree | `Expr.binaryOp.left` → `pattern`, read from the operator leaf `op` (`=`) |
 | tsc | none (the gate `shape2-eval` asserts it); its inherited equations are `chainTop` and `heritageElement`, constants, and `modifiers`, node-valued (below) |
 
-A **node-valued** inherited attribute (`type: 'nodes'`, `NodesAttr` in `src/shape2-schema.ts`) is
+A **node-valued** inherited attribute (`type: 'nodes'`, `NodesAttr` in `src/shape/shape2-schema.ts`) is
 the one attribute type that is not a scalar: an immutable list of nodes, default the empty list.
 - **What it is for.** tsc puts the `export` / `declare` words and the outer decorators on the
   INNER declaration node (`export declare function f(): void;` is one FunctionDeclaration whose
@@ -211,7 +211,7 @@ the shape's.
 ### How a generated parser builds the two Pratt-left attributes (no variants)
 
 The left operand of a led is built before the led is seen, so an inherited attribute a led hands
-its LEFT is not known when the left is built. The plan (`src/shape-plan.ts`) derives one of two
+its LEFT is not known when the left is built. The plan (`src/shape/shape-plan.ts`) derives one of two
 treatments from the spec; neither is a term the author writes:
 
 - **A reader-applied top** (`topForm`; ESTree `chainTop`, tsc `heritageElement`'s form). An
@@ -289,11 +289,11 @@ treatments from the spec; neither is a term the author writes:
 
 A **shape** maps a grammar's concrete syntax tree (CST) into a consumer AST
 (types + builders). You declare the mapping once as a `ShapeSpec`;
-[`emitTs(grammar, { shape })`](../src/target-ts.ts) appends typed AST constructors
+[`emitTs(grammar, { shape })`](../src/targets/target-ts.ts) appends typed AST constructors
 and a specialized `parseAst` entry. Without a shape, `emitTs(grammar)` is
 byte-identical to `tsTarget.emitParser(...)`.
 
-Source of truth for types: [`src/shape-schema.ts`](../src/shape-schema.ts).
+Source of truth for types: [`src/shape/v1/shape-schema.ts`](../src/shape/v1/shape-schema.ts).
 
 ---
 
@@ -318,7 +318,7 @@ type ShapeSpec = {
 | `rules` | Map rule name → product shape. |
 
 Adjudications (spans, unmapped, heterogeneous alts, rule keying) live in
-`ADJUDICATIONS` in [`shape-schema.ts`](../src/shape-schema.ts).
+`ADJUDICATIONS` in [`shape-schema.ts`](../src/shape/v1/shape-schema.ts).
 
 ### Field binds (`FieldDecl`)
 
@@ -440,8 +440,8 @@ No grammar or rule name is embedded in the mechanism — only the declared `tag`
 ### Emit
 
 ```ts
-import { emitTs } from './src/target-ts.ts';
-import type { ShapeSpec } from './src/shape-schema.ts';
+import { emitTs } from './src/targets/target-ts.ts';
+import type { ShapeSpec } from './src/shape/v1/shape-schema.ts';
 
 const src = emitTs(grammar, { shape: myShape });
 // write src → module that exports tokenize, parse, parseAst, AstRoot, …
@@ -471,7 +471,7 @@ call `parseAst(src)` with an empty map.
 
 ## Walkthrough: calc
 
-Full declarative coverage lives in [`src/shape-calc.ts`](../src/shape-calc.ts)
+Full declarative coverage lives in [`src/shape/v1/shape-calc.ts`](../src/shape/v1/shape-calc.ts)
 (`unmapped: 'error'`). Highlights:
 
 ```ts
@@ -525,8 +525,8 @@ Emit → load → parse (mirrors the calc shape-codegen section of [`test/shape-
 
 ```ts
 import calcGrammar from './test/fixtures/calc.ts';
-import { calcShape } from './src/shape-calc.ts';
-import { emitTs } from './src/target-ts.ts';
+import { calcShape } from './src/shape/v1/shape-calc.ts';
+import { emitTs } from './src/targets/target-ts.ts';
 
 const code = emitTs(calcGrammar, { shape: calcShape });
 // write + dynamic import → { parseAst }

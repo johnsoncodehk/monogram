@@ -10,7 +10,7 @@
 // token pattern disagree (a matcher that does not backtrack where the pattern's alternation has
 // to, a fast path that reads a different shape than the pattern, an escape check one engine does
 // not run). The parity gates place them in a grammar-derived context (test/parity-corpus.ts).
-import type { TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
+import type { TokenDecl, TokenPattern, TokenCharClassItem } from '../src/grammar/types.ts';
 
 type Forms = { base: string; vars: string[] };
 

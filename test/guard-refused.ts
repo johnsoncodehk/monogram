@@ -39,12 +39,12 @@
 //   node test/guard-refused.ts          [--strict-empty]   (also: GUARD_REFUSED_FILES=<n> to widen the corpus sample)
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { portableIR, buildLexIdPlan } from '../src/parser-ir.ts';
+import { portableIR, buildLexIdPlan } from '../src/ir/parser-ir.ts';
 import { engine, canon, type Tok, type Mutation } from './ir-engine.ts';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
 import { scratchDir } from './scratch.ts';
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const CORPUS = '/tmp/ts-repo/tests/cases/conformance';
@@ -67,7 +67,7 @@ const NM = `${ROOT}node_modules`;
 // An input: a file, or a text written here (named by its grammar and index).
 type Input = string | { name: string; text: string };
 const tsInputs: Input[] = [
-  ...readdirSync(`${ROOT}src`).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}src/${f}`),
+  ...(readdirSync(`${ROOT}src`, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}src/${f}`),
   ...readdirSync(ROOT).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}${f}`),
   `${NM}/tsc-oracle/lib/typescript.d.ts`, `${NM}/tsc-oracle/lib/lib.es5.d.ts`,
   ...corpus,

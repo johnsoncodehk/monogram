@@ -1,5 +1,5 @@
 // yaml.ts — YAML on the shared Monogram core, using the engine's opt-in INDENTATION mode
-// (`indent` config → the lexer emits INDENT/DEDENT/NEWLINE; see src/lexer.ts). This is the
+// (`indent` config → the lexer emits INDENT/DEDENT/NEWLINE; see src/interpreter/lexer.ts). This is the
 // first grammar that is indentation-sensitive rather than a token stream or markup.
 //
 // First-cut coverage: block + flow mappings & sequences, plain / single / double-quoted scalars,
@@ -12,7 +12,7 @@ import {
   altPattern, optPattern, seq, oneOf, noneOf, range, star, plus, repeat, followedBy, notFollowedBy,
   precededBy, notPrecededBy, never, lineStart, end,
 } from './src/api.ts';
-import type { IndentConfig } from './src/types.ts';
+import type { IndentConfig } from './src/grammar/types.ts';
 
 // ── Structural tokens emitted by the lexer's indentation state machine. They are NEVER
 // regex-matched (the patterns are placeholders — `(?!)` never matches); the lexer emits them

@@ -6,12 +6,12 @@
 // grammar, the recovery emission's default prefix, and the refusal of an entry rule that must
 // choose its empty alternative.
 import { writeFileSync } from 'node:fs';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import { RESERVED_RULES } from '../src/parser-ir.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import { RESERVED_RULES } from '../src/ir/parser-ir.ts';
 import { objectify } from './emitted-obj.ts';
 import { runsTarget } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
@@ -153,7 +153,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // names the reserved rules after the grammar's (parser-ir.ts RESERVED_RULES): each module,
   // that table read without them, has every word of the default emission, in order (a helper or
   // a variable only the region reads is between them: an emission keeps only what something
-  // reaches, src/js-unreferenced.ts).
+  // reaches, src/targets/js-unreferenced.ts).
   const hasInOrder = (rec: string, def: string): boolean => {
     const r = rec.split(/\s+/);
     let i = 0;
@@ -351,7 +351,7 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
       console.log(`  ${c.grammar}/${r.label}: REJECT mismatch on ${JSON.stringify(src)} (oracle ok=${want.ok}, ${r.label} ok=${got.ok})`);
     }
     console.log(`  ${c.grammar}/${r.label}: ${acc}/${c.accept.length} accept ≡ oracle · ${rej}/${c.reject.length} reject ≡ oracle${snap ? ` · ${snap} shape drift` : ''}`);
-    // A demand context's re-parses (src/reparse-family.ts): each nested one starts inside the one
+    // A demand context's re-parses (src/ir/reparse-family.ts): each nested one starts inside the one
     // around it, so the work per demand operator is bounded by the nesting depth (the counter of
     // those that do not; the fixture's nested rows exercise it).
     const rp = r.demandRestarts?.();

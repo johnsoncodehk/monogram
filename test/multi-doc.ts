@@ -9,8 +9,8 @@
 //
 //   node test/multi-doc.ts
 import { writeFileSync } from 'node:fs';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
 

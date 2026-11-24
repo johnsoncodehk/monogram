@@ -14,7 +14,7 @@
 // test/portable-targets.ts (interpreter ≡ portable ts / go / rust parsers).
 import { generateInputs } from './grammar-gen.ts';
 import { tokenEdgeTexts } from './token-edges.ts';
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 
 export type Tok = { offset: number; text: string; type: string };
 export type ParityInput = {

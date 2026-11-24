@@ -4,16 +4,16 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { emitParser } from '../src/target.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import { emitRust } from '../src/target-rust.ts';
-import { emitTs } from '../src/target-ts.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import { emitRust } from '../src/targets/target-rust.ts';
+import { emitTs } from '../src/targets/target-ts.ts';
 import {
   token, rule, defineGrammar, left, op, seq, oneOf, range, star,
   altPattern, noneOf, notFollowedBy, withHoles,
 } from '../src/api.ts';
-import type { ShapeSpec } from '../src/shape-schema.ts';
-import { calcShape } from '../src/shape-calc.ts';
+import type { ShapeSpec } from '../src/shape/v1/shape-schema.ts';
+import { calcShape } from '../src/shape/v1/shape-calc.ts';
 import calcGrammar from './fixtures/calc.ts';
 import toyGrammar, { toyShape, toyGolden, buildToyCorpus, toyPrattWitnesses } from './fixtures/shape-toy.ts';
 import typescriptGrammar from '../typescript.ts';

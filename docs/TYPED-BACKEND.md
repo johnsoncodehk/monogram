@@ -456,7 +456,7 @@ Milestones, in order:
   −1.5–4ms) still goes first per plan.
 - **M18 (landed, 32/32, corpus 0/500, loop-ast −1~−2ms/iter): light txn
   snapshots via static purity analysis (generator-side).** Sole change:
-  src/target-rust.ts — a new `pure(s: Step)` helper plus `txnCk`/
+  src/targets/target-rust.ts — a new `pure(s: Step)` helper plus `txnCk`/
   `txnRestore` emit helpers; all 6 shape_ck emission sites become
   purity-gated (top-level txn, not probe, alt branch, star, opt, sep).
   pratt (emitRustPrattMethod) was grep-verified to have zero shape_ck
@@ -487,14 +487,14 @@ Milestones, in order:
   −1.5~4ms expectation; 3/3 control-stable rounds negative with a flat
   control support a real effect, but the magnitude needs more rounds to
   be firm. Incidental fix: the baseline tsc error at
-  src/target-rust.ts:3912 (pratt NUD custom-atom dead path's
+  src/targets/target-rust.ts:3912 (pratt NUD custom-atom dead path's
   rustShapeLeafAstExpr missed the len param — an M15 signature-change
   leftover) is now `'t.off', 't.end - t.off'`, consistent with
   neighboring sites; tsc --noEmit exits 0 and q-ts.rs md5 is identical
   (dead path, no emit change).
 - **M19 (landed, 32/32, corpus 0/500, perf wash — kept as zero-risk
   structural): pratt atom-chain merge (R3).** Sole change:
-  src/target-rust.ts (emitRustPrattMethod's atom else branch): the 10
+  src/targets/target-rust.ts (emitRustPrattMethod's atom else branch): the 10
   consecutive `if self.peek_kid() == Some(N)` guards — each peek_kid is a
   bounds-checked `toks.get(self.pos)` re-reading the same token, and on a
   hit take_span reads it a second time — collapse into a single
@@ -519,7 +519,7 @@ Milestones, in order:
   comparison.
 - **M20 (landed, 32/32, corpus 0/500, extend_trusted 7.18%→0.00%,
   median −0.95ms/iter): arena lists memcpy fast path.** Sole change: the
-  runtime prelude template in src/target-rust.ts, 3 sites, no unsafe:
+  runtime prelude template in src/targets/target-rust.ts, 3 sites, no unsafe:
   `shape_pack_range` switches `arena.lists.extend(vals.drain(base..))`
   to `extend_from_slice(&vals[base..])` + `vals.truncate(base)` (the
   existing n==0/1 fast paths stay); `shape_list_from` gains an n==0 fast
@@ -552,7 +552,7 @@ Milestones, in order:
   path already ate part of the ceiling).
 - **M21 (landed, 32/32, corpus 0/500, −0.69ms/iter): misc protocol waste
   — fold-scan skip + head_text inline + list_from audit.** Sole change:
-  src/target-rust.ts (5 sites, no unsafe); fixtures untouched.
+  src/targets/target-rust.ts (5 sites, no unsafe); fixtures untouched.
   **Item 1 — has_partial skip (≈ −0.58ms)**: AstArena gains
   `partial_count: usize` (monotonic, never decreases), mk_partial +1,
   and shape_fold_kids opens with `if ar.partial_count == 0 { return
@@ -592,7 +592,7 @@ Milestones, in order:
   list_from inlining (~1.3ms ceiling).
 - **M22 (landed, 32/32, corpus 0/500, −1.41ms/iter decisive):
   shape_list_from `#[inline(always)]` — one line.** Sole change: the
-  prelude template's `fn shape_list_from` in src/target-rust.ts gains
+  prelude template's `fn shape_list_from` in src/targets/target-rust.ts gains
   `#[inline(always)]` (Phase A finalized). Purity proof: dropping that
   line leaves q-ts.rs and prof-m21.rs parser bodies byte-identical; all
   741 call sites inline, binary +132KB. Basis (M21 audit): 721,209
@@ -620,7 +620,7 @@ Milestones, in order:
   separation.
 - **M23 (landed, 32/32, corpus 0/500, wall-clock wash — kept as
   cleanup): shape_pack_range `#[inline(always)]`.** Sole change: the
-  prelude's `fn shape_pack_range` in src/target-rust.ts gains
+  prelude's `fn shape_pack_range` in src/targets/target-rust.ts gains
   `#[inline(always)]` (V1/V2 premise correction: shape_ck/shape_restore
   were already `#[inline(always)]` since the SH3-5 era, so the two
   variants collapsed into one change). Mechanism proof: sample self
@@ -701,7 +701,7 @@ Milestones, in order:
   this repo's source scope.
 - **M26 (reverted — negative result): AST pratt nud_rest static
   `#[inline(always)]` (source-level copy of PGO's decision backfires).**
-  Change (rolled back): src/target-rust.ts's AST `_nud_rest` emission
+  Change (rolled back): src/targets/target-rust.ts's AST `_nud_rest` emission
   points gained `#[inline(always)]`. Premise correction: it actually
   generates 10 pratt rules (Expr, Type, TypeofRef, NewTarget,
   ClassHeritage + 5 _A shape variants), not 2 — each with a single call
@@ -860,7 +860,7 @@ arms → tsc → qcheck → diff 0/500 → gate 32/32 → paired A/B):**
   ts_type_refs, for_heads
 The fold interplay (tnode_fold_append rewriting a parent's List field by
 index) stays identical — only the field width changes. All edits are
-fixture-local (src/target-rust.ts untouched except nothing); verification
+fixture-local (src/targets/target-rust.ts untouched except nothing); verification
 chain unchanged.
 
 ## Streaming / lazy contract change (deferred — blockers)
@@ -1139,7 +1139,7 @@ Out-of-scope pre-existing gaps noted (chained calls, conditional literal
 tests, `new Foo`, bare-break, for-in tree-side panic).
 
 **M-A1.4-S5 (landed): tree mode removed — streaming-only emitter + fixture.**
-The campaign's last major cut. Emitter (`src/target-rust.ts`): the `streaming`
+The campaign's last major cut. Emitter (`src/targets/target-rust.ts`): the `streaming`
 flag and every `streaming ? … : tree` else branch are gone — `rustShapeNodeObjectExpr`,
 `rustAstCustomCall`, keep/node finishes all emit the `StreamEvent` directly;
 the tree-only emit helpers (GrammarCustoms trait + 23 customs defaults +

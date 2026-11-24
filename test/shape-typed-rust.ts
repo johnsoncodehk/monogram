@@ -1,5 +1,5 @@
-// The typed Rust shape-building parser (emitParser(g, rustTarget, { shape }), src/rust-shape.ts)
-// ≡ the evaluator (src/shape2-eval.ts evaluateShape over the interpreter's CST): its AST, written
+// The typed Rust shape-building parser (emitParser(g, rustTarget, { shape }), src/targets/rust-shape.ts)
+// ≡ the evaluator (src/shape/shape2-eval.ts evaluateShape over the interpreter's CST): its AST, written
 // as JSON by the per-kind typed writers, is the evaluator's value, on each row (accepted texts;
 // a rejected text is rejected; a missing value is missing). What it catches that no other check
 // does: a typed Rust build that differs from the reference (a construct, a type, a writer).
@@ -9,12 +9,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { emitParser } from '../src/target.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { createParser } from '../src/interpreter.ts';
-import { evaluateShape, defineShape } from '../src/shape2-eval.ts';
-import { child, node, text } from '../src/shape2-schema.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { evaluateShape, defineShape } from '../src/shape/shape2-eval.ts';
+import { child, node, text } from '../src/shape/shape2-schema.ts';
 import { token, rule, defineGrammar, many, plus, oneOf, range, arm, field } from '../src/api.ts';
 import { cachedRustc } from './build-cache.ts';
 import calcExample from './fixtures/shape-namedcalc.ts';

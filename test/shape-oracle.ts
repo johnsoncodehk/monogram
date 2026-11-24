@@ -28,7 +28,7 @@ export type NTree = {
   fields: Record<string, NValue>;
 };
 
-/** A shape's value (flat nodes, src/shape2-eval.ts ShapeNode, their kind and span under the
+/** A shape's value (flat nodes, src/shape/shape2-eval.ts ShapeNode, their kind and span under the
  * shape's node keys) in the harness's form: every node an NTree, its fields apart. */
 export function nestValue(v: unknown, keys: { kind: string; start: string; end: string }): NValue {
   if (v === null || typeof v !== 'object') return v as NValue;

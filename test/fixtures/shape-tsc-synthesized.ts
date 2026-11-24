@@ -4,11 +4,11 @@
 // nodes attribute `modifiers` is the empty list (a receiver keeps only its own modifiers), and the
 // conditions that become constant are folded. So `led_bang`'s flags are absent, a heritage
 // clause's element is its expression, an exported declaration carries only its own words. What a
-// parser that builds no inherited context yet builds (the typed Rust target, src/rust-shape.ts):
+// parser that builds no inherited context yet builds (the typed Rust target, src/targets/rust-shape.ts):
 // test/shape-typed-rust.ts checks it ≡ the evaluator, and the profile's `shape` row measures it.
 import typescript from '../../typescript.ts';
-import { defineShape } from '../../src/shape2-eval.ts';
-import type { ShapeSpec, Term } from '../../src/shape2-schema.ts';
+import { defineShape } from '../../src/shape/shape2-eval.ts';
+import type { ShapeSpec, Term } from '../../src/shape/shape2-schema.ts';
 import { tscExprShape } from './shape-v2-tsc-expr.ts';
 
 const spec = tscExprShape.spec as ShapeSpec;

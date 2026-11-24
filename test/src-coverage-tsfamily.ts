@@ -12,7 +12,7 @@
 import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'tsc-oracle';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import type { Adapter, AgreeResult, CorpusItem } from './src-coverage.ts';
 
 export interface TsFamilyCase { file: string; code: string }

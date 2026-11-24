@@ -90,7 +90,7 @@ The parsers (`npm run gen` regenerates the committed artifacts of every grammar 
 
 ```ts
 import { writeFileSync } from 'node:fs';
-import { createParser } from './src/interpreter.ts';
+import { createParser } from './src/interpreter/interpreter.ts';
 import { emitParser, tsTarget, goTarget, rustTarget } from './src/emit.ts';
 import grammar from './mini.ts';
 
@@ -106,7 +106,7 @@ writeFileSync('parser.rs', emitParser(grammar, rustTarget));  // of monogram
 
 | Output | How | Status |
 |---|---|---|
-| Interpreter parser (CST) | `createParser(grammar)`, [`src/interpreter.ts`](src/interpreter.ts) | The reference. Every other parser is gated against it. All six grammars. |
+| Interpreter parser (CST) | `createParser(grammar)`, [`src/interpreter/interpreter.ts`](src/interpreter/interpreter.ts) | The reference. Every other parser is gated against it. All six grammars. |
 | Portable parsers: TypeScript, Go, Rust | `emitParser(grammar, tsTarget \| goTarget \| rustTarget)` | Checked against the interpreter (accept/reject, and the rule tree when both accept) on every CI run, the gates `portable-targets/*`: per grammar the parity corpus (generated inputs, their one-token mutants and the hand-written lists: about 11,300 inputs for TypeScript and JavaScript), a seeded mutation corpus, and (`portable-targets/wide`) every file of two external corpora: the tsc conformance corpus (5,695 files, TypeScript and JavaScript grammars) and test262 (24,677 tests, JavaScript grammar). Known disagreements are listed in [test/portable-wide-record.txt](test/portable-wide-record.txt): none today (the 514 found when the check was added, two engine mechanisms and two lexer differences, are fixed). Token-stream and newline grammars, and grammars with element regions: TSX, JSX and code-children dialects. Refused, never mis-lexed: indent (YAML) and markup (HTML) grammars, and the region features the portable lexers do not carry yet ([TARGETS](docs/TARGETS.md#what-each-target-accepts)). |
 | Emitted JavaScript parser | `emitParser(grammar, jsTarget)` | All six grammars. To be retired once the portable TS target covers it ([ROADMAP](docs/ROADMAP.md)). |
 | Incremental `Doc` | TS `createDoc`, Go `NewDoc`, Rust `Doc`; `jsTarget`'s `createParser().edit` | Every edited re-parse equals a fresh parse, gated. |
@@ -225,16 +225,16 @@ cannot express: [docs/HIGHLIGHTER-EVIDENCE.md](docs/HIGHLIGHTER-EVIDENCE.md).
 ```
 grammar (*.ts, src/api.ts)
    │
-   ├─ analysis (src/grammar-analysis.ts) ─▶ interpreter: src/interpreter.ts (the reference)
+   ├─ analysis (src/grammar/grammar-analysis.ts) ─▶ interpreter: src/interpreter/interpreter.ts (the reference)
    │
-   ├─ IR: parse plan + lexer plans (src/parser-ir.ts, src/lex-family.ts,
-   │      src/lex-match-plan.ts, src/algo-ir.ts)
-   │        └─▶ one engine, rendered per target: src/target-ts.ts, target-go.ts, target-rust.ts
+   ├─ IR: parse plan + lexer plans (src/ir/parser-ir.ts, src/ir/lex-family.ts,
+   │      src/grammar/lex-match-plan.ts, src/ir/algo-ir.ts)
+   │        └─▶ one engine, rendered per target: src/targets/target-ts.ts, target-go.ts, target-rust.ts
    │
-   ├─ emitted JS parser: src/target-js.ts + src/lexer.ts   (to be retired)
+   ├─ emitted JS parser: src/targets/target-js.ts + src/interpreter/lexer.ts   (to be retired)
    │
-   └─ highlighters: src/gen-textmate.ts (TextMate), src/gen-tree-sitter.ts, src/gen-monarch.ts,
-                    src/gen-vscode-config.ts (language configuration)
+   └─ highlighters: src/editor/gen-textmate.ts (TextMate), src/editor/gen-tree-sitter.ts, src/editor/gen-monarch.ts,
+                    src/editor/gen-vscode-config.ts (language configuration)
 ```
 
 The structure is that of compiler infrastructure. A grammar is a **front end**, one per source

@@ -1,5 +1,5 @@
 // The profile's `shape` row (run.sh, phase shape): node shape-inputs.ts <tree> <out dir> <input>...
-// Writes <out dir>/shape.rs: the typed Rust shape-building parser (src/rust-shape.ts) of the tsc
+// Writes <out dir>/shape.rs: the typed Rust shape-building parser (src/targets/rust-shape.ts) of the tsc
 // expression shape's synthesized subset (test/fixtures/shape-tsc-synthesized.ts) from <tree>; and
 // for each input <dir>/<name>.<ext> the COVERED part <dir>/<name>.cov.<ext>: every outermost
 // expression statement (Stmt.expr) whose value the shape builds (not missing), in source order (a
@@ -12,9 +12,9 @@ import { pathToFileURL } from 'node:url';
 const [tree0, outDir, ...inputs] = process.argv.slice(2);
 const tree = resolve(tree0!);
 const imp = (p: string) => import(pathToFileURL(join(tree, p)).href);
-const { emitParser } = await imp('src/target.ts');
-const { tsTarget } = await imp('src/target-ts.ts');
-const { rustTarget } = await imp('src/target-rust.ts');
+const { emitParser } = await imp('src/targets/target.ts');
+const { tsTarget } = await imp('src/targets/target-ts.ts');
+const { rustTarget } = await imp('src/targets/target-rust.ts');
 const shape = (await imp('test/fixtures/shape-tsc-synthesized.ts')).default;
 writeFileSync(join(outDir!, 'shape.rs'), emitParser(shape.source, rustTarget, { shape }));
 const mod = resolve(outDir!, 'shape-ts.mts');

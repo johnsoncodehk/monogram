@@ -70,10 +70,10 @@ inputs that the productions reject. The parser rejects both:
 ## The engines' mechanisms, one by one
 
 Every engine runs the same plan: try a rule's alternatives, take the longest match, and on a tie take
-the earliest-declared one. The table lists each place where the interpreter (`src/interpreter.ts`, the
-reference) does more than that. For each, it gives the IR construct in `src/parser-ir.ts`, the
+the earliest-declared one. The table lists each place where the interpreter (`src/interpreter/interpreter.ts`, the
+reference) does more than that. For each, it gives the IR construct in `src/ir/parser-ir.ts`, the
 lowering member each printer implements (`src/target-{ts,go,rust}.ts`: the TS `prattRuleW`, the Go
-native and builder forms, the Rust `prattRule`; the recovery interpreter `src/recovery-family.ts`
+native and builder forms, the Rust `prattRule`; the recovery interpreter `src/ir/recovery-family.ts`
 reads the same facts from its table, and `test/ir-engine.ts` mirrors them), and the list rows in
 `test/portable-cases.ts` that exercise it. **V** means the exercising rows are in those lists,
 which compare every target with the interpreter, verdict and CST (gate
@@ -116,7 +116,7 @@ interpreter. Where that argument cannot be made for a row, the row says so.
 | The tail closure for leftRec rules' continuations (`type A = keyof void.x;`) | `buildPratt` computes it for leftRec rules too | as above | `keyof void.x` rows | V |
 | `notLeftLeaf`: skip a led when the left node's head leaf is in a word set | `ledNotLeftLeaf` | `led.notLeftLeaf` | `void.x`, `null.x` type rows | V |
 | Postfix: `sameLine`, `tailClosed`, `requireAssignTarget` | `postfix[]`, `postfixSameLine` | `postfixOp` | `x\n++\ny`, `++x++` | V |
-| Mixfix operand re-bind (`matchMixfixLed`): a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 | `ledRebind`; `rbScan` (`src/rebind-family.ts`, one body for every form) | `PrattLowering.rebind` | `REBIND.ts` | V |
+| Mixfix operand re-bind (`matchMixfixLed`): a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 | `ledRebind`; `rbScan` (`src/ir/rebind-family.ts`, one body for every form) | `PrattLowering.rebind` | `REBIND.ts` | V |
 | Template literals: the template token carries its hole rule; a head commits to the chain | `Step tok` with `hole`, `nudTplHole`, `postfixTplHole` | `nudTpl`, `postfixTpl`, `matchTemplate*` | `TEMPLATE_STEPS` | V |
 | `>`-composites: `>` `>` `=` are separate tokens, read as one operator where an operator is read | `gtComps`, `gtOp` | `_opLid` / `gt_op` | `a >>= b`, `let x = f<A<B>>(c);` | V |
 | The empty node's offset (`offset()` with no children) | unreachable: `defineGrammar` refuses nullable rules except the entry | — | `''`, `'// c'` | V |

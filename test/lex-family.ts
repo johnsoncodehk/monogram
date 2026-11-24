@@ -1,4 +1,4 @@
-// Gate: the lexer token scanners exist once, in the shared lex-scan family (src/lex-family.ts),
+// Gate: the lexer token scanners exist once, in the shared lex-scan family (src/ir/lex-family.ts),
 // and every portable target lexes through them.
 //
 //   1. no target module recognizes tokens itself: no LexTok-kind or token-pattern switch, no
@@ -25,17 +25,17 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { token, rule, defineGrammar, many, seq, plus, star, oneOf, noneOf, range, repeat, altPattern, anyChar, notFollowedBy } from '../src/api.ts';
-import { buildLexDispatchPlan, buildLexIdPlan, lexTokFirstBytes, portableIR, punctFirstBytes, type ParserIR } from '../src/parser-ir.ts';
-import { info } from '../src/lex-match-plan.ts';
-import { emitParser, type Target } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import type { PortableTarget } from '../src/define-parser-target.ts';
-import { emitRelexFamily, relexFamilyFns, relexMode, type RelexMode } from '../src/relex-family.ts';
-import { type TextUnits, unitLen } from '../src/text-units.ts';
-import type { Grammar } from '../src/types.ts';
-import { tokenPatternToRegex } from '../src/token-pattern.ts';
+import { buildLexDispatchPlan, buildLexIdPlan, lexTokFirstBytes, portableIR, punctFirstBytes, type ParserIR } from '../src/ir/parser-ir.ts';
+import { info } from '../src/grammar/lex-match-plan.ts';
+import { emitParser, type Target } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import type { PortableTarget } from '../src/targets/define-parser-target.ts';
+import { emitRelexFamily, relexFamilyFns, relexMode, type RelexMode } from '../src/ir/relex-family.ts';
+import { type TextUnits, unitLen } from '../src/grammar/text-units.ts';
+import type { Grammar } from '../src/grammar/types.ts';
+import { tokenPatternToRegex } from '../src/grammar/token-pattern.ts';
 import { scratchDir } from './scratch.ts';
 import { tokenEdgeTexts } from './token-edges.ts';
 
@@ -45,7 +45,7 @@ const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
 // ── 1. no recognizer left in a target module ──
 const RECOGNIZER = /case '(run|runBail|block|line|string|pattern|charClass|repeat|lookahead|anchor|anyChar)'|kind === '(run|runBail|block|line|string|pattern)'|\bTokenPattern\b|\bcompilePat\b/;
 for (const f of ['target-ts.ts', 'target-go.ts', 'target-rust.ts']) {
-  const s = readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+  const s = readFileSync(new URL(`../src/${f.startsWith('target-') ? 'targets/' : ''}${f}`, import.meta.url), 'utf8');
   const m = s.match(RECOGNIZER);
   if (m) fail(`${f}: recognizes tokens itself (${m[0]})`);
 }
@@ -385,20 +385,20 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   console.log(`  ${advances} literal advances in the emitted lexers are their literal's length in the target's units`);
 }
 
-// ── 6b. an element region's routines are the interpreter's (src/lexer.ts) ──
+// ── 6b. an element region's routines are the interpreter's (src/interpreter/lexer.ts) ──
 // The region tokens (children text, tag tokens) scan to their regex's end; the type-parameter
 // vetoes decide what the interpreter's LX_TP_HEAD / LX_TP_SIG regexes decide, on every text built
 // from a vocabulary of the pieces they read, and how far they read bounds where they could have
 // looked (an extension of the text past that bound never changes the decision).
 {
-  const { scannerName, EL_OPENS_FN, EL_NOT, EL_OPEN, EL_SPECULATE } = await import('../src/lex-family.ts');
+  const { scannerName, EL_OPENS_FN, EL_NOT, EL_OPEN, EL_SPECULATE } = await import('../src/ir/lex-family.ts');
   let scanned = 0, decided = 0;
   for (const path of ['../typescriptreact.ts', '../javascriptreact.ts', './fixtures/elementdialect.ts', './fixtures/textdialect.ts']) {
     const g = (await import(path)).default as Grammar;
     const gir = portableIR(g);
     const e = gir.elements!;
     const region = [...(e.text ? [e.text] : []), ...e.tagTokens];
-    // the TS target returns the opens step's second value in a module slot (tsSlotted in src/target-ts.ts)
+    // the TS target returns the opens step's second value in a module slot (tsSlotted in src/targets/target-ts.ts)
     const opens = e.entry === 'operand' && (e.head || e.signature) ? [EL_OPENS_FN, `${EL_OPENS_FN}_r1`] : [];
     const f = join(dir, `el${mod++}.ts`);
     const stubs = (gir.identLike.length ? `function ${tsTarget.shared.uniClass()}(cp: number): number { return 2; }\n` : '') + (tsTarget.shared.uniIdent(gir) ? `function ${tsTarget.shared.uniIdent(gir)}(s: string, p: number): number { return -1; }\n` : '');
@@ -420,7 +420,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     // the read it reports (the look end): an insertion at or past it never changes the decision.
     // (The reported read may pass the end: a literal compared there counts its length.)
     if (e.directives) {
-      const { EL_DIR_OPEN_FN, EL_DIR_CONT_FN, EL_TEXT_STOP_FN } = await import('../src/lex-family.ts');
+      const { EL_DIR_OPEN_FN, EL_DIR_CONT_FN, EL_TEXT_STOP_FN } = await import('../src/ir/lex-family.ts');
       const fdir = join(dir, `el${mod++}.ts`);
       const fnsOf = [EL_DIR_OPEN_FN, EL_DIR_CONT_FN, EL_TEXT_STOP_FN];
       writeFileSync(fdir, `${tsTarget.shared.lexScan(gir)}\n${stubs}export { ${fnsOf.flatMap((n) => [n, `${n}_r1`]).join(', ')} };\n`);
@@ -523,9 +523,9 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     const g = (await import(path)).default as Grammar;
     const pir = portableIR(g);
     const toks = tsTarget.shared.scannedTokens(pir);
-    const cands: { name: string; pattern: import('../src/types.ts').TokenPattern }[] = [
+    const cands: { name: string; pattern: import('../src/grammar/types.ts').TokenPattern }[] = [
       ...toks.map((t) => ({ name: t.name, pattern: g.tokens.find((d) => d.name === t.name)!.pattern })),
-      ...pir.puncts.map((p) => ({ name: JSON.stringify(p), pattern: p as import('../src/types.ts').TokenPattern })),
+      ...pir.puncts.map((p) => ({ name: JSON.stringify(p), pattern: p as import('../src/grammar/types.ts').TokenPattern })),
     ];
     const { fallbackIndices } = buildLexDispatchPlan([...toks.map(lexTokFirstBytes), ...pir.puncts.map(punctFirstBytes)]);
     const inFallback = new Set(fallbackIndices);
@@ -559,8 +559,8 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
 // or, where the unit at the end is one of `overTrigger`, the first unit after the end that is not
 // one of `examinedUnits`, + 1.
 {
-  const { failRead, overRead, overTrigger, examinedUnits, reach, minUnits, maxUnits } = await import('../src/lex-match-plan.ts');
-  const { tokLook, lexLookPlan, readEndName } = await import('../src/lex-family.ts');
+  const { failRead, overRead, overTrigger, examinedUnits, reach, minUnits, maxUnits } = await import('../src/grammar/lex-match-plan.ts');
+  const { tokLook, lexLookPlan, readEndName } = await import('../src/ir/lex-family.ts');
   const inC = (c: number, s: [number, number][]) => s.some(([a, b]) => c >= a && c <= b);
   // javascript, by its token patterns: [failRead, overRead, overTrigger empty?]
   const JS_TABLE: Record<string, [number, number, boolean]> = {
@@ -656,13 +656,13 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   }
   console.log(`  every portable grammar: ${proved} scans unchanged by any text at or after their read bound (${unbounded} failed attempts no relex check needs: last in their arms)`);
 
-  // The same bounds proved on the regexes the interpreter's lexer runs (src/lexer.ts records
+  // The same bounds proved on the regexes the interpreter's lexer runs (src/interpreter/lexer.ts records
   // them while lexing): every token of every grammar, a failed attempt bounded by its
   // `readEndWalk` (or by two units where its first two rule a longer read out: `failReadFirst`,
   // `continuesAt`), a match by the unit after its end, or, at an `overTrigger` unit, by the first
   // unit after the end outside `examinedUnits`, + 1. Lazy repeats (block comments) included.
-  const { readEndWalk, failReadFirst, continuesAt } = await import('../src/lex-match-plan.ts');
-  const { tokenPatternSource } = await import('../src/token-pattern.ts');
+  const { readEndWalk, failReadFirst, continuesAt } = await import('../src/grammar/lex-match-plan.ts');
+  const { tokenPatternSource } = await import('../src/grammar/token-pattern.ts');
   const walkEnd = (w: ReturnType<typeof readEndWalk>, s: string): number => {
     let q = 0;
     for (const it of w.lead) {
@@ -703,7 +703,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   console.log(`  every grammar's token regexes (the interpreter's lexer): ${rxProved} matches unchanged by any text at or after their read bound`);
 }
 
-// ── 11. the relex / scanMeta family has ONE source too, src/relex-family.ts (formerly relex-family) ──
+// ── 11. the relex / scanMeta family has ONE source too, src/ir/relex-family.ts (formerly relex-family) ──
 //   a. every portable target's output embeds the family exactly as printed from that source
 //      (adapters cannot patch or re-decide it per target);
 //   b. each family function is defined exactly once per output (no hand-written duplicate or

@@ -10,7 +10,7 @@
 // is compared the same way, small ones included: a fall is never a failure.
 //
 // Each non-space character gets a ROLE from each highlighter, in Monarch's token families
-// (src/highlight-roles.ts's scopeToMonarch for TextMate's scopes): TextMate's innermost scope that
+// (src/editor/highlight-roles.ts's scopeToMonarch for TextMate's scopes): TextMate's innermost scope that
 // is not `meta.*` / `source.*`, except that a comment / regexp / string anywhere in the stack
 // wins (unless a template expression opened inside the string); Monarch's token as
 // test/monarch-tokenize.ts runs it. Roles: name (identifier, variable), punct (operator,
@@ -25,12 +25,12 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
-import { scopeToMonarch } from '../src/highlight-roles.ts';
-import type { MonarchLanguage } from '../src/gen-monarch.ts';
+import { scopeToMonarch } from '../src/editor/highlight-roles.ts';
+import type { MonarchLanguage } from '../src/editor/gen-monarch.ts';
 import { tokenize } from './monarch-tokenize.ts';
 import { inRepoCorpus, REPO_CORPUS_AT } from './emit-corpus.ts';
-import { createParser } from '../src/interpreter.ts';
-import type { Grammar } from '../src/types.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 type CstNode = { offset: number; end: number; tokenType?: string; rule?: string; children?: CstNode[] };
 
 const ROOT = join(import.meta.dirname, '..');
@@ -93,7 +93,7 @@ export async function agreement(): Promise<number> {
       else if (n < w) fell++;
       console.log(`  ${mark.padEnd(19)} ${String(n).padStart(6)} (record ${String(w).padStart(6)})  ${k.padEnd(30)} wrong: ${who.padEnd(10)} ${why}`);
     }
-    // the constructs a highlighter declines (src/define-highlighter.ts): recorded like a class
+    // the constructs a highlighter declines (src/editor/define-highlighter.ts): recorded like a class
     for (const [hl, now] of Object.entries(out[lang].refusals)) {
       const was: string[] = old[lang]?.refusals?.[hl] ?? [];
       // one-sided, as the classes: a new refusal fails, a refusal that went away passes
@@ -111,14 +111,14 @@ export async function agreement(): Promise<number> {
 
 // Each registered highlighter's refusals for the grammar (`<construct>: <reason>`).
 async function refusalsOf(lang: string): Promise<Record<string, string[]>> {
-  const { registeredHighlighters, highlighterInput } = await import('../src/define-highlighter.ts');
-  await import('../src/highlighters.ts');
+  const { registeredHighlighters, highlighterInput } = await import('../src/editor/define-highlighter.ts');
+  await import('../src/editor/highlighters.ts');
   const grammar = (await import(join(ROOT, `${lang}.ts`))).default;
   const input = highlighterInput(grammar, lang);
   return Object.fromEntries(registeredHighlighters().map(h => [h.name, h.refusals(input).map(r => `${r.construct}: ${r.reason}`)]));
 }
 
-// Per character of `src`: whether the interpreter (src/interpreter.ts) reads it as a token whose
+// Per character of `src`: whether the interpreter (src/interpreter/interpreter.ts) reads it as a token whose
 // node is a `@type` rule's (a type name, not a member name inside a type); null when the file
 // does not parse.
 const parserOf = new Map<string, { parse(src: string): unknown }>();
