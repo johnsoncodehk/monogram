@@ -3,8 +3,8 @@
   "ts": 281120,
   "ts+recovery": 325868,
   "js": 587762,
-  "go": 511784,
-  "go+recovery": 556323,
+  "go": 508048,
+  "go+recovery": 552587,
   "rust": 366231,
   "rust+recovery": 425529
  },
@@ -12,8 +12,8 @@
   "ts": 199390,
   "ts+recovery": 238613,
   "js": 391766,
-  "go": 344688,
-  "go+recovery": 382430,
+  "go": 339083,
+  "go+recovery": 377322,
   "rust": 273220,
   "rust+recovery": 326659
  },
@@ -21,8 +21,8 @@
   "ts": 313771,
   "ts+recovery": 358886,
   "js": 608853,
-  "go": 546356,
-  "go+recovery": 591301,
+  "go": 542620,
+  "go+recovery": 587565,
   "rust": 402873,
   "rust+recovery": 462502
  },
@@ -30,8 +30,8 @@
   "ts": 214563,
   "ts+recovery": 254229,
   "js": 410461,
-  "go": 364433,
-  "go+recovery": 402781,
+  "go": 358912,
+  "go+recovery": 397673,
   "rust": 288790,
   "rust+recovery": 342729
  },
@@ -39,8 +39,8 @@
   "ts": 96425,
   "ts+recovery": 129571,
   "js": 182217,
-  "go": 146404,
-  "go+recovery": 176894,
+  "go": 137018,
+  "go+recovery": 168302,
   "rust": 154190,
   "rust+recovery": 199406
  }
