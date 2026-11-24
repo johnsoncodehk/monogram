@@ -79,7 +79,9 @@ export async function agreement(): Promise<number> {
     const now = out[lang].classes, was: Record<string, number> = old[lang]?.classes ?? {};
     const wasAgree: number | undefined = old[lang]?.agree;
     if (wasAgree !== undefined && out[lang].agree < wasAgree) { bad++; console.log(`  ✗ AGREEMENT FELL    ${lang}: ${out[lang].agree}% (record ${wasAgree}%)`); }
-    for (const k of [...new Set([...Object.keys(now), ...Object.keys(was)])].sort((a, b) => (now[b] ?? 0) - (now[a] ?? 0))) {
+    // what fails first (a class that rose or appeared), then by size
+    const rank = (k: string) => (now[k] ?? 0) > (was[k] ?? 0) ? 0 : 1;
+    for (const k of [...new Set([...Object.keys(now), ...Object.keys(was)])].sort((a, b) => rank(a) - rank(b) || (now[b] ?? 0) - (now[a] ?? 0))) {
       const n = now[k] ?? 0, w = was[k] ?? 0;
       const [who, why] = DISPOSITION[k] ?? ['open', ''];
       const mark = n > w ? (k in was ? '✗ ROSE' : '✗ NEW') : n < w ? 'fell' : ' ';
