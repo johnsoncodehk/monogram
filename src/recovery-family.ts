@@ -464,15 +464,21 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       ]),
       inc('i'),
     ]),
-    // Recovering, where no branch matched and a repair fires (riRep): the branches again in order,
-    // each required (no probe: its repairs fire at its first token), the first that matches (a
-    // statement's `asi()` supplies its ';').
+    // Recovering, where no branch matched and a repair fires (riRep): the branches the token did not
+    // admit (their FIRST signature refused it), in order, each required (no probe: its repairs fire
+    // at its first token), the first that matches (a statement's `asi()` supplies its ';'). A branch
+    // that was tried had its repairs after its first token already; trying it again would repeat
+    // its work at every nesting level (the cost grows with the depth: `A<B<C<D<E<const const, x>`).
     let_('pa', call('enPos')),
     if_(call('riRep', v('pa')), [
       set('i', n(0)),
       while_(lt(v('i'), S2), [
-        ...attempt('o2', call('riList', atR(add(add(v('s'), n(3)), add(v('i'), v('i'))), 1), v('d'))),
-        if_(v('o2'), [ret(tru)]),
+        let_('a2', add(add(v('s'), n(3)), add(v('i'), v('i')))),
+        let_('f2', atR(v('a2'), 0)),
+        if_(and(ge(v('f2'), n(0)), not(call('riSig', v('f2')))), [
+          ...attempt('o2', call('riList', atR(v('a2'), 1), v('d'))),
+          if_(v('o2'), [ret(tru)]),
+        ]),
         inc('i'),
       ]),
     ]),
