@@ -635,7 +635,7 @@
         }
       ],
       [
-        "(?:asserts|infer|target|meta|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
           "switchTo": "@value"
@@ -698,6 +698,13 @@
         }
       ],
       [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
         "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
@@ -741,13 +748,6 @@
       ],
       [
         "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
           "switchTo": "@value"
@@ -1286,7 +1286,7 @@
         "identifier"
       ],
       [
-        "(?:asserts|infer|target|meta|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
       [
@@ -1322,6 +1322,10 @@
         "identifier"
       ],
       [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
         "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
@@ -1347,10 +1351,6 @@
       ],
       [
         "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
       [

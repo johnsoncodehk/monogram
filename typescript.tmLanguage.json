@@ -2374,11 +2374,11 @@
           "name": "variable.other.readwrite.ts"
         },
         {
-          "match": "\\b(asserts|infer|target|meta|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
         {
-          "match": "\\b(asserts|infer|target|meta|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         },
         {
@@ -2446,6 +2446,14 @@
           "name": "variable.other.readwrite.ts"
         },
         {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.ts"
+        },
+        {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.ts"
+        },
+        {
           "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.ts"
         },
@@ -2499,14 +2507,6 @@
         },
         {
           "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
-          "name": "variable.other.readwrite.ts"
-        },
-        {
-          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
-          "name": "entity.name.function.ts"
-        },
-        {
-          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.ts"
         }
       ]

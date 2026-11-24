@@ -2882,11 +2882,11 @@
           "name": "variable.other.readwrite.tsx"
         },
         {
-          "match": "\\b(asserts|infer|target|meta|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.tsx"
         },
         {
-          "match": "\\b(asserts|infer|target|meta|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "match": "\\b(asserts|infer|target|meta|source|interface|enum|module|namespace|from)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.tsx"
         },
         {
@@ -2954,6 +2954,14 @@
           "name": "variable.other.readwrite.tsx"
         },
         {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.tsx"
+        },
+        {
+          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.tsx"
+        },
+        {
           "match": "\\b(let|var|using)\\b(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.tsx"
         },
@@ -3007,14 +3015,6 @@
         },
         {
           "match": "\\b(constructor)\\b(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
-          "name": "variable.other.readwrite.tsx"
-        },
-        {
-          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
-          "name": "entity.name.function.tsx"
-        },
-        {
-          "match": "\\b(defer)\\b(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.tsx"
         }
       ]
