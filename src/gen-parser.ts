@@ -3,6 +3,7 @@ import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
+import { targetWalker } from './declared-targets-cst.ts';
 
 // ── CST output ──
 
@@ -61,6 +62,8 @@ export function createParser(grammar: CstGrammar) {
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     firstSets, exprFirst, exprSecond,
   } = analyzeGrammar(grammar);
+  // Declared target contexts (declared-targets-cst.ts): the predicate as a walk over the CST; absent, nothing is recorded.
+  const tw = grammar.targets && Object.keys(grammar.targets).length ? targetWalker(grammar, ruleByName.values(), tokenNames) : null;
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
   const gtComps = new Set(gtComposites(grammar));
@@ -534,6 +537,7 @@ export function createParser(grammar: CstGrammar) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           bestNode = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          tw?.built(bestNode, alt);
           bestPos = pos;
         }
       }
@@ -715,6 +719,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 if (info.capBp !== undefined) unaryNodes.add(lhs);
+                tw?.op(lhs, rule.name, 'prefix', key);
                 bestNudPos = pos;
                 nudClosed = true;
                 capped = false;   // a prefix NUD is never capped
@@ -729,6 +734,7 @@ export function createParser(grammar: CstGrammar) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          tw?.built(lhs, nud);
           bestNudPos = pos;
           const endsSelf = selfRefName(items[items.length - 1], rule.name);
           const unary = selfAtLevel(items[items.length - 1], rule.name);
@@ -806,6 +812,7 @@ export function createParser(grammar: CstGrammar) {
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
             };
+            tw?.built(lhs, led.expr);
             // CAP PROPAGATION through a trailing operand: a node whose rightmost child is a
             // self operand parsed as a full expression that returned capped is itself capped
             // (`a ? b : () => {} || x` rejects, as the binary RHS below). The operand was the
@@ -838,6 +845,7 @@ export function createParser(grammar: CstGrammar) {
               if (pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              tw?.op(lhs, rule.name, 'postfix', tokKey);
               tailClosed = true;
               matched = true;
             }
@@ -845,6 +853,8 @@ export function createParser(grammar: CstGrammar) {
             // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
             // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Fail hard like noUnaryLhs.
             if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
+            // A `targetOps` infix (CstGrammar.targets): its left operand must pass the declared context.
+            if (info.targetCtx !== undefined && !tw!.passes(lhs, info.targetCtx, source)) return null;
             // A `noUnaryLhs` op (e.g. `**`) may not take a bare unary-prefix expression
             // (`-x`, `typeof x` — a prefix-op node whose op is NOT also a postfix, i.e.
             // not an update `++`/`--`) as its LEFT operand. Fail the whole expression
@@ -869,10 +879,13 @@ export function createParser(grammar: CstGrammar) {
             // `|| x` / `? :` stays unconsumed (`a = () => {} || x` rejects). `_prattCapped` is
             // still true from the RHS, so an enclosing operator refuses it too (`b = a = arrow`).
             if (rhs && _prattCapped) {
-              return { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              const capNode: CstNode = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              tw?.op(capNode, rule.name, 'binary', tokKey);
+              return capNode;
             }
             if (rhs) {
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              tw?.op(lhs, rule.name, 'binary', tokKey);
               tailClosed = true;
               matched = true;
             } else {
@@ -913,6 +926,7 @@ export function createParser(grammar: CstGrammar) {
           // DecoratorExpr/TypeParams at every position.
           if (!ruleMightStart(expr.name, peek())) return null;
           const node = parseRule(expr.name);
+          if (node && tw) tw.produced(node, expr);
           return node ? [node] : null;
         }
         case 'seq':
@@ -1003,6 +1017,11 @@ export function createParser(grammar: CstGrammar) {
       for (const item of items) {
         // Skip op/prefix/postfix markers in sequence (handled by Pratt)
         if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
+        // A declared target check (CstGrammar.targets): the node just before it passes the context.
+        if (item.type === 'target') {
+          if (!tw!.passes(children[children.length - 1], item.ctx, source)) { pos = saved; return null; }
+          continue;
+        }
         const result = matchExpr(item);
         if (result === null) { pos = saved; return null; }
         children.push(...result);

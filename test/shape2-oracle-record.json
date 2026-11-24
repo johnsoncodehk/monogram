@@ -51,25 +51,25 @@
   "corpus": "node_modules",
   "view": "expression statement",
   "units": 13292,
-  "compared": 12400,
-  "identical": 12400,
-  "outOfSubset": 861
+  "compared": 13020,
+  "identical": 13020,
+  "outOfSubset": 241
  },
  "estree node_modules built statement": {
   "corpus": "node_modules",
   "view": "top-level statement",
   "units": 13292,
-  "compared": 12385,
-  "identical": 12385,
-  "outOfSubset": 875
+  "compared": 13017,
+  "identical": 13017,
+  "outOfSubset": 243
  },
  "estree node_modules built file": {
   "corpus": "node_modules",
   "view": "file",
   "units": 186,
-  "compared": 24,
-  "identical": 24,
-  "outOfSubset": 105
+  "compared": 86,
+  "identical": 86,
+  "outOfSubset": 43
  },
  "tsc conformance/expressions built": {
   "corpus": "conformance/expressions",

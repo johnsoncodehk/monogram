@@ -210,7 +210,15 @@ declaration has no action, so the choice is made by the lexer and GLR never sees
 Negative dynamic precedence on every alternative holding a dropped lookahead was measured against
 this (CI, 2026-11-23) and dropped: it moved TypeScript `src` from 308 to 310 span-equal files, cost
 +7.7% states (9,993 to 10,765) and +1.2 MB of `parser.c`, and built four operator pairs wrongly
-(`a as T | d`: the union arm's dropped `not('|')` lost to bitwise `|`). And the job summary
+(`a as T | d`: the union arm's dropped `not('|')` lost to bitwise `|`). What the grammar says is a
+lookahead at the FIRST token, and so it is rendered (`planStartMarkers`): a dropped `not(X)` at the
+start of an alternative becomes a zero-width start marker the scanner returns where X follows,
+standing optionally before every other alternative that can start that way, so the excluded reading
+dies at its first token (the marker is decided before the line-end token). With it (CI, 2026-11-24):
+TypeScript `src` 655 of 692 span-equal (3 missing, 299 extra), test262 22,533 of 22,582 (8 missing,
+77 extra), the three classes above at zero, for +2.4% TypeScript states (9,971 to 10,210, `parser.c`
+12.6 to 13.0 MiB). Rendering also the TypeScript guards of zero-width arms (the function body-or-asi
+`[not('{'), asi()]`) cost about 750 states more for no tree change seen: they stay recorded. And the job summary
 records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and the
 `parser.c` state and symbol counts (report-only baselines for changes to the tree-sitter
 generator).

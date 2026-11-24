@@ -597,6 +597,27 @@ export const CASES: Case[] = [
     reject: ['a == not b;', '-not a;', 'a + not b;', '*a == b;', '*not a;', 'a if b if c else d else e;', 'a if b else;'],
   },
   {
+    // Declared target contexts (see the fixture): `=` takes a pattern; an initializer, a property
+    // value and a rest element that must be last are read through the context's containers.
+    grammar: 'patterncalc', path: './fixtures/patterncalc.ts',
+    accept: ['a = 1;', 'a.b = 1;', '(a) = 1;', '[a, b] = x;', '[a = 1] = x;', '[...a] = x;', '[a,] = x;', '[[a], {b}] = x;', '({a, b: c} = x);', '({...a} = x);', '({a: [b, ...c]} = x);', '[...[a, b]] = x;', '({a: b.c = 1} = x);', 'x = [a + b];', 'x = {a: f()};', 'a = b = c;', '[a.b, c.d] = x;', 'f();', '[a + b];', '[...a, b];'],
+    reject: ['[a + b] = x;', 'f() = 1;', 'a + b = 1;', '[...a, b] = x;', '[...a,] = x;', '({...a, b} = x);', '({a: b + c} = x);', '[f()] = x;', '1 = x;', '[1] = x;', '({a: 1} = x);', '[[a + 1]] = x;'],
+  },
+  {
+    // A declared context and a prefix-shaped NUD (`<T>e`) in one grammar (see the fixture): the
+    // cast passes the pattern context; its FORM_UNARY low bits refuse it to `++` and as `**`'s left.
+    grammar: 'patterncast', path: './fixtures/patterncast.ts',
+    accept: ['<T>a = x;', '[<T>a] = x;', '<T>a.b;', '(<T>a) ** b;', '++a;', '-a;', '<T>-a;', 'a ** -b;', '++(<T>a);'],
+    reject: ['++<T>a;', '<T>a ** b;', '-a ** b;', '<T>a + b = x;', '++-a;', '[<T>a + b] = x;'],
+  },
+  {
+    // Three declared contexts in one grammar (see the fixture): star targets for `=`, a single
+    // target for `+=`, del targets for `del`, each checked by a target() marker after the head.
+    grammar: 'startargets', path: './fixtures/startargets.ts',
+    accept: ['a = 1;', 'a, b = x;', 'a, *b = x;', '[a, *b] = x;', '(a, b) = x;', 'a.b, c[0] = x;', 'a += 1;', 'a.b += 1;', '(a) += 1;', 'del a;', 'del a, b.c;', 'del [a, (b)];', 'a + b;', 'f();', '*a, b;', 'a, = x;', 'x = a, *b;'],
+    reject: ['a + b = x;', 'f() = x;', '[a, b] += x;', '*a += x;', 'a, b += x;', 'del *a;', 'del a + b;', 'del f();', '1 = x;', '[a + 1] = x;', '(a, f()) = x;', 'del (*a);'],
+  },
+  {
     // The REAL javascript.ts grammar — the proof
     // that the target-agnostic emitter handles a full language end-to-end in ts/go/rust.
     // ASCII corpus only (byte-based go/rust use UTF-8 offsets, identical to the JS oracle's
