@@ -21,7 +21,7 @@ import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/emit-parser.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { goldenStream, streamOf } from './golden-lexer.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { scratchDir } from './scratch.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -64,7 +64,7 @@ const FORBIDDEN: [string, RegExp][] = [
 ];
 
 for (const c of CASES) {
-  const grammar: CstGrammar = (await import(c.path)).default;
+  const grammar: Grammar = (await import(c.path)).default;
   const src = emitParser(grammar, jsTarget);
   const label = c.name;
 
@@ -113,7 +113,7 @@ for (const c of CASES) {
 {
   const TSC_ONLY: [string, string][] = [['javascript', '../javascript.ts'], ['typescriptreact', '../typescriptreact.ts'], ['javascriptreact', '../javascriptreact.ts']];
   const dir = scratchDir('standalone-tsc');
-  for (const [name, path] of TSC_ONLY) writeFileSync(join(dir, `${name}.ts`), emitParser((await import(path)).default as CstGrammar, jsTarget));
+  for (const [name, path] of TSC_ONLY) writeFileSync(join(dir, `${name}.ts`), emitParser((await import(path)).default as Grammar, jsTarget));
   let log = '';
   try {
     execFileSync(TSC, ['--strict', '--noEmit', '--target', 'ES2022', '--module', 'ES2022', '--moduleResolution', 'Bundler', '--lib', 'ES2022', ...TSC_ONLY.map(([n]) => `${n}.ts`)], { cwd: dir, stdio: 'pipe' });

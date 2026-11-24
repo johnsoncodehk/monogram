@@ -32,7 +32,7 @@
 //     `[`-in-key leak) deterministically, not by the luck of a seed. Polynomial (C^D rounds),
 //     never the exponential full derivation tree.
 // ─────────────────────────────────────────────────────────────────────────────
-import type { CstGrammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
+import type { Grammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
 import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/token-pattern.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { findEntryRule } from '../src/grammar-analysis.ts';
@@ -291,12 +291,12 @@ class Walker {
   ruleMin = new Map<string, Emission[] | null>();
   rand: () => number;
   cap: number;
-  grammar: CstGrammar;
+  grammar: Grammar;
   budgetCalls = 0;          // anti-explosion: enum() is a tree walk; cap the work PER top-level call
   maxCalls = 60_000;
   enumTop(e: RuleExpr, budget: number): Emission[][] { this.budgetCalls = 0; return this.enum(e, budget); }
 
-  constructor(grammar: CstGrammar, cap: number) {
+  constructor(grammar: Grammar, cap: number) {
     this.grammar = grammar;
     this.rand = rng(FIXED_SEED);   // FIXED — the walker is a pure function of the grammar (see rng note).
     this.cap = cap;
@@ -982,7 +982,7 @@ export interface CommentSpec {
   names: Set<string>;    // every comment-token name (so the judge can filter `tokens` to comment witnesses)
   mode: 'token-stream' | 'indent' | 'markup';
 }
-export function commentSpec(grammar: CstGrammar): CommentSpec | null {
+export function commentSpec(grammar: Grammar): CommentSpec | null {
   // every token the highlighter scopes as a comment (gen-tm's exact rule: a skip token, or an explicit
   // comment.* scope). A skip token with NO `.scope` (TS/JS `BlockComment`/`LineComment`) is INCLUDED —
   // gen-tm classifies it `comment.block`/`comment.line` from its flags, so the highlighter paints it.
@@ -1027,7 +1027,7 @@ export function commentSpec(grammar: CstGrammar): CommentSpec | null {
 // The body is a minimal `' c '` (space-padded), legal in every comment grammar. `tagClose` (markup only)
 // is the grammar's tag-close delimiter (`>`), passed in so the function bakes in no HTML-specific literal.
 // Returns null when no safe position exists in this particular input (then no comment variant is produced).
-function injectComment(text: string, spec: CommentSpec, tagClose: string, mk?: CstGrammar['markup']): { text: string; start: number; end: number; comment: string } | null {
+function injectComment(text: string, spec: CommentSpec, tagClose: string, mk?: Grammar['markup']): { text: string; start: number; end: number; comment: string } | null {
   if (spec.mode === 'token-stream') {
     const comment = spec.open + ' c ' + spec.close;     // `/* c */`
     for (let i = 1; i < text.length - 1; i++) {
@@ -1085,7 +1085,7 @@ function injectComment(text: string, spec: CommentSpec, tagClose: string, mk?: C
 // the same emission list — the markup analogue of indent's compactify — in the exploratory tier.
 interface MatOptions { mode: 'token-stream' | 'indent' | 'markup'; indentStep: number; tight?: boolean }
 
-function materialize(grammar: CstGrammar, ems: Emission[], opts: MatOptions): { text: string; tokens: GenInput['tokens'] } {
+function materialize(grammar: Grammar, ems: Emission[], opts: MatOptions): { text: string; tokens: GenInput['tokens'] } {
   let text = '';
   const tokens: GenInput['tokens'] = [];
   // hard length cap: a pathological derivation (deep indent, many reps) must never grow text without
@@ -1183,14 +1183,14 @@ function compactify(ems: Emission[], compactLits: Set<string>): Emission[] {
 // `tagOpen`+`closeMarker` (`</`). Tag names are case-insensitive in markup (the lexer folds case), so this
 // is an equally-legal variant; `<!`-led forms (comments / doctype) start with a non-letter and are untouched.
 // Derived from `grammar.markup` (tagOpen / closeMarker) — no hardcoded `<`.
-function caseVaryTags(grammar: CstGrammar, text: string): string {
+function caseVaryTags(grammar: Grammar, text: string): string {
   const m = grammar.markup; if (!m) return text;
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(${esc(m.tagOpen)}${m.closeMarker ? `${esc(m.closeMarker)}?` : ''})([A-Za-z][A-Za-z0-9]*)`, 'g');
   return text.replace(re, (_full, open: string, name: string) => open + name.toUpperCase());
 }
 
-export function generateInputs(grammar: CstGrammar, opts: GenOptions = {}): GenInput[] {
+export function generateInputs(grammar: Grammar, opts: GenOptions = {}): GenInput[] {
   const depth = opts.depth ?? 5;
   const cap = opts.cap ?? 6;
   const maxInputs = opts.maxInputs ?? 400;

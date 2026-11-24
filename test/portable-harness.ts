@@ -45,7 +45,7 @@ import { rustTarget } from '../src/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { goBuild, scratchDir } from './scratch.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { CASES, type Case } from './portable-cases.ts';
 import { CHECK_TARGETS, QUICK, QUICK_GO } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
@@ -478,7 +478,7 @@ export const ECMASCRIPT = new Set(['javascript', 'typescript']);
 
 // ── One grammar, ready to run: the oracle and a runner per target ──
 export type Prepared = {
-  c: Case; grammar: CstGrammar; dir: string; runners: Runner[];
+  c: Case; grammar: Grammar; dir: string; runners: Runner[];
   oracleOut: (src: string) => Outcome;
   /** The oracle lexer (compileTokenizer of the grammar's lex spec). */
   tokenize: (s: string) => Tok[];
@@ -510,7 +510,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
   type Pending = { p: Prepared; tsFile: string; native: { label: 'go' | 'rust'; build: Build }[] };
   const pend: Pending[] = [];
   for (const c of cases) {
-    const grammar: CstGrammar = c.parts ? (await import(c.path)).textDialect(c.parts) : (await import(c.path)).default;
+    const grammar: Grammar = c.parts ? (await import(c.path)).textDialect(c.parts) : (await import(c.path)).default;
     const oracle = createParser(grammar);
     const memo = new Map<string, Outcome>();
     const oracleOut = (src: string): Outcome => {

@@ -27,7 +27,7 @@ import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { scratchDir } from './scratch.ts';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape2-eval.ts';
 import { nodeKeysOf } from '../src/shape2-schema.ts';
 import { compareTrees, conformanceFiles, nestValue, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
@@ -41,7 +41,7 @@ const STATEMENT_RULES = new Set(['Statement', 'Stmt']);
  * (PACKAGES) for acorn, the pinned TypeScript checkout's expression cases for tsc. */
 const CI_CORPUS: Record<string, string> = { estree: 'node_modules', tsc: 'conformance/expressions' };
 
-type OracleShape = { name: 'estree' | 'tsc'; grammar: CstGrammar; shape: Shape; oracle: (src: string, path: string) => NTree | string };
+type OracleShape = { name: 'estree' | 'tsc'; grammar: Grammar; shape: Shape; oracle: (src: string, path: string) => NTree | string };
 
 async function shapeOf(name: string): Promise<OracleShape> {
   if (name === 'estree') {

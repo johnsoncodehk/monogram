@@ -297,8 +297,12 @@ jobs:
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "no usable base — running the gate"; exit 0
           fi
-          # tree-sitter/** (the generated packages), the tree-sitter gates themselves, or this workflow.
-          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(treesitter-|[a-z]+-treesitter\.ts)|^\.github/workflows/ci\.yml$'; then
+          # tree-sitter/** (the generated packages), the tree-sitter gates themselves, or this workflow;
+          # AND the other side of the comparison: treesitter-verdicts compares tree-sitter's trees with the
+          # INTERPRETER's, so a grammar file (root *.ts) or the interpreter (its parser, lexer and the
+          # grammar helpers it reads) changing moves the record even when tree-sitter/** is byte-identical
+          # (2026-11-24: a change to how `yield` is read left the record stale on master for two landings).
+          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(treesitter-|[a-z]+-treesitter\.ts)|^\.github/workflows/ci\.yml$|^[a-z]+\.ts$|^src/(gen-parser|emit-lexer|api|types|grammar-utils|grammar-analysis|grammar-names)\.ts$'; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "tree-sitter inputs changed — running the gate"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"; echo "no tree-sitter input change — skipping generate/build/bench"

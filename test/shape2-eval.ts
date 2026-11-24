@@ -8,7 +8,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { armNameOf, dependencies, evaluateShape, evaluator, defineShape, ShapeSpecError, ShapeUnmapped, spineOf, type ShapeValue } from '../src/shape2-eval.ts';
 import { nodeKeysOf } from '../src/shape2-schema.ts';
 import {
@@ -31,11 +31,11 @@ let passed = 0;
 const check = (name: string, fn: () => void): void => {
   try { fn(); passed++; } catch (e) { console.error(`FAIL ${name}\n${(e as Error).stack}`); process.exitCode = 1; }
 };
-const parse = (g: CstGrammar, src: string): CstNode => createParser(g).parse(src);
+const parse = (g: Grammar, src: string): CstNode => createParser(g).parse(src);
 // The evaluator's value in the harness's nested form (shape-oracle.ts nestValue): the tests below
 // read `kind` / `fields` whatever node keys a shape declares.
 const nest = (spec: ShapeSpec, v: ShapeValue | undefined): ShapeValue | undefined => (v === undefined ? v : nestValue(v, nodeKeysOf(spec)) as ShapeValue);
-const run = (g: CstGrammar, spec: ShapeSpec, src: string): ShapeValue | undefined => nest(spec, evaluateShape(defineShape(g, spec), parse(g, src), src));
+const run = (g: Grammar, spec: ShapeSpec, src: string): ShapeValue | undefined => nest(spec, evaluateShape(defineShape(g, spec), parse(g, src), src));
 const N = (kind: string, start: number, end: number, fields: Record<string, ShapeValue> = {}): ShapeValue => ({ kind, start, end, fields });
 
 // ── The calculus on namedcalc ──
@@ -560,7 +560,7 @@ check('the matcher is total on real files', () => {
 
 // ── Load-time rejections ──
 
-const rejects = (what: string, g: CstGrammar, spec: ShapeSpec, ...needles: string[]): void => check(`rejects: ${what}`, () => {
+const rejects = (what: string, g: Grammar, spec: ShapeSpec, ...needles: string[]): void => check(`rejects: ${what}`, () => {
   assert.throws(() => defineShape(g, spec), (e) => {
     if (!(e instanceof ShapeSpecError)) throw e;
     for (const n of needles) if (!e.message.includes(n)) throw new Error(`message lacks ${JSON.stringify(n)}:\n${e.message}`);

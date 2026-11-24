@@ -30,7 +30,7 @@ import {
   portableIR, buildLexIdPlan, literalKinds,
   type ParserIR, type Step, type Guard, type PrattRule, type Commit, type CommitAct, type CommitCase, type Dispatch, type TokenSet, type LeadTest,
 } from './emit-portable.ts';
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 
 // ── rendering ──
 const code = (s: string) => '`' + s.replace(/`/g, 'ˋ').replace(/\|/g, '\\|') + '`';
@@ -425,7 +425,7 @@ export function renderDecisions(name: string, ir: ParserIR, irGoTs: ParserIR, re
 }
 
 // The static page of one grammar, as `node src/cli.ts <grammar.ts> --decisions` writes it.
-export function decisionReport(grammar: CstGrammar, name: string): { text: string; findings: DecisionFindings } {
+export function decisionReport(grammar: Grammar, name: string): { text: string; findings: DecisionFindings } {
   const ir = portableIR(grammar);
   const findings = analyzeDecisions(ir);
   const text = renderDecisions(name, ir, portableIR(grammar, { calleeFirstGuards: false }), findings, { command: 'node src/cli.ts <grammar.ts> --decisions', observed: null });

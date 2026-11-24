@@ -17,7 +17,7 @@
 //   node test/decision-report.ts --dead     # only: every dead alternative is dead on the corpora
 //   node test/decision-report.ts --observe <grammar.ts> <input>...   # any grammar: its page with the ties observed on those inputs (stdout)
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { join, basename, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { portableIR, type ParserIR } from '../src/emit-portable.ts';
 import { analyzeDecisions, renderDecisions, decisionReport, type DecisionFindings } from '../src/decision-report.ts';
 import { emitParser } from '../src/target.ts';
@@ -25,7 +25,7 @@ import { tsTarget } from '../src/target-ts.ts';
 import { nameRule } from '../src/grammar-names.ts';
 import { engine, canon, type Tok } from './ir-engine.ts';
 import { scratchDir } from './scratch.ts';
-import type { CstGrammar, RuleExpr } from '../src/types.ts';
+import type { Grammar, RuleExpr } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const NM = `${ROOT}node_modules`;
@@ -46,7 +46,7 @@ const PINNED: Record<string, string[]> = { typescript: TS_PINNED, typescriptreac
 
 type Lib = { tokenize(s: string): Array<{ kid: number; lid: number; off: number; end: number; nl: boolean }>; parse(s: string): unknown };
 const dir = scratchDir('decision-report');
-async function targetOf(grammar: CstGrammar, tag: string): Promise<Lib> {
+async function targetOf(grammar: Grammar, tag: string): Promise<Lib> {
   const file = `${dir}/${tag}.ts`;
   writeFileSync(file, emitParser(grammar, tsTarget));
   return await import(file) as Lib;
@@ -108,7 +108,7 @@ function witnessFailures(g: string, ir: ParserIR, lib: Lib, rep: DecisionFinding
 
 // ── the pages ──
 async function page(g: string): Promise<{ text: string; report: DecisionFindings; failures: string[] }> {
-  const grammar: CstGrammar = (await import(`${ROOT}${g}.ts`)).default;
+  const grammar: Grammar = (await import(`${ROOT}${g}.ts`)).default;
   const ir = portableIR(grammar);
   const lib = await targetOf(grammar, g);
   const rep = analyzeDecisions(ir);
@@ -119,8 +119,8 @@ async function page(g: string): Promise<{ text: string; report: DecisionFindings
 }
 // The example: exactly what the CLI writes next to the grammar, plus its witnesses checked.
 async function examplePage(): Promise<{ file: string; text: string; report: DecisionFindings; failures: string[] }> {
-  const grammar: CstGrammar = (await import(`${ROOT}${EXAMPLE}`)).default;
-  const name = grammar.name ?? basename(EXAMPLE, '.ts');
+  const grammar: Grammar = (await import(`${ROOT}${EXAMPLE}`)).default;
+  const name = grammar.name;
   const { text, findings } = decisionReport(grammar, name);
   const failures = witnessFailures(name, portableIR(grammar), await targetOf(grammar, `example-${name}`), findings);
   return { file: `${ROOT}${EXAMPLE.replace(/[^/]+$/, '')}${name}.decisions.md`, text, report: findings, failures };
@@ -128,7 +128,7 @@ async function examplePage(): Promise<{ file: string; text: string; report: Deci
 
 // ── dead alternatives on the corpora ──
 // A grammar without one alternative (by its rule and arm name).
-function without(grammar: CstGrammar, rule: string, arm: string): CstGrammar {
+function without(grammar: Grammar, rule: string, arm: string): Grammar {
   return {
     ...grammar,
     rules: grammar.rules.map((r) => {
@@ -152,7 +152,7 @@ async function deadGate(): Promise<number> {
   };
   let failures = 0;
   for (const g of ['typescript', 'javascript'] as const) {
-    const grammar: CstGrammar = (await import(`${ROOT}${g}.ts`)).default;
+    const grammar: Grammar = (await import(`${ROOT}${g}.ts`)).default;
     const ir = portableIR(grammar);
     const rep = analyzeDecisions(ir);
     const base = await targetOf(grammar, `${g}-base`);
@@ -189,8 +189,8 @@ const argv = process.argv.slice(2);
 if (argv[0] === '--observe') {
   const [file, ...inputs] = argv.slice(1);
   if (!file || inputs.length === 0) { console.error('usage: node test/decision-report.ts --observe <grammar.ts> <input>...'); process.exit(1); }
-  const grammar: CstGrammar = (await import(resolve(file))).default;
-  const name = grammar.name ?? basename(file, '.ts');
+  const grammar: Grammar = (await import(resolve(file))).default;
+  const name = grammar.name;
   const ir = portableIR(grammar);
   const rep = analyzeDecisions(ir);
   addObserved(rep, await observe(ir, await targetOf(grammar, `observe-${name}`), inputs.map((f) => resolve(f)), (f) => f));

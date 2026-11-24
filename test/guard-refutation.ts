@@ -23,7 +23,7 @@ import { analyzeGrammar, hasMarker } from '../src/grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { createParser } from '../src/gen-parser.ts';
 import { collectLiterals } from '../src/grammar-utils.ts';
-import type { CstGrammar, RuleExpr, RuleDecl } from '../src/types.ts';
+import type { Grammar, RuleExpr, RuleDecl } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const paths = [
@@ -36,7 +36,7 @@ const CONTINUATIONS = ['', ' zq', ' ;', ' (', ' )', ' {', ' }', ' 1', ' ,', ' ='
 let failures = 0, probes = 0, refusals = 0;
 const t0 = Date.now();
 for (const path of paths) {
-  const grammar: CstGrammar = (await import(path)).default;
+  const grammar: Grammar = (await import(path)).default;
   let ir: ParserIR;
   try { ir = portableIR(grammar); } catch (e) {
     if (/out of scope|not in scope/.test((e as Error).message)) continue;

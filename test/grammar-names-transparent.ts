@@ -21,7 +21,7 @@ import { createParser } from '../src/gen-parser.ts';
 import { generateCstMatch } from '../src/gen-cst-match.ts';
 import { nameReport, nameRule } from '../src/grammar-names.ts';
 import { portableIR, type RdRule, type PrattRule, type Step } from '../src/emit-portable.ts';
-import type { CstGrammar, RuleExpr } from '../src/types.ts';
+import type { Grammar, RuleExpr } from '../src/types.ts';
 import { rule, alt, arm, field, defineGrammar, token, many, opt, seq, range, star } from '../src/api.ts';
 import calc from './fixtures/calc.ts';
 import namedCalc from './fixtures/namedcalc.ts';
@@ -59,7 +59,7 @@ for (const [t, target] of Object.entries(TARGETS)) {
 }
 
 // ── 2. a different name on every node of the real grammars ──
-function nameEverything(g: CstGrammar): CstGrammar {
+function nameEverything(g: Grammar): Grammar {
   let k = 0;
   const visit = (e: RuleExpr): RuleExpr => {
     const named: RuleExpr = { ...e, field: `f${k++}` } as RuleExpr;
@@ -69,10 +69,10 @@ function nameEverything(g: CstGrammar): CstGrammar {
     if (named.type === 'group' && named.tsRelaxed) (named as { tsRelaxed: RuleExpr }).tsRelaxed = visit(named.tsRelaxed);
     return named;
   };
-  return { ...g, rules: g.rules.map((r) => ({ ...r, body: visit(r.body) })) } as CstGrammar;
+  return { ...g, rules: g.rules.map((r) => ({ ...r, body: visit(r.body) })) } as Grammar;
 }
 for (const name of ['javascript', 'typescript']) {
-  const g = (await import(`../${name}.ts`)).default as CstGrammar;
+  const g = (await import(`../${name}.ts`)).default as Grammar;
   const named = nameEverything(g);
   check(countNames(named.rules) > 1000, `${name}: every node named in memory (${countNames(named.rules)} names)`);
   for (const [t, target] of Object.entries(TARGETS)) {
@@ -83,7 +83,7 @@ for (const name of ['javascript', 'typescript']) {
 
 // ── 4. the names in the portable IR ──
 const IR_NAMES = new Set(['field', 'src', 'branchNames', 'altNames', 'nudNames', 'ledNames', 'ledLeftNames', 'postfixTokNames', 'opNames']);
-const irSyntax = (g: CstGrammar): string => JSON.stringify(portableIR(g), (k, v) => (IR_NAMES.has(k) ? undefined : v));
+const irSyntax = (g: Grammar): string => JSON.stringify(portableIR(g), (k, v) => (IR_NAMES.has(k) ? undefined : v));
 const stepFields = (steps: readonly Step[]): string[] => steps.flatMap((s): string[] => {
   const own = s.field !== undefined ? [s.field] : [];
   switch (s.t) {
@@ -116,7 +116,7 @@ const stepFields = (steps: readonly Step[]): string[] => steps.flatMap((s): stri
     'IR: an inline alternation\'s branchNames and field; the elseTok anchor on its literal', JSON.stringify(r.alts[0]));
 }
 for (const name of ['javascript', 'typescript']) {
-  const g = (await import(`../${name}.ts`)).default as CstGrammar;
+  const g = (await import(`../${name}.ts`)).default as Grammar;
   const ir = portableIR(g);
   const rd = ir.rules.filter((r): r is RdRule => r.kind === 'rd'), pr = ir.rules.filter((r): r is PrattRule => r.kind === 'pratt');
   const full = rd.every((r) => r.altNames.length === r.alts.length)

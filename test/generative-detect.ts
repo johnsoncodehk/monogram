@@ -15,7 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { normScope } from './scope-roles.ts';
 import type { CstNode, CstChild } from '../src/gen-parser.ts';
-import type { CstGrammar, TokenPattern } from '../src/types.ts';
+import type { Grammar, TokenPattern } from '../src/types.ts';
 import { commentSpec, type GenOptions, type GenInput } from './grammar-gen.ts';
 
 // The generation knobs BOTH consumers use, so the gap ledger sees the SAME derived corpus (hence the
@@ -72,7 +72,7 @@ export function spanBuckets(toks: TmTok[], text: string, start: number, end: num
 // `lit` marks a STRUCTURAL literal (`$punct`/`$keyword`) — one the parser placed as grammar structure,
 // so the highlighter painting it as CONTENT (string/comment/number) is always wrong (monogram#24).
 export interface LeafRole { start: number; end: number; text: string; tokenType: string; expected: Set<Bucket>; lit: boolean }
-export function buildRoleMap(grammar: CstGrammar): (leaf: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null {
+export function buildRoleMap(grammar: Grammar): (leaf: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null {
   const tokScope = new Map<string, string | undefined>();
   for (const t of grammar.tokens) tokScope.set(t.name, t.scope);
   const skip = new Set<string>();
@@ -89,7 +89,7 @@ export function buildRoleMap(grammar: CstGrammar): (leaf: { tokenType: string; t
     return null;   // unscoped / contextual token (a bare identifier) → not checkable by-construction
   };
 }
-export function leafRoles(grammar: CstGrammar, cst: CstNode, input: string, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
+export function leafRoles(grammar: Grammar, cst: CstNode, input: string, roleOf: (l: { tokenType: string; text: string }) => { buckets: Set<Bucket>; lit: boolean } | null): LeafRole[] {
   const out: LeafRole[] = [];
   const walk = (n: CstChild) => {
     if ('tokenType' in n) {
@@ -108,7 +108,7 @@ export function leafRoles(grammar: CstGrammar, cst: CstNode, input: string, role
 // line/stream position"; the flat highlighter, retrying the pattern at every token boundary, may
 // paint it on a token the parser placed elsewhere (a value-leading `---`, monogram#23). Map each
 // such scope → the set of token names allowed to carry it, so a mismatch is detectable generically.
-export function anchoredScopes(grammar: CstGrammar): Map<string, Set<string>> {
+export function anchoredScopes(grammar: Grammar): Map<string, Set<string>> {
   const hasStart = (p: TokenPattern): boolean => {
     if (typeof p === 'string') return false;
     switch (p.type) {
@@ -198,7 +198,7 @@ export function collectViolations(args: {
 // The comment-token NAMES of a grammar (so a witness in `tokens` is identifiable as a comment) — the SAME
 // generic discovery the generator uses, memoised per grammar object so repeated calls are cheap.
 const commentNamesCache = new WeakMap<object, Set<string>>();
-export function commentTokenNames(grammar: CstGrammar): Set<string> {
+export function commentTokenNames(grammar: Grammar): Set<string> {
   let s = commentNamesCache.get(grammar);
   if (!s) { s = commentSpec(grammar)?.names ?? new Set<string>(); commentNamesCache.set(grammar, s); }
   return s;
@@ -210,7 +210,7 @@ export function commentTokenNames(grammar: CstGrammar): Set<string> {
 // input may ALSO carry `materialize`-recorded comment tokens (the grammar can emit a native `<!-- -->`),
 // but those spans are unreliable for markup fragments (a degenerate `> <!--x-->` mis-spans, an empty
 // `<!---->` is all-punctuation) and were never meant as a ground-truth witness — so they are NOT graded.
-export function commentWitnesses(grammar: CstGrammar, input: GenInput): GenInput['tokens'] {
+export function commentWitnesses(grammar: Grammar, input: GenInput): GenInput['tokens'] {
   if (!input.strategy.includes('comment:')) return [];
   const names = commentTokenNames(grammar);
   return names.size ? input.tokens.filter((t) => names.has(t.name) && t.end > t.start) : [];
@@ -219,7 +219,7 @@ export function commentWitnesses(grammar: CstGrammar, input: GenInput): GenInput
 // Grade each comment witness: a divergence iff the highlighter painted NO part of the witness span with the
 // `comment` bucket. Returns the divergences as `Violation`s (kind `#comment uncolored`), filed like the
 // others so they flow into the same report / gate / gap-ledger plumbing.
-export function collectCommentViolations(args: { grammar: CstGrammar; input: string; strategy: string; witnesses: GenInput['tokens']; toks: TmTok[] }): Violation[] {
+export function collectCommentViolations(args: { grammar: Grammar; input: string; strategy: string; witnesses: GenInput['tokens']; toks: TmTok[] }): Violation[] {
   const out: Violation[] = [];
   for (const w of args.witnesses) {
     const got = spanBuckets(args.toks, args.input, w.start, w.end);

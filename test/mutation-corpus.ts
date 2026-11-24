@@ -3,7 +3,7 @@
 // is a near miss of a valid text: most are rejected, at the place the edit broke, which is what
 // total parsing's diagnostics (and later its repairs) are measured on. Deterministic: the same
 // seed gives the same corpus.
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 // xorshift32: a small seeded generator, the same sequence on every machine.
 function rng(seed: number): () => number {
@@ -12,7 +12,7 @@ function rng(seed: number): () => number {
 }
 
 /** The literals the grammar's rules name, sorted. */
-export function grammarLiterals(grammar: CstGrammar): string[] {
+export function grammarLiterals(grammar: Grammar): string[] {
   const out = new Set<string>();
   const walk = (e: unknown): void => {
     if (!e || typeof e !== 'object') return;
@@ -25,13 +25,13 @@ export function grammarLiterals(grammar: CstGrammar): string[] {
 }
 
 /** `perInput` mutants of each input the lexer accepts (an input it refuses gives none). */
-export function mutationCorpus(grammar: CstGrammar, tokenize: (s: string) => { offset: number; text: string }[], inputs: string[], perInput: number, seed: number): string[] {
+export function mutationCorpus(grammar: Grammar, tokenize: (s: string) => { offset: number; text: string }[], inputs: string[], perInput: number, seed: number): string[] {
   return mutationEdits(grammar, tokenize, inputs, perInput, seed).map((m) => m.src);
 }
 /** A mutant and its edit: the input it came from, whose text [at, at + del) became the `ins`
  *  characters of the mutant at `at` (the inserted or replacing literal; a deletion inserts none). */
 export type Mutant = { src: string; orig: string; at: number; del: number; ins: number };
-export function mutationEdits(grammar: CstGrammar, tokenize: (s: string) => { offset: number; text: string }[], inputs: string[], perInput: number, seed: number): Mutant[] {
+export function mutationEdits(grammar: Grammar, tokenize: (s: string) => { offset: number; text: string }[], inputs: string[], perInput: number, seed: number): Mutant[] {
   const lits = grammarLiterals(grammar);
   const R = rng(seed);
   const out: Mutant[] = [];

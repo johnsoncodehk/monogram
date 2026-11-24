@@ -15,7 +15,7 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/emit-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
 
@@ -68,7 +68,7 @@ function trace(tree: Tree, tok: (i: number) => Token, run: (f: Fns) => void, src
 
 const dir = scratchDir('emit-reentrancy');
 for (const c of CASES) {
-  const grammar: CstGrammar = (await import(c.path)).default;
+  const grammar: Grammar = (await import(c.path)).default;
   const src = emitParser(grammar, jsTarget);
   const file = join(dir, `${c.name}.ts`);
   writeFileSync(file, src);
@@ -223,7 +223,7 @@ for (const c of CASES) {
   const FIELDS = ['type', 'text', 'offset', 'k', 't', 'newlineBefore', 'commentBefore', 'multilineFlowBefore'];
 
   for (const c of TOKENIZE_CASES) {
-    const grammar: CstGrammar = (await import(c.path)).default;
+    const grammar: Grammar = (await import(c.path)).default;
     const src = emitParser(grammar, jsTarget);
     const file = join(tdir, `${c.name}.ts`);
     writeFileSync(file, src);

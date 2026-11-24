@@ -15,7 +15,7 @@
 //   node test/guard-lead.ts
 import { readdirSync } from 'node:fs';
 import { portableIR, buildLexIdPlan, tokenSetBits, ctxWordLids, guardedSteps, type ParserIR, type Guard, type Step } from '../src/emit-portable.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const paths = [
@@ -26,7 +26,7 @@ const paths = [
 let failures = 0, sites = 0, grammars = 0, checks = 0;
 const fail = (msg: string) => { failures++; if (failures <= 20) console.log(`  FAIL ${msg}`); };
 for (const path of paths) {
-  const grammar: CstGrammar = (await import(path)).default;
+  const grammar: Grammar = (await import(path)).default;
   if (!grammar || !Array.isArray(grammar.rules)) continue;
   let ir: ParserIR;
   try { ir = portableIR(grammar); } catch (e) {

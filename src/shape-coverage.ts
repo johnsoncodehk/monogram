@@ -11,7 +11,7 @@
 //   shapeSkeleton(grammar)    a complete, loadable `defineShape` source mapping every arm to a
 //                             node named `Rule.arm` holding its named children: the CST as a
 //                             shape, the file a user starts from and fills in
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import { findEntryRule } from './grammar-analysis.ts';
 import { cardOf, defineShape, type ArmInfo, type Card, type ScopeInfo, type Shape, type Slot, type SlotKind } from './shape2-eval.ts';
 import { branch, child, map, node, text, type Term } from './shape2-schema.ts';
@@ -57,7 +57,7 @@ export function shapeCoverage(shape: Shape): ShapeCoverage {
       skeleton: skeletonOf(a, `${rule}.${a.arm}`),
     });
   }
-  return { shape: spec.name, grammar: source.name ?? '(unnamed)', entry, arms };
+  return { shape: spec.name, grammar: source.name, entry, arms };
 }
 
 /** The child names a term reads the VALUE of (`child`, `get`), anywhere in it. */
@@ -134,8 +134,8 @@ export function freeNodeKeys(terms: Term[]): { kind: string; start: string; end:
   return { kind: key('kind'), start: key('start'), end: key('end') };
 }
 
-export function shapeSkeleton(grammar: CstGrammar, grammarImport: string): string {
-  const c = shapeCoverage(defineShape(grammar, { name: `${grammar.name ?? 'grammar'}-skeleton`, rules: {} }));
+export function shapeSkeleton(grammar: Grammar, grammarImport: string): string {
+  const c = shapeCoverage(defineShape(grammar, { name: `${grammar.name}-skeleton`, rules: {} }));
   const out = [
     `import grammar from '${grammarImport}';`,
     `import { defineShape, branch, child, map, node, text } from 'monogram/shape';`,
@@ -143,7 +143,7 @@ export function shapeSkeleton(grammar: CstGrammar, grammarImport: string): strin
     '// Every arm of the grammar, mapped to a node `Rule.arm` of its named children (the CST as a',
     '// shape). Replace each term with your node; an arm you delete is left out (see --shape).',
     `export default defineShape(grammar, {`,
-    `  name: '${grammar.name ?? 'grammar'}-shape',`,
+    `  name: '${grammar.name}-shape',`,
   ];
   const keys = freeNodeKeys(c.arms.map((a) => a.skeleton));
   if (keys.kind !== 'kind' || keys.start !== 'start' || keys.end !== 'end') out.push(`  node: { kind: '${keys.kind}', start: '${keys.start}', end: '${keys.end}' },`);

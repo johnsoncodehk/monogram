@@ -1,4 +1,4 @@
-// DECLARED ASSIGNMENT-TARGET CONTEXTS (CstGrammar.targets), planned onto the portable IR.
+// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.targets), planned onto the portable IR.
 //
 // A context is a predicate over nodes: a node passes iff its arm is one of the context's leaves,
 // or one of its containers whose named children all pass; a node of one child and nothing else
@@ -36,7 +36,7 @@
 // the closure (altForm). Not yet: the recovery encoding (recoveryTables refuses contexts) and the
 // typed-AST forms (they refuse them by name). The interpreter computes the predicate as a CST walk
 // (declared-targets-cst.ts), not from these bits.
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import type { RuleIR, Step, RdRule, PrattRule, TargetsIR, DemandTwin } from './emit-portable.ts';
 import { formPass, formLast, FORM_MAX_CONTEXTS, nudLowForm, DEFER_SHIFT, DEMAND_ASSIGNED, DEMAND_MAX_TWINS } from './emit-portable.ts';
 
@@ -71,7 +71,7 @@ function unitCall(steps: Step[]): string | null {
 }
 
 /** Plan the grammar's declared target contexts onto its rules (in place); null without `targets`. */
-export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | null {
+export function planTargets(grammar: Grammar, rules: RuleIR[]): TargetsIR | null {
   const decl = grammar.targets;
   if (decl === undefined) return null;
   const names = Object.keys(decl);
@@ -263,7 +263,7 @@ function bodies(r: RuleIR): Step[][] {
   return r.kind === 'rd' ? r.alts : [...r.nudBrackets.map((x) => x.steps), ...r.nudSeqs, ...r.nudCapped.map((x) => x.steps), ...r.leds.map((x) => x.steps)];
 }
 
-function grammarOpCtx(g: CstGrammar, op: string): string | undefined {
+function grammarOpCtx(g: Grammar, op: string): string | undefined {
   for (const level of g.precs) for (const o of level.operators) if (o.value === op && o.position === 'infix' && o.targetCtx !== undefined) return o.targetCtx;
   return undefined;
 }
@@ -276,7 +276,7 @@ function grammarOpCtx(g: CstGrammar, op: string): string | undefined {
 // must take exactly the arms the context passes as they are: in every Pratt rule a twin reads (and
 // the demand operators' own), an arm the shallow check takes (FORM_TARGET low bits, not capped) is
 // a leaf or a container, and a leaf is such an arm; anything else is refused by name.
-function planDemand(grammar: CstGrammar, rules: RuleIR[], names: string[]): TargetsIR {
+function planDemand(grammar: Grammar, rules: RuleIR[], names: string[]): TargetsIR {
   const ctx = names[0]!;
   const c = grammar.targets![ctx]!;
   if (names.length !== 1) throw new Error(`targets: the demand context ${ctx} must be the grammar's only context (declared: ${names.join(', ')})`);

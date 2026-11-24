@@ -30,7 +30,7 @@ import type { MonarchLanguage } from '../src/gen-monarch.ts';
 import { tokenize } from './monarch-tokenize.ts';
 import { inRepoCorpus, REPO_CORPUS_AT } from './emit-corpus.ts';
 import { createParser } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 type CstNode = { offset: number; end: number; tokenType?: string; rule?: string; children?: CstNode[] };
 
 const ROOT = join(import.meta.dirname, '..');
@@ -122,7 +122,7 @@ async function refusalsOf(lang: string): Promise<Record<string, string[]>> {
 // node is a `@type` rule's (a type name, not a member name inside a type); null when the file
 // does not parse.
 const parserOf = new Map<string, { parse(src: string): unknown }>();
-const grammarOf = new Map<string, CstGrammar>();
+const grammarOf = new Map<string, Grammar>();
 function parsedTypes(lang: string, src: string): boolean[] | null {
   const g = grammarOf.get(lang)!;
   const types = new Set(g.rules.filter(r => r.flags.includes('type')).map(r => r.name));

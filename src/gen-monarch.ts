@@ -1,4 +1,4 @@
-import type { CstGrammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import type { Grammar, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { regionView, type RegionView, type NameShape } from './region-view.ts';
 import { directivesOf } from './grammar-analysis.ts';
 import { armGraph, findWindows, hasWindow, inArmOrder } from './arm-graph.ts';
@@ -91,8 +91,8 @@ const OPEN_BRACKETS = new Set(['(', '[', '{', '<']);
 
 // What the Monarch renderer declines, per grammar (src/highlighters.ts reads it): filled by
 // generateMonarch.
-const refusalsOf = new WeakMap<CstGrammar, HighlighterRefusal[]>();
-export function monarchRefusals(grammar: CstGrammar): HighlighterRefusal[] {
+const refusalsOf = new WeakMap<Grammar, HighlighterRefusal[]>();
+export function monarchRefusals(grammar: Grammar): HighlighterRefusal[] {
   if (!refusalsOf.has(grammar)) generateMonarch(grammar);
   return refusalsOf.get(grammar) ?? [];
 }
@@ -129,7 +129,7 @@ interface AngleInfo {
   confirmChars: string[];
 }
 
-function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
+function detectAngleBrackets(grammar: Grammar): AngleInfo | null {
   const precOps = new Set<string>();
   for (const level of grammar.precs)
     for (const op of level.operators) precOps.add(op.value);
@@ -163,7 +163,7 @@ function detectAngleBrackets(grammar: CstGrammar): AngleInfo | null {
 // derived from the markup config — NOT the token-stream construction below. Each rule
 // emits a single token (the type models no multi-capture action), so open/close tags
 // are split into states to keep the `<`/`>` delimiter distinct from the tag name.
-function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
+function generateMarkupMonarch(grammar: Grammar): MonarchLanguage {
   const m = grammar.markup!;
   const idTok = grammar.tokens.find(t => t.identifier);
   const name = idTok ? tokenPatternSource(idTok) : '[a-zA-Z][\\w:.-]*';
@@ -227,7 +227,7 @@ function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
 
   return {
     defaultToken: '',
-    tokenPostfix: `.${(grammar as { name?: string }).name ?? 'markup'}`,
+    tokenPostfix: `.${grammar.name}`,
     ignoreCase: true,            // HTML tag/attribute names are case-insensitive
     brackets: [],
     tokenizer,
@@ -236,7 +236,7 @@ function generateMarkupMonarch(grammar: CstGrammar): MonarchLanguage {
 
 // ── Main generator ──
 
-export function generateMonarch(grammar: CstGrammar): MonarchLanguage {
+export function generateMonarch(grammar: Grammar): MonarchLanguage {
   return monacoRegexes(grammar.markup ? generateMarkupMonarch(grammar) : generateTokenMonarch(grammar));
 }
 
@@ -253,7 +253,7 @@ function monacoRegexes(lang: MonarchLanguage): MonarchLanguage {
   return { ...lang, tokenizer };
 }
 
-function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
+function generateTokenMonarch(grammar: Grammar): MonarchLanguage {
   const { scopeOverrides } = grammar;
   const view = regionView(grammar);
 
@@ -968,7 +968,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   return {
     ident: anchoredSource(identRegex),
     defaultToken: 'invalid',
-    tokenPostfix: `.${(grammar as { name?: string }).name ?? 'lang'}`,
+    tokenPostfix: `.${grammar.name}`,
     ignoreCase: false,
     ...uniIdent ? { unicode: true } : {},
     brackets: bracketPairs,
@@ -1033,7 +1033,7 @@ function elementToken(scope: string): string {
   return scopeToMonarch(scope);
 }
 
-function elementLayer(view: RegionView, grammar: CstGrammar, cx: ElementCtx): ElementLayer {
+function elementLayer(view: RegionView, grammar: Grammar, cx: ElementCtx): ElementLayer {
   const r = view.region;
   const n = view.name;
   const S = (k: string, top = false) => `${n}_${k}${top ? 'T' : ''}`;

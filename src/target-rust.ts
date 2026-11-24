@@ -14,7 +14,7 @@
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
 import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_FAIL, RM_PROBE, RM_SP, RM_ATT, RM_AMAX, nativeCases, shorterDispatch } from './recovery-family.ts';
@@ -5843,7 +5843,7 @@ export const rustTarget = defineParserTarget({
   name: 'rust',
   ext: 'rs',
   lowering: rustLowering,
-  emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string {
+  emitParser(grammar: Grammar, shared: SharedAlgorithms, opts: EmitOptions): string {
     const ir = portableIR(grammar, FACTS);
     if (opts.shape) {
       if (opts.recovery) throw new Error('rustTarget: a shape-building parser has no total parsing yet (emit options `shape` and `recovery` together)');
@@ -6524,7 +6524,7 @@ ${opts.recovery ? RS_BATCH_TOTAL + RS_BATCH_INTERP : ''}    // batch: NUL-separa
 }
 
 /** Emit a Rust parser with an optional specialized declarative-shape AST entry. */
-export function emitRust(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): string {
+export function emitRust(grammar: Grammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitRustLibrary(ir, ids, rustTarget.shared, false);

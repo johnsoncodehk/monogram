@@ -4,7 +4,7 @@ import { generateLanguageConfig } from './gen-vscode-config.ts';
 import { registeredHighlighters, highlighterInput } from './define-highlighter.ts';
 import { treeSitterFiles } from './highlighters.ts';
 import { generateCstMatch } from './gen-cst-match.ts';
-import type { CstGrammar, RuleExpr } from './types.ts';
+import type { Grammar, RuleExpr } from './types.ts';
 import { tokenPatternSource } from './token-pattern.ts';
 import { decisionReport } from './decision-report.ts';
 
@@ -29,11 +29,8 @@ if (!file || (shapeAt >= 0 && (!shapeFile || shapeFile.startsWith('--')))) {
 }
 
 const mod = await import(resolve(file));
-const grammar = mod.default as CstGrammar & { name?: string };
-// An unnamed grammar takes its name from the filename; set it on the grammar so the generators
-// have one source of truth (gen-tm reads `grammar.name` rather than taking a name parameter).
-const langName = grammar.name ?? basename(file, '.ts');
-grammar.name = langName;
+const grammar = mod.default as Grammar;
+const langName = grammar.name;
 
 if (args.includes('--shape-skeleton')) {
   const { shapeSkeleton } = await import('./shape-coverage.ts');

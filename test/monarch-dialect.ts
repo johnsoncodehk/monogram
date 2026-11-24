@@ -25,7 +25,7 @@
 import { readFileSync } from 'node:fs';
 import { generateMonarch, type MonarchLanguage, type MonarchRule, type MonarchAction } from '../src/gen-monarch.ts';
 import { createParser } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import tsx from '../typescriptreact.ts';
 import jsx from '../javascriptreact.ts';
 import elementDialect from './fixtures/elementdialect.ts';
@@ -129,7 +129,7 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
     ...(g.elements!.tagTokens ?? []).map(k => [k, is('string')] as [string, (t: string) => boolean]),
   ]);
   rows.push({ section, id: 'every region-own token of the interpreter\'s stream has its Monarch kind', status: 'pass', check: () => {
-    const lex = createParser(g as CstGrammar).tokenize(src) as { type: string; text: string; offset: number }[];
+    const lex = createParser(g as Grammar).tokenize(src) as { type: string; text: string; offset: number }[];
     const mt = tokenize(mon(), src);
     const bad: string[] = [];
     let n = 0;
@@ -327,7 +327,7 @@ for (const [name, file, g] of [['jsx', 'javascriptreact.monarch.json', jsx], ['t
   {
     let m2: MonarchLanguage | null = null;
     const el = textDialect.elements!;
-    const plain = () => (m2 ??= generateMonarch({ ...textDialect, elements: { ...el, rawText: [{ tags: ['style'], token: 'StyleBody' }, ...el.rawText!.slice(1)] } } as CstGrammar));
+    const plain = () => (m2 ??= generateMonarch({ ...textDialect, elements: { ...el, rawText: [{ tags: ['style'], token: 'StyleBody' }, ...el.rawText!.slice(1)] } } as Grammar));
     // the raw token's Monarch token, as the generator maps its scope (`meta.embedded.block.css`)
     const bodyTok = () => tokenAt(plain(), rsrc, '.a', 0).token;
     tokRow('without an embed a raw body is one token of the raw token\'s scope; its `{` opens no hole', 'pass', undefined, plain, rsrc, '{ color', 0, t => t === bodyTok() && !t.startsWith('embedded.') && t !== 'delimiter.bracket');

@@ -34,7 +34,7 @@ import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { scratchDir } from './scratch.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const TMP = scratchDir('look-extent');
@@ -279,7 +279,7 @@ const EXPECTED_FAIL: { grammar: string; reason: string; applies: (text: string) 
 }
 
 for (const g of GRAMMARS) {
-  const grammar: CstGrammar = (await import(g.path)).default;
+  const grammar: Grammar = (await import(g.path)).default;
   const dir = `${TMP}/${g.name}`;
   mkdirSync(dir, { recursive: true });
   const lib = emitParser(grammar, tsTarget);

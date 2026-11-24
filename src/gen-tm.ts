@@ -1,5 +1,5 @@
 import { identifierClassesOf } from './uni-ident.ts';
-import type { CstGrammar, RuleExpr, InjectClause, TokenDecl } from './types.ts';
+import type { Grammar, RuleExpr, InjectClause, TokenDecl } from './types.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, directivesOf } from './grammar-analysis.ts';
 import { regionView, expandArms, operandEntry, type RegionView } from './region-view.ts';
@@ -193,7 +193,7 @@ function identExtraClass(token: TokenDecl | undefined): string {
 // ID_Start / ID_Continue with `$`, `_`, ZWNJ, ZWJ) when the grammar declares an identifier token.
 // A grammar without one has no Unicode identifier in its lexer; its name tokens are widened by the
 // older letter classes (`\p{L}\p{Nl}`, `+ \p{Nd}\p{Mn}\p{Mc}\p{Pc}`), a TextMate convention.
-function unicodeIdentClasses(grammar: CstGrammar): { start: string; cont: string } {
+function unicodeIdentClasses(grammar: Grammar): { start: string; cont: string } {
   if (!grammar.tokens.some(t => t.identifier)) return { start: '\\p{L}\\p{Nl}', cont: '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}' };
   const c = identifierClassesOf(grammar.tokens);
   const inner = (cls: string) => {
@@ -219,7 +219,7 @@ function unicodeIdentClasses(grammar: CstGrammar): { start: string; cont: string
  * ONLY the TextMate emitter, never the lexer (which compiles the original ASCII token
  * pattern). If no identifier class is found, the pattern is returned unchanged.
  */
-function unicodeWidenIdentPattern(identRegex: string, grammar: CstGrammar): string {
+function unicodeWidenIdentPattern(identRegex: string, grammar: Grammar): string {
   const uni = unicodeIdentClasses(grammar);
   return identRegex.replace(/\[[^\]]*\]/g, cls => {
     if (!/[_$]/.test(cls)) return cls;                   // not an identifier class (e.g. hex) — leave alone
@@ -250,7 +250,7 @@ function buildIdentLookbehind(identToken: TokenDecl | undefined): string {
  * `x as T` / `keyof U` (keyword) from `const as = 1` / `as()` / `as.x` (identifier:
  * the next char is `=` / `(` / `.`, none of which start an operand).
  */
-function buildOperandStartClass(grammar: CstGrammar, identToken: TokenDecl | undefined): string {
+function buildOperandStartClass(grammar: Grammar, identToken: TokenDecl | undefined): string {
   const chars = new Set<string>();
   // Identifier-start: $/_ plus the non-\w extras from the Ident token.
   chars.add('_');
@@ -369,7 +369,7 @@ interface JsxDisambigDelims {
   arrowEndConfirm: string; // DEPTH-INDEPENDENT "…> ( arrow-params" end-confirm (no `\g<>`)
 }
 
-function jsxDisambigDelims(grammar: CstGrammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null, closeTok: string | null): JsxDisambigDelims {
+function jsxDisambigDelims(grammar: Grammar, identRegex: string, separator: string, paramParens: { open: string; close: string } | null, typeArgRule: string | null, closeTok: string | null): JsxDisambigDelims {
   // `<` / `>` from the prec table — the generic delimiters. detectAngleBracketAmbiguity
   // (the only caller's gate) already proved this grammar declares BOTH as prec
   // operators, so reading them back here sources the chars from the grammar's own
@@ -461,7 +461,7 @@ function byScopeLiterals(overrides: Map<string, string[]>): Map<string, string[]
   return byScope;
 }
 
-function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: CstGrammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = [], holeBraces: { include: string }[] = []): Record<string, TmPattern> {
+function generateElementPatterns(langName: string, identRegex: string, view: RegionView, grammar: Grammar, disambig: JsxDisambigDelims | null, commentKeys: string[] = [], blockCommentPats: string[] = [], holeBraces: { include: string }[] = []): Record<string, TmPattern> {
   const result: Record<string, TmPattern> = {};
   const K = (s: string) => `${view.name}-${s}`;
   const region = view.region;
@@ -1080,7 +1080,7 @@ function buildConfirmPattern(tokens: string[]): string {
  */
 function generateAngleBracketPatterns(
   ambiguity: AngleBracketAmbiguity,
-  grammar: CstGrammar,
+  grammar: Grammar,
   langName: string,
   identRegex: string,
   identToken: TokenDecl | undefined,
@@ -1960,7 +1960,7 @@ function embedValuePatterns(
 //  just over markup roles. Nothing here hardcodes HTML: delimiters, raw-text tag
 //  names, and comment delimiters are all grammar DATA.
 // ─────────────────────────────────────────────────────────────────────────────
-function generateMarkupTm(grammar: CstGrammar, grammarName: string, scopeName: string): TmGrammar {
+function generateMarkupTm(grammar: Grammar, grammarName: string, scopeName: string): TmGrammar {
   const m = grammar.markup!;
   const L = grammarName;                                   // scope suffix, e.g. 'html'
   const { scopeOverrides } = grammar;
@@ -2363,7 +2363,7 @@ function buildInjectionSelector(clauses: InjectClause[], exprEmbed: string): str
 //  (text.html.vue) the stubs include from. Matches the official topology byte-for-byte at the
 //  file level (vue-directives.json / vue-interpolations.json include text.html.vue#…).
 // ─────────────────────────────────────────────────────────────────────────────
-function buildMarkupInjectParts(grammar: CstGrammar, mainScopeName: string): { repo: Record<string, TmPattern>; files: InjectionGrammar[] } | null {
+function buildMarkupInjectParts(grammar: Grammar, mainScopeName: string): { repo: Record<string, TmPattern>; files: InjectionGrammar[] } | null {
   const inj = grammar.markup?.inject;
   if (!inj) return null;
   const m = grammar.markup!;
@@ -2447,13 +2447,13 @@ function buildMarkupInjectParts(grammar: CstGrammar, mainScopeName: string): { r
 
 // The grammar's name — its single source of truth (declared via `defineGrammar({ name })`, or set
 // by the CLI from the filename for an unnamed grammar). Falls back to the scopeName's last segment.
-function nameOf(grammar: CstGrammar): string {
-  return grammar.name ?? grammar.scopeName?.split('.').pop() ?? 'grammar';
+function nameOf(grammar: Grammar): string {
+  return grammar.name;
 }
 
 // The injection FILES (thin stubs, one per concern). The rule BODIES are merged into the host
 // grammar's repository by generateMarkupTm. Returns [] when no injection is declared.
-export function generateMarkupInjection(grammar: CstGrammar): InjectionGrammar[] {
+export function generateMarkupInjection(grammar: Grammar): InjectionGrammar[] {
   return buildMarkupInjectParts(grammar, grammar.scopeName ?? `text.${nameOf(grammar)}`)?.files ?? [];
 }
 
@@ -2468,7 +2468,7 @@ interface ContributesSnippet {
   languages: { id: string; extensions: string[]; configuration: string }[];
   grammars: { language?: string; scopeName: string; path: string; injectTo?: string[]; embeddedLanguages?: Record<string, string> }[];
 }
-export function generateContributes(grammar: CstGrammar): ContributesSnippet | null {
+export function generateContributes(grammar: Grammar): ContributesSnippet | null {
   const man = grammar.manifest;
   if (!man) return null;
   const grammarName = nameOf(grammar);
@@ -2532,7 +2532,7 @@ function leadingKeywordAnchors(re: string | undefined): string[] | null {
  *  includes anchored solely on statement keywords, narrow mixed keyword groups to their
  *  expression members, keep everything lexical/operator. Mutates `repository` (adds the
  *  `#expression` entry + any `#expr-*` narrowed-group copies). */
-function deriveExpressionEntry(grammar: CstGrammar, orderedPatterns: { include: string }[], repository: Record<string, TmPattern>): void {
+function deriveExpressionEntry(grammar: Grammar, orderedPatterns: { include: string }[], repository: Record<string, TmPattern>): void {
   const exprKw = highlightFacts(grammar).expressionKeywords;
   const exprPatterns: { include: string }[] = [];
   for (const { include } of orderedPatterns) {
@@ -2601,7 +2601,7 @@ function rewriteRepoRefs(node: unknown, rename: Map<string, string>): void {
 // looks them up + substitutes, so the engine stays language-agnostic (a grammar declaring none is
 // unaffected — the agnostic-test grammars declare none, so no TS names leak into the engine).
 function applyCanonicalRepoNames(
-  grammar: CstGrammar,
+  grammar: Grammar,
   repository: Record<string, TmPattern>,
   topPatterns: { include: string }[],
 ): void {
@@ -2640,7 +2640,7 @@ function applyCanonicalRepoNames(
   }
 }
 
-export function generateTmLanguage(grammar: CstGrammar): TmGrammar {
+export function generateTmLanguage(grammar: Grammar): TmGrammar {
   // Honour the grammar's DECLARED scopeName (e.g. source.ts) and derive every scope's
   // language suffix from it (ts / js / tsx) instead of the raw grammar name
   // (typescript / …). Themes key on `keyword.control.ts`, not `…​.typescript`, so this

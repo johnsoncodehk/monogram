@@ -1,4 +1,4 @@
-// DECLARED ASSIGNMENT-TARGET CONTEXTS (CstGrammar.targets) in the interpreter (gen-parser.ts): the
+// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.targets) in the interpreter (gen-parser.ts): the
 // predicate as a WALK over the CST, the reference the portable engine's synthesized form
 // (declared-targets.ts) is held to by the parity gates. A node passes context `ctx` iff its arm is
 // one of the context's leaves, or one of its containers whose children at the named field (every
@@ -8,7 +8,7 @@
 // The interpreter records, only when the grammar declares contexts, which arm built each node and
 // which rule references produced each child node (a memoized node may be produced by several).
 import { isZeroWidthMarker } from './grammar-utils.ts';
-import type { CstGrammar, RuleDecl, RuleExpr } from './types.ts';
+import type { Grammar, RuleDecl, RuleExpr } from './types.ts';
 import type { CstNode, CstChild } from './gen-parser.ts';
 import { nameRule } from './grammar-names.ts';
 
@@ -17,7 +17,7 @@ type Role = { leaf: Set<number>; field: Map<number, string>; last: Set<number> }
 export type ArmInfo = { name: string; unit: boolean; refs: Map<RuleExpr, string> | null; op?: string };
 
 
-export function targetWalker(grammar: CstGrammar, rules: Iterable<RuleDecl>, tokenNames: Set<string>) {
+export function targetWalker(grammar: Grammar, rules: Iterable<RuleDecl>, tokenNames: Set<string>) {
   const decl = grammar.targets!;
   const names = Object.keys(decl);
   const roles = new Map<string, Role>();

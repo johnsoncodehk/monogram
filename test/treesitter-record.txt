@@ -5,6 +5,7 @@ javascript | lookaheads | accepts | unclassified | "try {}"
 javascript | lookaheads | accepts | unclassified | "x = () => {}.x;"
 javascript | lookaheads | accepts | unclassified | "x = a => {}.y;"
 javascript | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+javascript | new arguments | brackets | yield-context-not-rendered | "yield(x);"
 javascript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
 javascript | operator pairs | accepts | assignment-target-not-checked | "++a = c;"
 javascript | operator pairs | accepts | assignment-target-not-checked | "+a = c;"
@@ -38,6 +39,24 @@ javascript | operator pairs | accepts | unary-lhs-of-** | "delete a ** c;"
 javascript | operator pairs | accepts | unary-lhs-of-** | "typeof a ** c;"
 javascript | operator pairs | accepts | unary-lhs-of-** | "void a ** c;"
 javascript | operator pairs | accepts | unary-lhs-of-** | "~a ** c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "x = yield a, b;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a & c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a && c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a * c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a ** c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a + c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a < c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a << c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a = c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a == c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a ? b : c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a ?? c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a ^ c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a in c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a instanceof c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a | c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield a || c;"
+javascript | operator pairs | accepts | yield-context-not-rendered | "yield yield a;"
 javascript | reserved words | accepts | unclassified | "const { default } = o;"
 javascript | reserved words | accepts | unclassified | "import { if } from \"m\";"
 javascript | test262 | rejects | import-attributes-not-rendered | test/language/import/import-defer/deferred-namespace-object/json-module.js
@@ -172,13 +191,14 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-three-per-em-space.js
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
-javascript | test262 | spans | other | files 28
-javascript | test262 | spans | totals | span-equal 23210 of 23238, interpreter spans missing 12, extra tree-sitter spans 28
+javascript | test262 | spans | other | files 30
+javascript | test262 | spans | totals | span-equal 23199 of 23229, interpreter spans missing 14, extra tree-sitter spans 29
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
 javascriptreact | lookaheads | accepts | unclassified | "x = a => {}.y;"
 javascriptreact | lookaheads | accepts | unclassified | "x = async () => {}.y;"
+javascriptreact | new arguments | brackets | yield-context-not-rendered | "yield(x);"
 javascriptreact | reserved words | accepts | unclassified | "const { default } = o;"
 javascriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
 typescript | TypeScript src | rejects | unclassified | src/compiler/checker.ts

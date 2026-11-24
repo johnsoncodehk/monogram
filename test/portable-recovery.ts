@@ -1,5 +1,5 @@
 // Gate class of the portable targets (test/portable-harness.ts): TOTAL PARSING.
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { mutationEdits, type Mutant } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import { ECMASCRIPT, canon, finish, gate, parityCorpus, prepareAll, selectedCases, primaryLexMsg, type Case, type DiagRow, type Outcome, type Runner, type Total } from './portable-harness.ts';
@@ -154,7 +154,7 @@ const mapTree = (x: unknown, u: (b: number) => number): unknown => {
   if (x === null || typeof x !== 'object') return x;
   return Object.fromEntries(Object.entries(x).map(([k, y]) => [k, k === 'offset' || k === 'end' ? u(y as number) : mapTree(y, u)]));
 };
-function recoveryClass(c: Case, grammar: CstGrammar, runners: Runner[], oracleOut: (src: string) => Outcome, base: string[], tokenize: (s: string) => Tok[]): void {
+function recoveryClass(c: Case, grammar: Grammar, runners: Runner[], oracleOut: (src: string) => Outcome, base: string[], tokenize: (s: string) => Tok[]): void {
   const edits = mutationEdits(grammar, (s) => tokenize(s).map((t) => ({ offset: t.offset, text: t.text })), [...c.accept, ...(c.grammar === 'typescript' ? CURATED_TS : [])], RECOVERY_MUTANTS, RECOVERY_SEED);
   const mutants = edits.map((m) => m.src);
   // (a mutant drawn twice: its first edit)
@@ -289,7 +289,7 @@ const INTERP_ALL = 1 << 30, INTERP_MIXED = 2;
 const INTERP_K = 3;
 const interpRef = new Map<string, number[]>();
 const FACTS_OF: Record<string, PortableFacts> = { typescript: TS_FACTS, go: GO_FACTS, rust: RS_FACTS };
-function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], own: Outcome[], tokenize: (s: string) => Tok[], bad: string[]): void {
+function interpCheck(c: Case, grammar: Grammar, r: Runner, srcs: string[], own: Outcome[], tokenize: (s: string) => Tok[], bad: string[]): void {
   const at = (i: number) => JSON.stringify(srcs[i]!.length > 90 ? srcs[i]!.slice(0, 90) + '…' : srcs[i]);
   const nRules = portableIR(grammar).rules.length;
   for (const depth of [INTERP_ALL, INTERP_MIXED]) {

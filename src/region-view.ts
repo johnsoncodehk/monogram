@@ -4,7 +4,7 @@
 // Every fact here is read from the grammar: the region declaration (`elements`) and the rules
 // that use it. Nothing is a built-in element vocabulary: a grammar that declares no region gets
 // no view (null), so no element layer, whatever tokens or rules it has.
-import type { CstGrammar, ElementRegion, ElementHighlight, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
+import type { Grammar, ElementRegion, ElementHighlight, RuleExpr, TokenDecl, TokenPattern } from './types.ts';
 import { tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { tokenPatternLiteralText } from './token-pattern.ts';
 import { armGraph, armsFrom } from './arm-graph.ts';
@@ -108,7 +108,7 @@ export function expandArms(expr: RuleExpr): readonly RuleExpr[][] {
 
 const isLit = (e: RuleExpr | undefined, v: string): boolean => e?.type === 'literal' && e.value === v;
 
-export function regionView(grammar: CstGrammar): RegionView | null {
+export function regionView(grammar: Grammar): RegionView | null {
   const region = grammar.elements;
   if (!region) return null;
   const tok = (n: string) => grammar.tokens.find((t) => t.name === n);
@@ -199,7 +199,7 @@ export function regionView(grammar: CstGrammar): RegionView | null {
   const tagTokens = (region.tagTokens ?? []).map((n) => tok(n)).filter((t): t is TokenDecl => !!t);
   return {
     region,
-    name: region.name ?? grammar.name ?? 'element',
+    name: region.name ?? grammar.name,
     closeTagText: text(region.closeTag),
     selfCloseText: text(region.selfClose),
     entry: tagOpenOnlyOpensTags(grammar, region) ? 'always' : 'operand',
@@ -272,7 +272,7 @@ function closingText(p: TokenPattern): string | null {
  * own line, so it is no conflict. Null when the grammar declares no `regexContext`.
  */
 export interface OperandEntry { after: string[]; notAfter: string[]; dropped: { text: string; reason: string }[] }
-export function operandEntry(grammar: CstGrammar): OperandEntry | null {
+export function operandEntry(grammar: Grammar): OperandEntry | null {
   const rc = grammar.tokens.find((t) => t.regexContext)?.regexContext;
   if (!rc) return null;
   const lits: string[] = [];

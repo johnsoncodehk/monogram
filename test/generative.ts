@@ -37,7 +37,7 @@ import onig from 'vscode-oniguruma';
 import { parseFragment } from 'parse5';
 import { createParser, type CstNode } from '../src/gen-parser.ts';
 import { scratchDir } from './scratch.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { generateInputs, type GenInput } from './grammar-gen.ts';
 // The scope≡role divergence detection is factored into generative-detect.ts so the gap ledger
 // (test/gap-ledger.ts) reuses the EXACT same logic. This driver's gate behaviour is unchanged.
@@ -51,7 +51,7 @@ import {
 //    any multi-file sub-grammars) is DATA — the harness body is language-agnostic. ──
 interface LangCfg {
   name: string;
-  module: string;          // grammar module to import (default export = CstGrammar)
+  module: string;          // grammar module to import (default export = Grammar)
   scopeName: string;       // TextMate scope, e.g. source.yaml
   tmPath: string;          // the derived flat .tmLanguage.json
   tmExtra?: Record<string, string>;  // extra scopeName → file for multi-file grammars
@@ -105,7 +105,7 @@ function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
 // ── the run ──────────────────────────────────────────────────────────────────────────────────────
 async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; violations: number; reason: string }> {
   if (!existsSync(cfg.tmPath)) { console.log(`  [skip ${cfg.name}: ${cfg.tmPath} not found — run npm run gen]`); return { name: cfg.name, ok: true, violations: 0 }; }
-  const grammar = (await import(cfg.module)).default as CstGrammar;
+  const grammar = (await import(cfg.module)).default as Grammar;
   const { parse } = createParser(grammar);
   const tm = await loadTm(cfg.scopeName, { [cfg.scopeName]: cfg.tmPath, ...(cfg.tmExtra ?? {}) });
   if (!tm) throw new Error(`failed to load ${cfg.tmPath}`);
@@ -234,7 +234,7 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
 // the self-close bug the generator printed).
 async function runHtmlSites(): Promise<{ name: string; ok: boolean; violations: number; reason: string }> {
   const cfg = LANGS.find((l) => l.name === 'html')!;
-  const grammar = (await import(cfg.module)).default as CstGrammar;
+  const grammar = (await import(cfg.module)).default as Grammar;
   const m = grammar.markup!;
   const failsAt: string[] = [];
   // (1)

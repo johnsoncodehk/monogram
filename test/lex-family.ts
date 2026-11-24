@@ -34,7 +34,7 @@ import { rustTarget } from '../src/target-rust.ts';
 import type { PortableTarget } from '../src/define-target.ts';
 import { emitRelexFamily, relexFamilyFns, relexMode, type RelexMode } from '../src/relex-family.ts';
 import { type TextUnits, unitLen } from '../src/text-units.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { tokenPatternToRegex } from '../src/token-pattern.ts';
 import { scratchDir } from './scratch.ts';
 import { tokenEdgeTexts } from './token-edges.ts';
@@ -77,7 +77,7 @@ const kinds = defineGrammar({
   rules: { Atom, Program },
   entry: Program,
 });
-const flat = (await import('../javascript.ts')).default as CstGrammar;
+const flat = (await import('../javascript.ts')).default as Grammar;
 
 const kindOf = (ir: ParserIR, name: string) => ir.tokens.find((t) => t.name === name);
 const ir = portableIR(kinds);
@@ -114,7 +114,7 @@ for (const name of ['JSDoc', 'BlockComment']) if (kindOf(portableIR(flat), name)
     ? { ...v, items: [...v.items].sort((a: { value?: string; from?: string }, b: { value?: string; from?: string }) => ((a.value ?? a.from)! < (b.value ?? b.from)! ? -1 : 1)) } : v));
   let lines = 0;
   for (const path of ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)]) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     for (const t of portableIR(g).tokens) {
       if (t.kind !== 'line') continue;
       lines++;
@@ -153,7 +153,7 @@ const countBlock = (out: string[], block: string[]): number => {
   for (let i = 0; i + b.length <= out.length; i++) if (b.every((l, k) => out[i + k] === l)) n++;
   return n;
 };
-const GRAMMARS: [string, CstGrammar][] = [['lexkinds', kinds], ['javascript', flat], ['calc', (await import('./fixtures/calc.ts')).default], ['envtpl', (await import('./fixtures/envtpl.ts')).default]];
+const GRAMMARS: [string, Grammar][] = [['lexkinds', kinds], ['javascript', flat], ['calc', (await import('./fixtures/calc.ts')).default], ['envtpl', (await import('./fixtures/envtpl.ts')).default]];
 for (const [gname, g] of GRAMMARS) {
   const gir = portableIR(g);
   for (const h of HOSTS) {
@@ -309,7 +309,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const PORTABLE = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)];
   let checked = 0;
   for (const path of PORTABLE) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     const gir = portableIR(g);
     const toks = tsTarget.shared.scannedTokens(gir);
     const f = join(dir, `regex${mod++}.ts`);
@@ -344,7 +344,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   // but LF and TAB anywhere, and no character literal that is a raw LF (Go, Rust) or TAB (Rust).
   let sources = 0;
   for (const path of PORTABLE) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     for (const [lang, target, charLit] of [['rust', rustTarget, /'[\n\t]'/], ['go', goTarget, /'\n'/]] as const) {
       for (const [part, src] of [['library', target.emitParser(g)], ['runner', target.emitRunner?.() ?? '']] as const) {
         sources++;
@@ -372,7 +372,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   ];
   let advances = 0;
   for (const path of PORTABLE) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     for (const [lang, target, units, re] of ADVANCE) {
       for (const m of target.emitParser(g).matchAll(re)) {
         const lit = JSON.parse(m[1] ?? m[2]!) as string, n = Number(m[m.length - 1]);
@@ -394,7 +394,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const { scannerName, EL_OPENS_FN, EL_NOT, EL_OPEN, EL_SPECULATE } = await import('../src/lex-family.ts');
   let scanned = 0, decided = 0;
   for (const path of ['../typescriptreact.ts', '../javascriptreact.ts', './fixtures/elementdialect.ts', './fixtures/textdialect.ts']) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     const gir = portableIR(g);
     const e = gir.elements!;
     const region = [...(e.text ? [e.text] : []), ...e.tagTokens];
@@ -482,7 +482,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   let pairs = 0;
   const GS = ['../javascript.ts', '../typescript.ts', ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'sljs', 'unilits'].map((f) => `./fixtures/${f}.ts`)];
   for (const path of GS) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     const pir = portableIR(g);
     const lits = buildLexIdPlan(pir).lids.slice(1);
     for (const t of tsTarget.shared.scannedTokens(pir)) {
@@ -495,7 +495,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
       }
     }
   }
-  const ts = (await import('../typescript.ts')).default as CstGrammar;
+  const ts = (await import('../typescript.ts')).default as Grammar;
   const tir = portableIR(ts);
   const tlits = buildLexIdPlan(tir).lids.slice(1);
   const lists = Object.fromEntries(tsTarget.shared.scannedTokens(tir).filter((t) => !t.skip).map((t) => [t.name, tsTarget.shared.tokenLiterals(tir, t, tlits)]));
@@ -520,7 +520,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const STARTS = ['\u0080', '\u00a0', 'é', 'ñ', '\u2028', '\u2029', '\u3000', '\ufeff', '日', 'ŉ', '😀', '\u0301', '\u200c', '\uffff'];
   let dropped = 0, kept = 0;
   for (const path of GS) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     const pir = portableIR(g);
     const toks = tsTarget.shared.scannedTokens(pir);
     const cands: { name: string; pattern: import('../src/types.ts').TokenPattern }[] = [
@@ -571,7 +571,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
     String: [Infinity, Infinity, true], Template: [Infinity, 0, true], Regex: [Infinity, Infinity, false], Decorator: [Infinity, Infinity, false],
     PrivateField: [Infinity, Infinity, false],
   };
-  const jsg = (await import('../javascript.ts')).default as CstGrammar;
+  const jsg = (await import('../javascript.ts')).default as Grammar;
   for (const d of jsg.tokens) {
     const want = JS_TABLE[d.name];
     const got: [number, number, boolean] = [failRead(d.pattern), overRead(d.pattern), overTrigger(d.pattern).length === 0];
@@ -590,7 +590,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   // Every grammar's every token: the functions agree with one another.
   let rows = 0;
   for (const n of ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'html', 'yaml']) {
-    const g = (await import(`../${n}.ts`)).default as CstGrammar;
+    const g = (await import(`../${n}.ts`)).default as Grammar;
     for (const d of g.tokens) {
       rows++;
       const f = failRead(d.pattern), o = overRead(d.pattern), r = reach(d.pattern);
@@ -614,7 +614,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   const REPL = ['', 'x', '0', '/', '*/', '}', '\n', '"', '\\u0041', ' ', '_5', 'e5', '{'];
   let proved = 0, unbounded = 0;
   for (const path of PORTABLE) {
-    const g = (await import(path)).default as CstGrammar;
+    const g = (await import(path)).default as Grammar;
     const gir = portableIR(g);
     const toks = tsTarget.shared.scannedTokens(gir);
     const plan = lexLookPlan(gir);
@@ -674,7 +674,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   };
   let rxProved = 0;
   for (const n of ['javascript', 'typescript', 'javascriptreact', 'typescriptreact', 'html', 'yaml']) {
-    const g = (await import(`../${n}.ts`)).default as CstGrammar;
+    const g = (await import(`../${n}.ts`)).default as Grammar;
     for (const d of g.tokens) {
       if (d.template) continue;
       const re = new RegExp(`(?:${tokenPatternSource(d)})`, 'y');

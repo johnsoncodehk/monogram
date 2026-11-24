@@ -27,7 +27,7 @@ import {
   token, rule, defineGrammar, left, op, seq, oneOf, range, star, plus, many,
   altPattern, noneOf, notFollowedBy, withHoles, awaitCtx, reservableNot, alt,
 } from '../src/api.ts';
-import type { CstGrammar, RuleExpr } from '../src/types.ts';
+import type { Grammar, RuleExpr } from '../src/types.ts';
 import { asGoMain } from './go-main.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
@@ -161,7 +161,7 @@ function verify(engine: string, parse: (src: string) => unknown | null) {
   }
 }
 
-const grammar: CstGrammar = fixture();
+const grammar: Grammar = fixture();
 const dir = scratchDir('template-holes');
 
 verify('interpreter', createParser(grammar).parse);

@@ -7,7 +7,7 @@
 import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './target.ts';
 import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, recoveryTables } from './emit-portable.ts';
-import type { CstGrammar } from './types.ts';
+import type { Grammar } from './types.ts';
 import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
 import { emitReuseFamily } from './reuse-family.ts';
@@ -69,7 +69,7 @@ export interface TargetDefinition {
   name: string;
   ext: string;
   lowering?: Lowering;
-  emitParser(grammar: CstGrammar, shared: SharedAlgorithms, opts: EmitOptions): string;
+  emitParser(grammar: Grammar, shared: SharedAlgorithms, opts: EmitOptions): string;
   emitRunner?(opts?: EmitOptions): string;
 }
 
