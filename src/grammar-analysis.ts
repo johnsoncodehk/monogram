@@ -13,7 +13,7 @@
 // reserved-aware "qualKeys" variant) and every parse CONTROL loop. The interpreter keeps its
 // loops independent so it remains a genuine oracle for the emitter's loops — an oracle sharing
 // the suspect machinery could not catch bugs in it.
-import { ZERO_WIDTH_MARKERS, isZeroWidthMarker, whenTest } from './grammar-utils.ts';
+import { ZERO_WIDTH_MARKERS, ctxObserves, isZeroWidthMarker, whenTest } from './grammar-utils.ts';
 import type { CstGrammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
 import { tokenPatternFirstCharSet } from './token-pattern.ts';
 
@@ -712,6 +712,9 @@ export function analyzeGrammar(grammar: CstGrammar) {
     templateTokenName, templateTokenNames,
     firstSets, exprFirst, ruleSecond, exprSecond, exprSecondBy,
     suppressSets, suppressSetOf, suppressedIn,
+    // The context-word bits each rule's parse reads (grammar-utils.ts ctxObserves): with the rule,
+    // the key of a memo entry and of a reusable row.
+    ctxObserve: ctxObserves(grammar, prattRules),
   };
 }
 

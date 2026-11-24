@@ -565,7 +565,7 @@ const Expr = rule($ => [
   arm('array', field('bracket', '['), opt(field('element', $)), many(field('comma', ','), opt(field('elementRest', $))), ']'),   // array literal: each element parsed once (see javascript.ts)
   arm('object', '{', sep(field('property', Prop), ','), '}'),
   // Arrow functions, async/non-async SPLIT so the [Await] grammar parameter routes
-  // each arm's params + body to the right rule family (await-yield-fork.ts): an async
+  // each arm's params + body to the right context word (awaitCtx / resetCtx): an async
   // arrow's params and body are await-context (`async (a = await) =>` rejects), a
   // plain arrow's body resets. Type params/annotations stay PLAIN (not await-context).
   // capExpr('?'): an ArrowFunction is the LOWEST-precedence AssignmentExpression — neither a

@@ -59,6 +59,57 @@ export function ctxWordOfMode(mode: CtxMode, splitSync: boolean): number {
   const sync = splitSync ? 4 : 0;
   return mode === 'await' ? 1 : mode === 'yield' ? 2 | sync : mode === 'asyncgen' ? 3 : sync;
 }
+/** The number of distinct values of the context word: a key that joins a position with a word
+ *  (the packrat memo's) is `pos * CTX_SPAN + word`. */
+export const CTX_SPAN = 1 << CTX_PARAMS.length;
+/** The operator word each context bit reserves in an identifier's reserved-word guard
+ *  (`reservableNot`): CTX_WORDS[i] is refused where bit 1 << i is set. */
+export const CTX_WORDS: readonly string[] = ['await', 'yield'];
+/** The bits of the word a reserved-word guard reads (those of CTX_WORDS). */
+export const CTX_WORD_BITS = 3;
+/** Whether a reserved-word guard refuses `text` in context `word` (beyond its own words). */
+export function ctxReserves(word: number, text: string): boolean {
+  if ((word & CTX_WORD_BITS) === 0) return false;
+  const i = CTX_WORDS.indexOf(text);
+  return i >= 0 && (word & (1 << i)) !== 0;
+}
+/** The bits of the context word each rule's parse can read: a `when` (an item, or a gated
+ *  operator of a Pratt rule), a reserved-word guard, or a rule it reaches, without a context
+ *  marker in between (a marker sets the whole word, so what lies under it reads the marker's word,
+ *  not the caller's). A rule's parse is a function of (position, word & observes): the key a memo
+ *  entry or a reused row needs beside the rule. */
+export function ctxObserves(g: Pick<CstGrammar, 'rules' | 'precs'>, prattRules: ReadonlySet<string>): Map<string, number> {
+  const gatedOps = g.precs.reduce((m, l) => l.operators.reduce((n, o) => (o.when !== undefined ? n | whenTest(o.when).mask : n), m), 0);
+  const direct = new Map<string, number>(), reaches = new Map<string, Set<string>>();
+  for (const r of g.rules) {
+    let bits = prattRules.has(r.name) ? gatedOps : 0;
+    const refs = new Set<string>();
+    const walk = (e: RuleExpr): void => {
+      if (!e || typeof e !== 'object') return;
+      switch (e.type) {
+        case 'ref': refs.add(e.name); if (e.hole !== undefined) refs.add(e.hole); return;
+        case 'group': if (e.ctxMode) return; if (e.when !== undefined) bits |= whenTest(e.when).mask; walk(e.body); return;
+        case 'not': if (e.reservable) bits |= CTX_WORD_BITS; walk(e.body); return;
+        case 'seq': case 'alt': e.items.forEach(walk); return;
+        case 'quantifier': walk(e.body); return;
+        case 'sep': walk(e.element); return;
+        default: return;
+      }
+    };
+    walk(r.body);
+    direct.set(r.name, bits); reaches.set(r.name, refs);
+  }
+  const obs = new Map(direct);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [name, refs] of reaches) {
+      let b = obs.get(name)!;
+      for (const s of refs) b |= obs.get(s) ?? 0;
+      if (b !== obs.get(name)) { obs.set(name, b); changed = true; }
+    }
+  }
+  return obs;
+}
 
 /** True if `code` is an identifier-start character: a-z, A-Z, `_`, or `$`. */
 export function isIdentStartCode(code: number): boolean {
