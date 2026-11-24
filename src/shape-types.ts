@@ -291,7 +291,8 @@ export function shapeTypes(shape: Shape, missingArms: Set<string> = new Set()): 
   };
   const optOf = (t: VType, w: string): 'absent' | 'null' | null => {
     if (t.absent && t.nul) { problems.push(`${w}: absent in some terms and null in others; no typed form`); return 'absent'; }
-    return t.absent ? 'absent' : t.nul ? 'null' : null;
+    // A value that is only ever missing (a child of an unmapped rule) is written as absent.
+    return t.absent || (!t.nul && categories(t).length === 0) ? 'absent' : t.nul ? 'null' : null;
   };
   const recNames = new Map<string, string>();
   for (const [n, k] of kinds) if (k.record) recNames.set(n, fresh(pascal(recHint.get(n) ?? 'Record')));

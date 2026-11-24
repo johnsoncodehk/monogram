@@ -216,6 +216,43 @@ for f in $INPUTS; do
   done
 done
 
+phase shape "shape: the typed Rust AST build (src/rust-shape.ts) against the CST build, on the part of checker.ts the shape covers"
+# M only (the typed target is new): the tsc expression shape's synthesized subset
+# (test/fixtures/shape-tsc-synthesized.ts), on checker.cov.ts = checker.ts's outermost expression
+# statements whose value it builds (shape-inputs.ts). Both builds are M's tree, the same engine.
+# SHAPE lines: Callgrind instructions of one parse, fresh and reuse, CST against shape; the
+# per-function breakdowns are kept in cg/M.<mode>.checker.cov.ts.top.txt.
+if [ -f "$W/src-M/test/fixtures/shape-tsc-synthesized.ts" ] && [ -f "$H/shape-tail.rs" ]; then
+  d=$W/mono-shape-M; mkdir -p "$d/src"
+  lim node --stack-size=7000 "$H/shape-inputs.ts" "$W/src-M" "$W" "$W/inputs/checker.ts" | tee -a "$R"
+  printf '[package]\nname = "mono-shape-M"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\n\n[profile.release]\ndebug = true\n' > "$d/Cargo.toml"
+  cat "$W/shape.rs" "$H/shape-tail.rs" > "$d/src/main.rs"
+  sha256sum "$W/shape.rs"
+  if (cd "$d" && RUSTFLAGS="-A warnings" cargo build --release -q); then
+    sb=$d/target/release/mono-shape-M
+    f=checker.cov.ts
+    lim "$sb" --check "$f" | tee -a "$R"
+    cg_run "M.parse.$f" '*mono_prof_parse*' "$(mono prof M typescript)" --once "$f"
+    cg_run "M.parse-reuse.$f" '*mono_prof_parse_reuse*' "$(mono prof M typescript)" --once-reuse "$f"
+    cg_run "M.shape.$f" '*mono_prof_shape*' "$sb" --once "$f"
+    cg_run "M.shape-reuse.$f" '*mono_prof_shape_reuse*' "$sb" --once-reuse "$f"
+    for m in shape shape-reuse parse parse-reuse; do
+      callgrind_annotate --inclusive=no "$OUT/cg/M.$m.$f.out" 2>/dev/null | grep -E '^ *[0-9,]+ ' | head -30 > "$OUT/cg/M.$m.$f.top.txt" || true
+      echo "--- top functions M.$m.$f"; cat "$OUT/cg/M.$m.$f.top.txt"
+    done
+    irof() { grep -E "^IR M\.$1\.$f " "$R" | tail -1 | awk '{print $3}'; }
+    for mode in fresh reuse; do
+      sm=; [ $mode = reuse ] && sm=-reuse
+      c=$(irof "parse$sm"); s=$(irof "shape$sm")
+      echo "SHAPE $f $mode cst=$c shape=$s delta=$(awk -v c="$c" -v s="$s" 'BEGIN { if (c > 0) printf "%+.2f%%", (s - c) * 100 / c; else print "?" }')" | tee -a "$R"
+    done
+  else
+    echo "SHAPE build FAILED" | tee -a "$R"
+  fi
+else
+  echo "SHAPE skipped (M has no typed shape target)" | tee -a "$R"
+fi
+
 phase go-ts-targets "Go and TS targets: work per parse of the same inputs (Go: Callgrind instructions; TS target and emitted JS parser: V8 block executions)"
 # So that a change which improves one target only shows as a move in one column of the summary.
 # Go: test/bench-targets/go-main.go count (a parse into a reused CstBuilder: the direct engine) and
