@@ -1,4 +1,4 @@
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { readFileSync } from 'fs';
 const grammar = (await import('../typescript.ts')).default;
 const { parse } = createParser(grammar);

@@ -10,7 +10,7 @@
 //   evaluateShape(shape, cst, src) the value of a CST node (a Program, or any node: e.g. a Stmt)
 //   shapeCoverage(shape)           which (rule, arm) pairs the spec maps; what a left-out one does
 //   dependencies(shape)            per (rule, arm): which inherited attributes its value reads
-import type { CstChild, CstLeaf, CstNode } from './gen-parser.ts';
+import type { CstChild, CstLeaf, CstNode } from './interpreter.ts';
 import type { Grammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts';
 import { isKeywordLiteral, ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';

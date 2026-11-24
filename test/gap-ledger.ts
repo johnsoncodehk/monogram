@@ -46,7 +46,7 @@ import onig from 'vscode-oniguruma';
 import ts from 'typescript';
 import { parseAllDocuments } from 'yaml';
 import { parseFragment } from 'parse5';
-import { createParser, type CstNode } from '../src/gen-parser.ts';
+import { createParser, type CstNode } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import {

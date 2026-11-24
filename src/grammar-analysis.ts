@@ -1,6 +1,6 @@
 // grammar-analysis.ts — the STRUCTURAL static analysis both parser engines derive from a
-// Grammar, single-sourced. createParser (gen-parser.ts, the runtime interpreter / oracle)
-// and emitParser (emit-parser.ts, the standalone compiler) must agree on precedence/binding
+// Grammar, single-sourced. createParser (interpreter.ts, the runtime interpreter / oracle)
+// and emitParser (target-js.ts, the standalone compiler) must agree on precedence/binding
 // power, NUD/LED (Pratt) and atom/continuation (left-rec) classification, nullability, and —
 // critically — what counts as left-recursive. These are pure functions of the grammar, so a
 // second hand-written copy is not an independent oracle, only a place for the two to DRIFT.

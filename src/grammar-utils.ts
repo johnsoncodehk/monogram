@@ -1,8 +1,8 @@
 // Structural primitives over the grammar AST (RuleExpr), shared by the parser
-// generator (gen-parser) and the TextMate highlighter generator (gen-tm).
+// generator (interpreter) and the TextMate highlighter generator (gen-tm).
 //
 // Only PURE, structural helpers belong here — the small things both consumers
-// build on. The high-level logic stays separate: gen-parser's parse strategy
+// build on. The high-level logic stays separate: interpreter's parse strategy
 // (FIRST sets, left-recursion, Pratt classification) answers "how to parse";
 // gen-tm's shape detection answers "how to emit TextMate regexes". Those change
 // for different reasons and must not be coupled.

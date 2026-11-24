@@ -40,7 +40,7 @@ import { rustTarget } from '../src/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { scratchDir } from './scratch.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 
 const LONG = readFileSync(new URL('../typescript.ts', import.meta.url), 'utf8');

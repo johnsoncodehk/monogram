@@ -5,7 +5,7 @@
 // and, when it accepts, the oracle's rule skeleton; every lexer gives the oracle lexer's token
 // stream (kind, text, newline-before; text rather than offsets, whose units differ by target), or
 // fails on it as the oracle lexer does; literal ids are the table's; the Doc path ≡ a fresh parse.
-import { buildLexIdPlan, elementTokens, portableIR } from '../src/emit-portable.ts';
+import { buildLexIdPlan, elementTokens, portableIR } from '../src/parser-ir.ts';
 import { canon, errText, finish, gate, parityCorpus, prepareAll, skeleton, unLid, type TokStream } from './portable-harness.ts';
 import { CASES } from './portable-cases.ts';
 

@@ -3,7 +3,7 @@
 How the handle API (`createParser()`) parses *every* text into a tree plus
 `cst.errors` while keeping two byte-identity guarantees no mainstream engine
 makes, and why each piece is sound. The implementation lives in
-`src/emit-parser.ts` (emitted runtime) and is held exact by the gates listed at
+`src/target-js.ts` (emitted runtime) and is held exact by the gates listed at
 the end.
 
 ## The contract
@@ -233,5 +233,5 @@ first-error agreement 57.5%.
   token streams, and reject messages). They run on a corpus-free in-repo corpus
   (`test/emit-corpus.ts`: curated snippets + the repo's own sources), so they are
   part of `npm run check` on every machine — the mechanism that forces a
-  gen-parser change to propagate to emit-parser. The CI `emit-parity` job adds the
+  interpreter change to propagate to target-js. The CI `emit-parity` job adds the
   full external TS corpus for breadth.

@@ -70,8 +70,8 @@ inputs that the productions reject. The parser rejects both:
 ## The engines' mechanisms, one by one
 
 Every engine runs the same plan: try a rule's alternatives, take the longest match, and on a tie take
-the earliest-declared one. The table lists each place where the interpreter (`src/gen-parser.ts`, the
-reference) does more than that. For each, it gives the IR construct in `src/emit-portable.ts`, the
+the earliest-declared one. The table lists each place where the interpreter (`src/interpreter.ts`, the
+reference) does more than that. For each, it gives the IR construct in `src/parser-ir.ts`, the
 lowering member each printer implements (`src/target-{ts,go,rust}.ts`: the TS `prattRuleW`, the Go
 native and builder forms, the Rust `prattRule`; the recovery interpreter `src/recovery-family.ts`
 reads the same facts from its table, and `test/ir-engine.ts` mirrors them), and the list rows in

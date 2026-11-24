@@ -1,11 +1,11 @@
-// The TypeScript Target for emit-portable. Renders the language-agnostic ParserIR into a
+// The TypeScript Target for parser-ir. Renders the language-agnostic ParserIR into a
 // self-contained TS parser: a char-class/string/comment lexer, a backtracking recursive-
 // descent core, a Pratt expression engine (prefix + binary precedence + mixfix call/member/
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './parser-ir.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -15,7 +15,7 @@ import type {
   RuleShape, TokenLeafPolicy, ShapeIRRule, CustomShape, KeepShape,
 } from './shape-schema.ts';
 import { validateShapeOrThrow } from './shape-validate.ts';
-import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
+import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, isValList, isValTy, recName, type BinOp, type Lowering, type R, type Ty } from './algo-ir.ts';
 import type { ShapePlan } from './shape-plan.ts';
 import { cookTable } from './shape-cook.ts';
@@ -35,7 +35,7 @@ const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
 /** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
 const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
   isFirstGuardable(f, nAlts);
-// A longest-match candidate's Guard (emit-portable.ts) over the buffered token t, as conditions;
+// A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
   g === null ? [] : [...(keyed || g.first === null ? [] : [`inSet(${g.first.id}, ${t})`]), ...(g.second !== null ? [`secondIn(${g.second.id})`] : []),
@@ -53,7 +53,7 @@ const dispatchTsL = (t: string): DispatchLowering => ({
 });
 const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
   dispatchWalk(d, ids, arm, dispatchTsL(t), nilable);
-// A Commit's switch (emit-portable.ts commitWalk) over the buffered token t.
+// A Commit's switch (parser-ir.ts commitWalk) over the buffered token t.
 const commitSwTs = (t: string): CommitLowering => ({
   sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `  ${c.keys.map((k) => `case ${k}:`).join('')}${c.stmt ? `\n${c.stmt}` : ''}${c.ends ? '' : '\n  break;'}`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
   ifAll: ifTs,
@@ -735,7 +735,7 @@ function liftConst(ids: LexIdPlan, lit: string): string {
   if (name === undefined) m.set(lit, (name = `_arr${m.size}`));
   return name;
 }
-// The step walk's TS spelling (emit-portable.ts, StepLowering), building ('w': children onto the
+// The step walk's TS spelling (parser-ir.ts, StepLowering), building ('w': children onto the
 // child stack) or recognizing ('r': nothing built). TS: a body or a step's statements are a lifted
 // module-level function (lift), so no closure is allocated where it runs.
 const SUFFIX: Record<Mode, string> = { w: 'W', r: 'R' };
@@ -787,7 +787,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     armForm: armFormTs,
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (m === 'r' ? `_drop(_n, ${name}_bpW(${bp}))` : `${name}_bpW(${bp})`),
-    // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
+    // A body guard (parser-ir.ts annotateSteps): opt / sep test it before their one attempt,
     // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
     // attempted without a mark (starC / sepByC; an opt's attempt is the body itself). A body that
     // fails with leaves only (MarkForm 'leaves') takes the full mark: this target's mark is already
@@ -872,7 +872,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan): string {
   return ruleShell(r, ids, tsRules(r, ids, 'w'));
 }
 
-// The TS spelling of an rd rule's shell (emit-portable.ts, ruleShell) in form m: building ('w')
+// The TS spelling of an rd rule's shell (parser-ir.ts, ruleShell) in form m: building ('w')
 // keeps the child stack's height `b` beside the position and finishes the node (finR); a candidate
 // that wins is moved down to `b` over the best it beat (candTs).
 function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
@@ -907,7 +907,7 @@ function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
   };
 }
 
-// The entry rule in builder form (emit-portable entryShell), recording what incremental reuse
+// The entry rule in builder form (parser-ir entryShell), recording what incremental reuse
 // needs: shape A one EntryMeta per top-level entry, shape B one EntryMeta per segment (kidCount:
 // its root kids, in handles). Engine-side metadata only (R2): consumer handles are never read or
 // mutated; _entryHs is a copy of the root's children.
@@ -994,8 +994,8 @@ ${headUse}  for (;;) {
   });
 }
 
-/** A Pratt rule's operator tables: the operator row (emit-portable prattOpRow) as a Uint32Array
- *  indexed by lid, and the prefix tables (emit-portable prattOpTables) keyed by the operator's lid:
+/** A Pratt rule's operator tables: the operator row (parser-ir prattOpRow) as a Uint32Array
+ *  indexed by lid, and the prefix tables (parser-ir prattOpTables) keyed by the operator's lid:
  *  an object literal with integer keys, which V8 keeps as indexed elements (no hashing). The
  *  typed-AST printers read the same tables. */
 /** The prefix operator's operand binding power at the buffered token t (undefined: no prefix
@@ -1016,12 +1016,12 @@ const ${r.name}_PRE_FORM: Record<number, number> = ${rec(ops.pre, (p) => p.form)
 const ${r.name}_PRE_TGT = ${set(ops.pre)};`;
 }
 
-/** A Pratt rule in building form, over the child stack (emit-portable prattShell): its operator
+/** A Pratt rule in building form, over the child stack (parser-ir prattShell): its operator
  *  row ${name}_ROW and tables _PRE, then `X_bpW` / `X_nudW`, which return whether they matched;
  *  matched, the node is the one slot left at the height `b` they found, else the stack is back at
  *  `b`. In the led loop the left operand is slot `b`: a led appends its other children after it,
  *  and `finP` finishes them all into slot `b`, the new left operand. */
-// A NUD arm's capped flag (emit-portable NodeCap): 'tail' is the flag its trailing operand left.
+// A NUD arm's capped flag (parser-ir NodeCap): 'tail' is the flag its trailing operand left.
 const capTs = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail' ? '_capped' : 'false');
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRuleW's nudClose).
 const NUD_FAIL_TS = '{ return nudNone(); }';
@@ -1033,7 +1033,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowTs(ir, f);
   // The binary node's form: not a target, plus its leaf bits and those its left operand passes.
-  // The operators a target context reads (emit-portable binLeftOps) are a switch behind the table's
+  // The operators a target context reads (parser-ir binLeftOps) are a switch behind the table's
   // test bit: every other operator tests what it did without contexts and its node's form is a constant.
   const leftOps = binLeftOps(prattOpTables(r, ids));
   // The demand operators of this rule (DemandIR.ops): their node is ASSIGNED, and a left operand
@@ -1074,7 +1074,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
       back(save);
     } }`,
     dispatch: dispatchTsL('t'),
-    // A committed arm (emit-portable.ts Commit) leaves what the frame's close would: its node (the
+    // A committed arm (parser-ir.ts Commit) leaves what the frame's close would: its node (the
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, `nud${i}`, 'b')}; _form = ${fm(i)}; _tail = false; return true; }`, NUD_FAIL_TS, true),
     commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')};${cap === 'tail' ? '' : ` _capped = ${capTs(cap)};`} _form = ${fm(i)}; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
@@ -1225,7 +1225,7 @@ function _accK(m: number): boolean { _acc = (_acc & ~((_acc >> 1) & ${t.passes})
 function _accS(): boolean { _acc &= ~((_acc >> 1) & ${t.passes}); return true; }
 `;
 }
-// The demand form of a target context (emit-portable.ts DemandIR): the twins (each container arm's
+// The demand form of a target context (parser-ir.ts DemandIR): the twins (each container arm's
 // accumulating steps, `_twin<k>`; the closure's rd rules, `parse<rule>__twinW`), `_dfix` (a twin's
 // Pratt child: its form read as the eager plan's), `_twinForm` (twin k over p0..stop by
 // reparseFrom, src/reparse-family.ts: its form, 0 when it fails), and per rule the cold
@@ -2199,7 +2199,7 @@ function emitChoiceArmTry(
 }
 
 // parseAst<rule> chooses among a rule's alternatives as parse<rule> does: longest match in
-// declaration order (emit-portable.ts, RdRule) — an alternative is kept only when it ends past
+// declaration order (parser-ir.ts, RdRule) — an alternative is kept only when it ends past
 // `bestPos`. A rule with one alternative has nothing to choose, so its match is taken as it is.
 const astBestInit = (r: RdRule): string => (r.alts.length > 1 ? 'save' : 'save - 1');
 // Emitted between an alternative's steps and its finish: an alternative that does not end past
@@ -2688,7 +2688,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   }
 
   // ── NUD selection ─────────────────────────────────────────────────────────
-  // Longest match over the arms in declaration order (emit-portable.ts, PrattRule.nudOrder),
+  // Longest match over the arms in declaration order (parser-ir.ts, PrattRule.nudOrder),
   // as the CST parser does. Each arm's code returns its value when it matches and falls out
   // otherwise; it is tried from `save`, and kept only when it ends past the best so far.
   // `hard` is the prefix arm's "operand is not the target the operator requires": the whole
@@ -2867,7 +2867,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     postfixTokSwitch = `    switch (t.kid) {\n${cases}\n    }${tplPart}`;
   }
 
-  // The operator row (tsPrattOpTables' ${name}_ROW, emit-portable prattOpRow): a postfix lbp of 0
+  // The operator row (tsPrattOpTables' ${name}_ROW, parser-ir prattOpRow): a postfix lbp of 0
   // is no postfix operator, a binary lbp of 0 no binary one (minBp >= 0).
   const postRead = `    const prow = ${r.name}_ROW[t.lid]!;
     if (!tailClosed && (prow >>> ${OP_ROW.postShift} & ${OP_ROW.bpMask}) > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
@@ -3536,7 +3536,7 @@ function secondIn(k: number): boolean {
 }
 
 function emitTsLibrary(ir: ParserIR, ids: LexIdPlan, shared: SharedAlgorithms): string {
-    return `// GENERATED by emit-portable.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`tokenize\` + \`parse\`).
+    return `// GENERATED by parser-ir.ts (tsTarget) — parser LIBRARY for grammar "${ir.grammarName}" (exports \`tokenize\` + \`parse\`).
 // The CLI runner (stdin → CST JSON) is a SEPARATE piece — tsTarget.emitRunner(), appended by the harness.
 
 type Tok = { off: number; end: number; nl: boolean; kid: number; lid: number };

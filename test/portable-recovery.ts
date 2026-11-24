@@ -6,7 +6,7 @@ import { ECMASCRIPT, canon, finish, gate, parityCorpus, prepareAll, selectedCase
 import { checkContract, damage, summarize, withOperandSamples, type ContractRow } from './recovery-contract.ts';
 import { RM_MAX_BARS } from '../src/recovery-family.ts';
 import type { Tok } from './parity-corpus.ts';
-import { portableIR, type PortableFacts } from '../src/emit-portable.ts';
+import { portableIR, type PortableFacts } from '../src/parser-ir.ts';
 import { FACTS as TS_FACTS } from '../src/target-ts.ts';
 import { FACTS as GO_FACTS } from '../src/target-go.ts';
 import { FACTS as RS_FACTS } from '../src/target-rust.ts';

@@ -15,10 +15,10 @@ in the [README](../README.md#what-you-get).
 
 ## 1. One portable engine, one shared runtime description
 
-**Why.** There are two execution paths today besides the interpreter (`src/gen-parser.ts`, the
-reference): the emitted JavaScript parser (`jsTarget`: `src/emit-parser.ts`, with the lexer
+**Why.** There are two execution paths today besides the interpreter (`src/interpreter.ts`, the
+reference): the emitted JavaScript parser (`jsTarget`: `src/target-js.ts`, with the lexer
 emitter in `src/emit-lexer.ts`) and the portable targets (`tsTarget`, `goTarget`,
-`rustTarget`: `src/emit-portable.ts` plus one printer each in `src/target-*.ts`). The shared
+`rustTarget`: `src/parser-ir.ts` plus one printer each in `src/target-*.ts`). The shared
 layer of the portable targets covers the analysis, the parse plan (`ParserIR`), the token
 scanners (`src/lex-family.ts`, `src/lex-match-plan.ts`) and the re-lex family
 (`src/relex-family.ts`, through `src/algo-ir.ts`). The rest of each printer is a hand-written

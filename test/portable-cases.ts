@@ -21,7 +21,7 @@ export type Case = { grammar: string; path: string; parts?: Record<string, boole
 // it wraps, a nested call (parentheses, arguments, an object, array or template, a function or arrow
 // block body) has `in` again, and every alternative of the head that fails inside or after it backs
 // out of it. Each verdict is tsc's parser's too.
-// Cap propagation (the interpreter's, gen-parser.ts): an ArrowFunction is an AssignmentExpression,
+// Cap propagation (the interpreter's, interpreter.ts): an ArrowFunction is an AssignmentExpression,
 // so it admits no operator after it, and an operator whose right operand is an arrow admits none
 // either (`x = () => {} || a` is no derivation); a parenthesized or nested arrow (an argument, an
 // element) does not cap what holds it. Each verdict is the productions'. The cap also passes up
@@ -100,7 +100,7 @@ const FOR_HEADS = {
   ],
 };
 // A repetition whose element is one Pratt call and whose next step refuses every token a dirty
-// failure of the call stops at (emit-portable.ts, `doomed`: an argument list `(` sep(Expr) `)`)
+// failure of the call stops at (parser-ir.ts, `doomed`: an argument list `(` sep(Expr) `)`)
 // takes no mark per element: an element that fails after its NUD matched (an operator that needs a
 // target) leaves the list to fail at `)`, and the call's frame undoes it. Each verdict is the
 // productions'; the rejected ones are each such a failure, in one argument or a later one.
@@ -313,7 +313,7 @@ const TS_TRY = {
   ],
 };
 // A type assertion `<T>e` is a UnaryExpression (tsc's parseTypeAssertion): its operand is read at
-// the prefix operators' level and the node is prefix-shaped (emit-portable PrattRule.nudSeqForm):
+// the prefix operators' level and the node is prefix-shaped (parser-ir PrattRule.nudSeqForm):
 // no assignment target, no `**` left operand, no arrow operand, and tighter tails stay inside.
 const TS_TYPE_ASSERTION = {
   accept: ['<T>a;', '<T>a++;', '(<T>a) ** b;', '<T>a.b(c);', '<T>a as U;', 'x = <T>a + b;', '<T>-a;', '(<T>a) = b;', '<T><U>a;', '<T>a!;', 'x = <T>() => 1;', '<T>a`x`;'],

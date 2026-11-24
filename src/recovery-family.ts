@@ -17,8 +17,8 @@
 
 import { type Expr, type Fn, type Lowering, type RecordDecl, type Stmt, printFns } from './algo-ir.ts';
 import { RI_RB_SCAN, RB_EXTERNS_INTERP, REBIND_EXTERNS, rbBracketFn } from './rebind-family.ts';
-import { type ArenaIdPlan, type LexIdPlan, type ParserIR, ruleIdOf, tplHoleRules } from './emit-portable.ts';
-import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED, REC_S_WHEN } from './emit-portable.ts';
+import { type ArenaIdPlan, type LexIdPlan, type ParserIR, ruleIdOf, tplHoleRules } from './parser-ir.ts';
+import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED, REC_S_WHEN } from './parser-ir.ts';
 
 export const DIAG: RecordDecl = {
   name: 'Diag',
@@ -102,7 +102,7 @@ const rejectDiag: Fn = {
     ] },
     { k: 'if', c: bin('ge', v('pos'), { k: 'len', e: v('toks') }), then: [ret(diag(n(DK_EOF), n(0), n(0), v('relOff'), v('relEnd')))] },
     { k: 'let', name: 'kind', ty: 'int', init: n(DK_UNEXPECTED) },
-    // A rule matches only when it consumes a token (longest match: gen-parser.ts parseNonRec); the
+    // A rule matches only when it consumes a token (longest match: interpreter.ts parseNonRec); the
     // reuse plan's entry shells return true for zero top-level entries.
     { k: 'if', c: bin('and', v('entryOk'), bin('gt', v('pos'), n(0))), then: [{ k: 'set', name: 'kind', e: n(DK_LEFTOVER) }] },
     ret(diag(v('kind'), tok(v('pos'), 'off'), tok(v('pos'), 'end'), v('relOff'), v('relEnd'))),
@@ -111,7 +111,7 @@ const rejectDiag: Fn = {
 
 
 // ── The strict interpreter (stage 2) ──
-// The parse plan's tables (emit-portable.ts recoveryTables, the int table `rt`) run over the
+// The parse plan's tables (parser-ir.ts recoveryTables, the int table `rt`) run over the
 // target's engine. It parses as the native functions do: the same verdict, the same tree through
 // the builder, the same leaves offered to it. A longest-match list's candidates are tried in
 // declaration order where their guards admit the token (the native Dispatch / Commit only skip
@@ -539,7 +539,7 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   ret(fls),
 ]);
 
-// ── Pratt rules (record rec: emit-portable.ts recoveryTables, pratt) ──
+// ── Pratt rules (record rec: parser-ir.ts recoveryTables, pratt) ──
 // The cells of a Pratt record: its header, then sections at offsets the header holds.
 const P_NUD_HOLE = 1, P_POST_HOLE = 2, P_POST_SAMELINE = 3, P_ARMS = 4, P_PRE = 5, P_BIN = 6, P_POST = 7, P_LED = 8, P_POST_TOK = 9;
 const sec = (k: number): Expr => add(v('rec'), at(v('rec'), k));

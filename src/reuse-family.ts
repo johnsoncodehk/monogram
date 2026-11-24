@@ -13,7 +13,7 @@
 // root are each target's engine and builder; this family decides which entries are kept, where
 // the re-parse starts, and when an entry is adopted or none can be any more.
 
-import type { ParserIR } from './emit-portable.ts';
+import type { ParserIR } from './parser-ir.ts';
 import { type Expr, type Fn, type Lowering, type RecordDecl, type Stmt, printFns } from './algo-ir.ts';
 
 export const ENTRY_META: RecordDecl = {

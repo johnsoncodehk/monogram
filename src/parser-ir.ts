@@ -1,4 +1,4 @@
-// ── emit-portable ──
+// ── parser-ir ──
 //
 // The target-agnostic emitter (issue #6). `emitParser(grammar, target)` (see emit.ts) derives
 // a COMPLETE, self-contained parser in the target's language from the same Grammar the
@@ -196,7 +196,7 @@ export type TokenSet = { lits: string[]; toks: string[] };
 // ── How a rule chooses among its alternatives: LONGEST MATCH ──
 // A rule's alternatives (an rd rule's `alts`, a Pratt rule's NUD arms) are all candidates at a
 // position: the one that advances FARTHEST wins, the EARLIEST-declared one on a tie, and an
-// alternative that advances nothing cannot win (README "Adding a language"; gen-parser.ts
+// alternative that advances nothing cannot win (README "Adding a language"; interpreter.ts
 // parseNonRec / the NUD loop of prattCore). So the IR hands every target the alternatives in
 // the grammar's DECLARATION order — `RdRule.alts`, `PrattRule.nudOrder` — and a target tries
 // them in that order, keeping an alternative only when it ends strictly past the best so far
@@ -950,7 +950,7 @@ function buildIR(grammar: Grammar, facts: PortableFacts): ParserIR {
     return id;
   };
   // The suppress sets and which of them disable a led are the grammar analysis's (one definition,
-  // shared with the jsTarget parser of emit-parser.ts).
+  // shared with the jsTarget parser of target-js.ts).
   const { suppressSets } = a;
   const suppressOf = (connectors: string[], steps: Step[]): Step => ({ t: 'suppress', set: a.suppressSetOf(connectors), steps });
   const splitSync = readsSyncFn(grammar);
@@ -1046,7 +1046,7 @@ function buildIR(grammar: Grammar, facts: PortableFacts): ParserIR {
   // - second: the tokens such a match can continue with. The argument: exprSecond over-approximates
   //   the token that follows the FIRST token of every match, and `len1` says whether a match of
   //   one token exists. Only when none does (and the alternative is not nullable — the
-  //   interpreter's condition, gen-parser.ts altSecondDispatch) is a second token outside that set
+  //   interpreter's condition, interpreter.ts altSecondDispatch) is a second token outside that set
   //   proof that the alternative cannot match non-empty here. That reads the token after the
   //   first as what follows it in the grammar, which holds only where the first token is ONE
   //   token of the stream: an interpolated template is a head token followed by its hole's
@@ -2509,7 +2509,7 @@ function buildPratt(
   const nudBracketForm = nudBrackets.map((b): AssignForm => (endsInLevelOperand(b.steps) ? FORM_UNARY : FORM_TARGET));
   const nudSeqForm = nudSeqs.map((st): AssignForm => (endsInLevelOperand(st) ? FORM_UNARY : FORM_TARGET));
   // A trailing NEGATIVE lookahead closes the tail (`Foo<T>` then no `(`); a positive one asserts that a
-  // continuation follows (Python's `&t_lookahead`) and leaves it open (gen-parser.ts negativeLook).
+  // continuation follows (Python's `&t_lookahead`) and leaves it open (interpreter.ts negativeLook).
   const ledClosesTail = leds.map((l, i) => { const last = l.steps[l.steps.length - 1]; return !ledAccessTail[i] || ((last?.t === 'look' || last?.t === 'ahead' || last?.t === 'aheadCtx') && !last.is); });
   const capsFromTail = (steps: Step[]): boolean => nudCapped.length > 0 && endsInOperand(steps);
   const nudBracketCapsFromTail = nudBrackets.map((b) => capsFromTail(b.steps));
@@ -2820,7 +2820,7 @@ export function binLeftOps(ops: PrattOpTables): Array<{ lid: number; ctx: number
 
 /** The LED loop's exits: the literal ids of a Pratt rule's led groups (its leds by first literal)
  *  after which the loop ENDS when every arm of the group was tried and failed. The reference
- *  (gen-parser.ts parsePratt) goes on to the operator table when no led matched; it can match only
+ *  (interpreter.ts parsePratt) goes on to the operator table when no led matched; it can match only
  *  a token that a later check of the loop takes: a postfix token (by the kinds the lexer gives the
  *  literal, or the head of an interpolated template), a postfix or binary operator by its own lid, or a `>` that composes with the tokens
  *  after it (`>>`, `>=`, ...: ParserIR.gtComps). A group whose lid none of them takes ends the
@@ -3237,7 +3237,7 @@ export function formatFirstBytes(fb: LexFirstBytes | null): string {
 // the record (>= 1; -1 none), so most fit in one or two packed digits. The plan's choices that exist only to skip work (Dispatch
 // order, Commit, elided marks) are not encoded: the interpreter tries a longest-match list's
 // candidates in declaration order, each where its Guard admits the token, which is the same match
-// (emit-portable "LONGEST MATCH"); FIRST-set guards are kept, so the candidates tried are the
+// (parser-ir "LONGEST MATCH"); FIRST-set guards are kept, so the candidates tried are the
 // native parser's.
 //
 // Layout: [0] the number of rules N; [1] the kid of a template head ($templateHead, or -1);

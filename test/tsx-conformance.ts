@@ -19,7 +19,7 @@
 //      `ElementRegion` in src/types.ts). A row that starts parsing fails the gate.
 //
 //   4. Invalid TSX that must be REJECTED (near misses of the element region).
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import ts from 'typescript';
 
 const grammar = (await import('../typescriptreact.ts')).default;

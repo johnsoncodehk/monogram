@@ -1215,7 +1215,7 @@ Toolchain rebuilt after the /tmp loss (emitRust + injectTypescriptRustCustoms +
 bench main; 6.8MB Rust). Of the six ≥100KB hand-written src/*.ts files, only
 two parse (the grammar gaps fixed earlier unlocked `<`/template but the
 remaining 4 still hit uncovered constructs — see KNOWN-GAPS.md): the
-measurable ones show stream/cst = 0.956 (emit-parser.ts, 210KB) and 0.957
+measurable ones show stream/cst = 0.956 (target-js.ts, 210KB) and 0.957
 (target-go.ts, 147KB), 8-round load-gated interleaved medians. The stream is
 ~4% faster than CST on real code — MORE favorable than the synthetic 2MB bench
 (1.03): the synthetic corpus (8 statements × 9616) is skewed toward many small

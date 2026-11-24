@@ -6,7 +6,7 @@
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './target.ts';
-import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, recoveryTables } from './emit-portable.ts';
+import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, recoveryTables } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
 import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
@@ -25,7 +25,7 @@ export interface SharedAlgorithms {
   reuseFamily(ir: ParserIR): string;
   // Total parsing's diagnostics and their one formatter (src/recovery-family.ts), for the emit
   // option `recovery`.
-  // With the strict interpreter over the parse plan's table (emit-portable recoveryTables);
+  // With the strict interpreter over the parse plan's table (parser-ir recoveryTables);
   // `methods`: only its engine methods (true) or only the free functions (false), for a target
   // that prints its engine's methods inside the receiver's declaration.
   recoveryFamily(ir: ParserIR, methods?: boolean): string;

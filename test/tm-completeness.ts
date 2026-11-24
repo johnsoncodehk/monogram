@@ -47,7 +47,7 @@ import { tokenPatternToRegex, tokenPatternIsNever, tokenPatternLiteralText } fro
 import { collectLiterals, isKeywordLiteral } from '../src/grammar-utils.ts';
 import type { RuleExpr, TokenPattern, Grammar } from '../src/types.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, GEN_OPTS, type TmTok, type Bucket } from './generative-detect.ts';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';

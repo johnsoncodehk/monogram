@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
+import { createParser, type CstLeaf, type CstNode } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import { armNameOf, dependencies, evaluateShape, evaluator, defineShape, ShapeSpecError, ShapeUnmapped, spineOf, type ShapeValue } from '../src/shape2-eval.ts';
 import { nodeKeysOf } from '../src/shape2-schema.ts';

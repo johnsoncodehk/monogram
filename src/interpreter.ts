@@ -160,7 +160,7 @@ export function createParser(grammar: Grammar) {
   }
   // An operand of this rule read at an operator's level (`atLevel(op, $)`): a NUD ending in one is
   // PREFIX-SHAPED (the type assertion `<T>e`, a capped prefix `not e`): its node closes the tail and
-  // has the prefix-unary form (not a target, no noUnaryLhs left operand), as emit-portable derives.
+  // has the prefix-unary form (not a target, no noUnaryLhs left operand), as parser-ir derives.
   function selfAtLevel(e: RuleExpr | undefined, ruleName: string): boolean {
     return !!e && e.type === 'group' && e.atLevel !== undefined && selfRefName(e.body, ruleName);
   }

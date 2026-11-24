@@ -57,7 +57,7 @@ export function generateCstMatch(grammar: Grammar): string {
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
   const templateTokenNames = new Set(grammar.tokens.filter(t => t.template).map(t => t.name));
   const ruleNames = new Set(grammar.rules.map(r => r.name));
-  // Int worlds, replicated from emit-parser's symtab (same deterministic derivation
+  // Int worlds, replicated from target-js's symtab (same deterministic derivation
   // from the grammar; any drift is caught instantly by cst-match-totality):
   //   token TYPE kinds — '' punct = 1, $template spans = 2/3/4, named tokens from 5
   //   rule ids — declaration order; the synthetic '$template' node = rules.length

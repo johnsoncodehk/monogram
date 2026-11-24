@@ -982,7 +982,7 @@ function buildPrattRule(rule: RuleDecl, ctx: GrammarJsContext): string {
 
 /**
  * Where the readings of a Pratt rule overlap, the interpreter's order, rendered so tree-sitter keeps
- * the same reading (gen-parser.ts prattCore). Its LED loop tries the continuations in grammar order
+ * the same reading (interpreter.ts prattCore). Its LED loop tries the continuations in grammar order
  * before any operator, and the first that matches wins; its NUD takes the longest match, an
  * alternative inside an arm the first that matches. Three facts follow:
  * - `yields`: a continuation whose consuming items are a strict prefix of an EARLIER continuation's
@@ -2841,7 +2841,7 @@ function seqHasParenExpr(alt: RuleExpr, selfName: string): boolean {
 /**
  * Plan for an interpolated-template token. The single regex token (`Template`) is
  * re-expressed as a tree-sitter RULE so `${ … }` holes re-enter the expression
- * grammar, mirroring how gen-parser.ts/emit-lexer.ts split a template into
+ * grammar, mirroring how interpreter.ts/emit-lexer.ts split a template into
  * head/middle/tail spans around interpolation holes. All delimiters are DERIVED
  * from the token's `template` hint — nothing here is TS-specific.
  */

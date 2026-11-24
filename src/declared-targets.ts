@@ -30,15 +30,15 @@
 // lowRs), a writer ORs the arm's leaf / last bits in (ArmForm, PrattRule.ledForm / postForm /
 // binForm / preLeaf). Readers: the prefix operand's requireTarget test (nudPrefix, commitPrefix),
 // the postfix operator's (postfixOp), the binary operator's requireTarget and noUnaryLhs tests
-// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`; a prefix-shaped bracket / sequence arm, ending in an `atLevel` operand, has FORM_UNARY low bits: PrattRule.nudBracketForm / nudSeqForm, emit-portable nudLowForm), the
+// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`; a prefix-shaped bracket / sequence arm, ending in an `atLevel` operand, has FORM_UNARY low bits: PrattRule.nudBracketForm / nudSeqForm, parser-ir nudLowForm), the
 // prefix node (PrattOpTables pre.form), every led (ledForm), a postfix token / template arm
 // (postfixTokForm), the postfix operator node (postForm), the binary node (binForm), an rd rule of
 // the closure (altForm). Not yet: the recovery encoding (recoveryTables refuses contexts) and the
 // typed-AST forms (they refuse them by name). The interpreter computes the predicate as a CST walk
 // (declared-targets-cst.ts), not from these bits.
 import type { Grammar } from './types.ts';
-import type { RuleIR, Step, RdRule, PrattRule, TargetsIR, DemandTwin } from './emit-portable.ts';
-import { formPass, formLast, FORM_MAX_CONTEXTS, nudLowForm, DEFER_SHIFT, DEMAND_ASSIGNED, DEMAND_MAX_TWINS } from './emit-portable.ts';
+import type { RuleIR, Step, RdRule, PrattRule, TargetsIR, DemandTwin } from './parser-ir.ts';
+import { formPass, formLast, FORM_MAX_CONTEXTS, nudLowForm, DEFER_SHIFT, DEMAND_ASSIGNED, DEMAND_MAX_TWINS } from './parser-ir.ts';
 
 // acc: init, the bits the arm starts from (its container contexts' pass bits and its leaf bits); low,
 // its FORM_LOW bits; last, its last bits (kept where it passes).
@@ -268,7 +268,7 @@ function grammarOpCtx(g: Grammar, op: string): string | undefined {
   return undefined;
 }
 
-// THE ON-DEMAND FORM (TargetContext.when 'demand'; emit-portable.ts DemandIR). The normal parse
+// THE ON-DEMAND FORM (TargetContext.when 'demand'; parser-ir.ts DemandIR). The normal parse
 // computes nothing: every arm keeps the form it has without contexts, a container arm adds its
 // twin's number (a constant), a demand operator's node ASSIGNED. Its twins are the EAGER plan of
 // the same context, made on a copy of the rules: each container arm's steps and each rd rule of

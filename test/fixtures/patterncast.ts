@@ -1,6 +1,6 @@
 // patterncalc (declared target contexts) plus a PREFIX-SHAPED NUD: `cast` (`<T>e`, TypeScript's type
 // assertion) ends in its operand read at the prefix level (atLevel), so its node's form has the
-// prefix-unary low bits (FORM_UNARY, emit-portable PrattRule.nudBracketForm) OR'd with the pass bits
+// prefix-unary low bits (FORM_UNARY, parser-ir PrattRule.nudBracketForm) OR'd with the pass bits
 // of the context it is a leaf of (declared-targets.ts). Both meanings are read in one grammar:
 // `<T>a = x` passes the pattern context, while `++<T>a` (a target-requiring prefix) and `<T>a ** b`
 // (a noUnaryLhs operator) are refused by the low bits, as `-a ** b` is.

@@ -384,7 +384,7 @@ children with directives, dynamic tags and an element right after a value): edit
 
 ## The portable lexers
 
-Built from one plan (`ElementPlan`, `src/emit-portable.ts`) and one family of shared routines
+Built from one plan (`ElementPlan`, `src/parser-ir.ts`) and one family of shared routines
 (`src/lex-family.ts`, `elementFns`), printed by each target:
 - the frame step (`lexElFrame`): what an element frame on top of the stack lexes at a position
   (children: close tag, nested tag, hole, text run; tag: tag tokens, self-close, tag close with

@@ -42,7 +42,7 @@ interface TokenOptions {
   escapeValid?: TokenPattern;
   regex?: boolean;
   embed?: string;
-  // ── Lexer hints (keep gen-parser language-agnostic; all optional) ──
+  // ── Lexer hints (keep interpreter language-agnostic; all optional) ──
   identifier?: boolean;
   // A token that is a fixed literal prefix followed by an IdentifierName (e.g. JS private
   // names, `#x`). Declares the prefix so the lexer's Unicode ID_Start/ID_Continue fallback

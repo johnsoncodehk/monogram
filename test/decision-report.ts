@@ -18,7 +18,7 @@
 //   node test/decision-report.ts --observe <grammar.ts> <input>...   # any grammar: its page with the ties observed on those inputs (stdout)
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { portableIR, type ParserIR } from '../src/emit-portable.ts';
+import { portableIR, type ParserIR } from '../src/parser-ir.ts';
 import { analyzeDecisions, renderDecisions, decisionReport, type DecisionFindings } from '../src/decision-report.ts';
 import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
