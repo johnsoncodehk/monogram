@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1124,6 +1124,27 @@ func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 }`;
 }
 
+// The operator row of a Pratt rule (emit-portable prattOpRow) at the lid in \`lid\`: the index masked
+// to the table's power-of-two length, so the compiler proves it in range (no bounds check).
+const goRowAt = (r: PrattRule, ids: LexIdPlan, lid: string): string => `row_${r.name}[${lid}&${prattOpRow(prattOpTables(r, ids), ids).size - 1}]`;
+// The binary operator read through the row: the composite read (gtOp) only at a lead lid (the row's
+// lead bit), then that operator's row; lbp 0 is no operator (every lbp is >= 1, minBp >= 0).
+function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean): string {
+  // opLid is read by the composite read and by a target context's switch (binLeftOps) only
+  const lid = ids.gtComps.length > 0 || binLeftOps(prattOpTables(r, ids)).length > 0;
+  const head = `\t\trow := ${goRowAt(r, ids, 't.Lid')}
+\t\t${lid ? 'opLid, ' : ''}opN${withEnd ? ', opEnd' : ''} := ${lid ? 't.Lid, ' : ''}1${withEnd ? ', t.End' : ''}
+`;
+  const lead = ids.gtComps.length === 0 ? '' : `\t\tif row&${OP_ROW.lead} != 0 {
+\t\t\topLid, opN, ${withEnd ? 'opEnd' : '_'} = gtOp(p.toks, p.pos)
+\t\t\tif e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e }
+\t\t\trow = ${goRowAt(r, ids, 'opLid')}
+\t\t}
+`;
+  return `${head}${lead}\t\tlbp := int(row & ${OP_ROW.lbpMask})
+\t\tif lbp <= minBp { break }
+\t\tinfoTgt, infoNoUnary, infoRbp := row&${OP_ROW.test} != 0, row&${OP_ROW.noUnary} != 0, int((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.lbpMask})`;
+}
 // The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
 // its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
 function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
@@ -1429,7 +1450,7 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     // The operators a target context reads (emit-portable binLeftOps): a switch behind the table's
     // test bit (goBinLeft); every other operator tests what it did without contexts and its node's
     // form is a constant.
-    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(info.tgt, opLid, form)` : ''}` : '1',
+    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(infoTgt, opLid, form)` : ''}` : '1',
     tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : `${lowGo(ir, 'form')} != 0`,
     lf: (f: string) => lowGo(ir, f),
   };
@@ -1505,19 +1526,17 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tnode := p.matchTemplate_${hole}()
 \t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = ${fin}; form = ${T.tpl}; continue LedLoop }
 \t\t}`,
-    postfixOp: `\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
-\t\t\tif post.tgt && ${T.lf('form')} != 0 { return -1 }
+    postfixOp: `\t\tif row := ${goRowAt(r, ids, 't.Lid')}; row&${OP_ROW.postMask << OP_ROW.postShift} != 0 && !tailClosed && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.postMask}) > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
-    binary: `${gtOpRead(ids, false)}
-\t\tinfo := bin_${r.name}[opLid]
-\t\tif !info.ok || info.lbp <= minBp { break }
-\t\tif info.tgt && ${T.tgt} || info.noUnary && ${T.lf('form')} == 2 { return -1 }
+    binary: `${goRowOpRead(r, ids, false)}
+\t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
 \t\tp.pos += opN
-\t\trhs := p.bp_${r.name}(info.rbp)
+\t\trhs := p.bp_${r.name}(infoRbp)
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
 \t\tleft = ${fin}
@@ -1565,9 +1584,7 @@ ${B.nudClose}
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
 function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
-  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}, true}`).join(', ');
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
-  const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
   // The operators a target context reads (emit-portable binLeftOps), behind the table's test bit:
   // does the left operand fail its context (binFail), the pass bits the node keeps from it (binKeep).
   const left = binLeftOps(ops), keep = left.filter((o) => o.acc);
@@ -1588,9 +1605,11 @@ func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
 \t}
 \treturn 0
 }`}`;
-  return `var bin_${r.name} = [${ops.size}]bp{${bin}}${fns}
-var pre_${r.name} = [${ops.size}]preOp{${pre}}
-var post_${r.name} = [${ops.size}]postOp{${post}}`;
+  const row = prattOpRow(ops, ids);
+  // the operator row (emit-portable prattOpRow), its nonzero entries keyed by lid
+  const rowInit = row.rows.flatMap((v, lid) => (v ? [`${lid}: ${v}`] : [])).join(', ');
+  return `var row_${r.name} = [${row.size}]uint32{${rowInit}}${fns}
+var pre_${r.name} = [${ops.size}]preOp{${pre}}`;
 }
 
 // The relex of an edit (both Docs). A lexer error in the relex is the text's own (the relexed
@@ -2138,19 +2157,17 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\t\tleft = ${fin}; form = ${T.tpl}; continue LedLoop
 \t\t\t}
 \t\t}`,
-    postfixOp: `\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
-\t\t\tif post.tgt && ${T.lf('form')} != 0 { return spanned{}, false }
+    postfixOp: `\t\tif row := ${goRowAt(r, ids, 't.Lid')}; row&${OP_ROW.postMask << OP_ROW.postShift} != 0 && !tailClosed && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.postMask}) > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
-    binary: `${gtOpRead(ids, true)}
-\t\tinfo := bin_${r.name}[opLid]
-\t\tif !info.ok || info.lbp <= minBp { break }
-\t\tif info.tgt && ${T.tgt} || info.noUnary && ${T.lf('form')} == 2 { return spanned{}, false }
+    binary: `${goRowOpRead(r, ids, true)}
+\t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
 \t\tp.pos += opN
-\t\trhs, rok := p.bpW_${r.name}(info.rbp)
+\t\trhs, rok := p.bpW_${r.name}(infoRbp)
 \t\tif !rok { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = ${fin}
