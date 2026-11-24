@@ -15,12 +15,13 @@ import type { CstGrammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types
 import { isKeywordLiteral } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
 import { COOK } from './shape-cook.ts';
-import { COOK_FNS, OPERATORS, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type ShapeSpec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
+import { COOK_FNS, OPERATORS, nodeKeysOf, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type ShapeSpec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
 
 // ── Values ──
 
-/** A node value: the same plain-data form the oracle harness compares (test/shape-oracle.ts). */
-export type ShapeNode = { kind: string; start: number; end: number; fields: Record<string, ShapeValue> };
+/** A node value: ONE flat object, its kind and span under the shape's node keys (ShapeSpec.node:
+ * by default `kind`, `start`, `end`), then its fields in the term's order (an absent one left out). */
+export type ShapeNode = { [key: string]: ShapeValue };
 export type ShapeValue = ShapeNode | ShapeValue[] | Scalar | { record: Record<string, ShapeValue> };
 
 /** The spec is outside the calculus or not typed against the grammar: every problem, each
@@ -423,6 +424,8 @@ type Ty = 'string' | 'number' | 'bool' | 'null' | 'node' | 'list' | 'nodes' | 'r
  * with `total: true` a left-out arm of a mapped rule is a load error instead. */
 export function defineShape<const R extends string>(grammar: CstGrammar & { rules: readonly { name: R }[] }, spec: ShapeSpec<NoInfer<R>>): Shape;
 export function defineShape(grammar: CstGrammar, spec: ShapeSpec): Shape {
+  const keys = nodeKeysOf(spec);
+  const nodeKeyNames = [keys.kind, keys.start, keys.end];
   const g = viewOf(grammar);
   const problems: string[] = [];
   const err = (where: string, msg: string): void => { problems.push(`${where}: ${msg}`); };
@@ -668,7 +671,10 @@ export function defineShape(grammar: CstGrammar, spec: ShapeSpec): Shape {
       case 'node': {
         need(e.type, 'type', 'string');
         if (e.fields === null || typeof e.fields !== 'object') err(w, 'node: fields is a record of terms');
-        else for (const [k, x] of Object.entries(e.fields)) sub(x, `.${k}`);
+        else for (const [k, x] of Object.entries(e.fields)) {
+          if (nodeKeyNames.includes(k)) err(`${w}.${k}`, `node: the field ${k} is one of the node keys (${nodeKeyNames.join(', ')}; ShapeSpec.node)`);
+          sub(x, `.${k}`);
+        }
         if (e.span !== undefined) span(e.span, s, w, slotReads);
         return 'node';
       }
@@ -832,6 +838,8 @@ export function evaluateShape(loaded: Shape, cst: CstNode, src: string): ShapeVa
  * memoised across calls. */
 export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNode) => ShapeValue | undefined {
   const { spec, grammar: g } = loaded;
+  const keys = nodeKeysOf(spec);
+  const isNode = (v: ShapeValue | undefined): v is ShapeNode => v !== null && typeof v === 'object' && !Array.isArray(v) && keys.kind in v;
   const matches = new WeakMap<CstNode, Matched>();
   const synMemo = new WeakMap<CstNode, Map<string, Scalar>>();
   const threadMemo = new WeakMap<CstNode, Map<string, Map<CstNode, Scalar>>>();
@@ -1042,6 +1050,7 @@ export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNod
           const val = ev(x, s);
           if (val !== undefined) fields[k] = val;
         }
+        const kind = ev(t.type, s) as string;
         const sp = t.span;
         let start: number, end: number;
         if (!sp) { start = s.node.offset; end = s.node.end; }
@@ -1052,7 +1061,7 @@ export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNod
           start = it.start + open.length; end = it.end - close.length;
         } else if ('after' in sp) { start = end = spanEdge(s, sp.after, 'end'); }
         else { start = spanEdge(s, sp.from, 'start'); end = spanEdge(s, sp.to, 'end'); }
-        return { kind: ev(t.type, s) as string, start, end, fields };
+        return { [keys.kind]: kind, [keys.start]: start, [keys.end]: end, ...fields };
       }
       case 'record': {
         const record: Record<string, ShapeValue> = {};
@@ -1099,7 +1108,7 @@ export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNod
         const iterScope = (f: Frame, vars: Map<string, Bound>): RScope => ({ info: r.scope.info, base, frame: f, outer: s, vars, m: s.m, node: s.node, inh: s.inh });
         if (t.t === 'map') return frames.map((f) => ev(t.body, iterScope(f, new Map())) ?? null);
         const init = ev(t.init, s);
-        let acc: Bound = { value: init, ...(isNode(init) ? { start: init.start, end: init.end } : { start: s.node.offset, end: s.node.end }) };
+        let acc: Bound = { value: init, ...(isNode(init) ? { start: (init as ShapeNode)[keys.start] as number, end: (init as ShapeNode)[keys.end] as number } : { start: s.node.offset, end: s.node.end }) };
         if (t.init.t === 'child') acc = { value: init, start: spanEdge(s, t.init.name, 'start'), end: spanEdge(s, t.init.name, 'end') };
         for (const f of frames) {
           const sc = iterScope(f, new Map([[t.acc, acc]]));
@@ -1112,8 +1121,8 @@ export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNod
         // A node spans itself; a non-empty list of nodes its first start to its last end (as a
         // list-valued child does); anything else the arm.
         const first = Array.isArray(val) ? val[0] : undefined, last = Array.isArray(val) ? val[val.length - 1] : undefined;
-        const b: Bound = isNode(val) ? { value: val, start: val.start, end: val.end }
-          : isNode(first) && isNode(last) ? { value: val, start: first.start, end: last.end }
+        const b: Bound = isNode(val) ? { value: val, start: (val as ShapeNode)[keys.start] as number, end: (val as ShapeNode)[keys.end] as number }
+          : isNode(first) && isNode(last) ? { value: val, start: (first as ShapeNode)[keys.start] as number, end: (last as ShapeNode)[keys.end] as number }
           : { value: val, start: s.node.offset, end: s.node.end };
         return ev(t.body, { ...s, vars: new Map([...s.vars, [t.name, b]]) });
       }
@@ -1127,7 +1136,6 @@ export function evaluator(loaded: Shape, root: CstNode, src: string): (n: CstNod
 
   return (n) => valueOf(n, inhOf(n));
 }
-const isNode = (v: ShapeValue | undefined): v is ShapeNode => v !== null && typeof v === 'object' && !Array.isArray(v) && 'kind' in v;
 
 /** The end of the last item a frame (with its iterations) captured. */
 function frameEnd(f: Frame): number {
