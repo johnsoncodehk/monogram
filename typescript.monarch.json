@@ -1,4 +1,5 @@
 {
+  "ident": "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
   "defaultToken": "invalid",
   "tokenPostfix": ".typescript",
   "ignoreCase": false,
@@ -312,36 +313,16 @@
         "include": "@interpExprBody"
       }
     ],
-    "member": [
+    "typeValue": [
       [
         "[ \\t\\r\\n]+",
         "white"
       ],
       [
-        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
+        "@ident",
         {
           "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "",
-        {
-          "token": "",
-          "switchTo": "@root"
-        }
-      ]
-    ],
-    "memberN": [
-      [
-        "[ \\t\\r\\n]+",
-        "white"
-      ],
-      [
-        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
-        {
-          "token": "identifier",
-          "next": "@pop"
+          "switchTo": "@typeValueDot"
         }
       ],
       [
@@ -352,7 +333,23 @@
         }
       ]
     ],
-    "typeargs": [
+    "typeValueDot": [
+      [
+        "\\.(?=\\s*@ident)",
+        {
+          "token": "delimiter",
+          "switchTo": "@typeValue"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "type": [
       [
         "[ \\t\\r\\n]+",
         "white"
@@ -380,21 +377,87 @@
         }
       ],
       [
+        "\"",
+        {
+          "token": "string",
+          "next": "@string_dquoteN"
+        }
+      ],
+      [
+        "'",
+        {
+          "token": "string",
+          "next": "@string_squoteN"
+        }
+      ],
+      [
+        "`",
+        {
+          "token": "string",
+          "next": "@templateN"
+        }
+      ],
+      [
+        "0[xX][0-9A-Fa-f]+(?:_[0-9A-Fa-f]+)*n?(?![0-9A-Za-z_$\\\\])",
+        "number.hex"
+      ],
+      [
+        "0[oO][0-7]+(?:_[0-7]+)*n?(?![0-9A-Za-z_$\\\\])",
+        "number.octal"
+      ],
+      [
+        "0[bB][01]+(?:_[01]+)*n?(?![0-9A-Za-z_$\\\\])",
+        "number.binary"
+      ],
+      [
+        "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])",
+        "number"
+      ],
+      [
+        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        "number"
+      ],
+      [
         "<",
         {
           "token": "delimiter.angle",
-          "next": "@typeargs"
+          "next": "@type_angle"
         }
       ],
       [
-        ">",
+        "\\(",
         {
-          "token": "delimiter.angle",
-          "next": "@pop"
+          "token": "delimiter.parenthesis",
+          "next": "@type_paren"
         }
       ],
       [
-        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "next": "@type_square"
+        }
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@type_object"
+        }
+      ],
+      [
+        "(?:typeof)(?![\\w$])",
+        {
+          "cases": {
+            "typeof": {
+              "token": "operator",
+              "next": "@typeValue"
+            }
+          }
+        }
+      ],
+      [
+        "@ident",
         {
           "cases": {
             "keyof": "operator",
@@ -410,67 +473,11 @@
             "false": "keyword",
             "null": "keyword",
             "undefined": "keyword",
-            "void": "operator",
+            "void": "keyword",
             "this": "keyword",
             "unique": "keyword",
-            "import": "keyword",
-            "function": "keyword",
             "in": "keyword",
             "as": "operator",
-            "get": "keyword",
-            "set": "keyword",
-            "export": "keyword",
-            "const": "keyword",
-            "default": "keyword",
-            "public": "keyword",
-            "private": "keyword",
-            "protected": "keyword",
-            "override": "keyword",
-            "accessor": "keyword",
-            "declare": "keyword",
-            "out": "keyword",
-            "async": "keyword",
-            "static": "keyword",
-            "@new": "keyword",
-            "super": "keyword",
-            "instanceof": "operator",
-            "target": "keyword",
-            "class": "keyword",
-            "implements": "keyword",
-            "yield": "keyword",
-            "satisfies": "operator",
-            "meta": "keyword",
-            "defer": "keyword",
-            "source": "keyword",
-            "let": "keyword",
-            "var": "keyword",
-            "if": "keyword",
-            "else": "keyword",
-            "for": "keyword",
-            "await": "keyword",
-            "while": "keyword",
-            "do": "keyword",
-            "switch": "keyword",
-            "return": "keyword",
-            "throw": "keyword",
-            "break": "keyword",
-            "continue": "keyword",
-            "try": "keyword",
-            "catch": "keyword",
-            "finally": "keyword",
-            "debugger": "keyword",
-            "with": "keyword",
-            "using": "keyword",
-            "of": "keyword",
-            "case": "keyword",
-            "interface": "keyword",
-            "type": "keyword",
-            "enum": "keyword",
-            "module": "keyword",
-            "namespace": "keyword",
-            "from": "keyword",
-            "constructor": "keyword",
-            "delete": "operator",
             "string": "keyword",
             "number": "keyword",
             "boolean": "keyword",
@@ -480,40 +487,463 @@
             "any": "keyword",
             "unknown": "keyword",
             "never": "keyword",
+            "console": "variable",
+            "window": "variable",
+            "document": "variable",
+            "process": "variable",
+            "exports": "variable",
+            "globalThis": "variable",
             "@default": "type.identifier"
           }
         }
       ],
+      {
+        "include": "@symbols"
+      }
+    ],
+    "type_angle": [
       [
-        ",",
-        "delimiter"
+        ">",
+        {
+          "token": "delimiter.angle",
+          "next": "@pop"
+        }
       ],
       [
-        "\\.",
-        "delimiter"
-      ],
-      [
-        "\\|",
-        "operator"
-      ],
-      [
-        "&",
-        "operator"
-      ],
-      [
-        "\\[\\]",
-        "operator"
-      ],
-      [
-        "[\\[\\]]",
-        "delimiter.square"
-      ],
-      [
-        "(?=[;)\\]}=])",
+        "(?=[;)\\]}])",
         {
           "token": "",
           "next": "@pop"
         }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_paren": [
+      [
+        "\\)",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@pop"
+        }
+      ],
+      [
+        "@ident(?=\\s*\\??\\s*:)",
+        "identifier"
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_square": [
+      [
+        "\\]",
+        {
+          "token": "delimiter.square",
+          "next": "@pop"
+        }
+      ],
+      [
+        "@ident(?=\\s*\\??\\s*:)",
+        "identifier"
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_object": [
+      [
+        "\\}",
+        {
+          "token": "delimiter.bracket",
+          "next": "@pop"
+        }
+      ],
+      [
+        "@ident(?=\\s*\\??\\s*[:(<])",
+        "identifier"
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_1": [
+      [
+        "(?=while(?![\\w$])|else(?![\\w$])|=>|[,;{}])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_1_first": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "\\{",
+        {
+          "token": "delimiter.bracket",
+          "next": "@type_object"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@type_1"
+        }
+      ]
+    ],
+    "type_2": [
+      [
+        "(?=instanceof(?![\\w$])|satisfies(?![\\w$])|while(?![\\w$])|else(?![\\w$])|from(?![\\w$])|!=|&&|&=|<<|<=|as(?![\\w$])|in(?![\\w$])|of(?![\\w$])|\\|=|\\|\\||=(?!>)|[%()*+,\\-/:;>?\\]\\^}])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_2_first": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@type_paren"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@type_2"
+        }
+      ]
+    ],
+    "type_3": [
+      [
+        "(?=instanceof(?![\\w$])|satisfies(?![\\w$])|while(?![\\w$])|else(?![\\w$])|!=|&&|&=|<<|<=|as(?![\\w$])|in(?![\\w$])|of(?![\\w$])|\\|=|\\|\\||=(?!>)|[%()*+,\\-/:;>?\\]\\^}])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "type_3_first": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@type_paren"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@type_3"
+        }
+      ]
+    ],
+    "type_4": [
+      [
+        "(?=while(?![\\w$])|else(?![\\w$])|in(?![\\w$])|of(?![\\w$])|=(?!>)|[,;}])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "typehead_1": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "@ident",
+        "identifier"
+      ],
+      [
+        "!",
+        "operator"
+      ],
+      [
+        ":",
+        {
+          "token": "delimiter",
+          "switchTo": "@type_4"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "type_5": [
+      [
+        "(?=while(?![\\w$])|else(?![\\w$])|[;}])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "typehead_2": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "@ident",
+        "type.identifier"
+      ],
+      [
+        "<",
+        {
+          "token": "delimiter.angle",
+          "next": "@type_angle"
+        }
+      ],
+      [
+        "=",
+        {
+          "token": "operator",
+          "switchTo": "@type_5"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "keywordName": [
+      [
+        "(?:keyof|is|unique|satisfies)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:readonly)(?![\\w$])(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|@|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:abstract|public|private|protected|override|accessor|out|static)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\*|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:extends|implements)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:get|set)(?![\\w$])(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:declare)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:async)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:@@new)(?![\\w$])(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:super)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:instanceof|throw|of|case)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:class)(?![\\w$])(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:if|for|while|switch|require)(?![\\w$])(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:else|do)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:try|finally|global)(?![\\w$])(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:catch|with)(?![\\w$])(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:type)(?![\\w$])(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
+        "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
+        "identifier"
+      ]
+    ],
+    "typeEntry": [
+      [
+        "(?:is|as|satisfies)(?![\\w$])(?=\\s*(?:@ident|!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))",
+        {
+          "cases": {
+            "is": {
+              "token": "operator",
+              "next": "@type_1_first"
+            },
+            "as": {
+              "token": "operator",
+              "next": "@type_2_first"
+            },
+            "satisfies": {
+              "token": "operator",
+              "next": "@type_3_first"
+            }
+          }
+        }
+      ],
+      [
+        "(?:const|let|using|var)(?![\\w$])(?=\\s+@ident\\s*(?:!\\s*)?(?::))",
+        {
+          "cases": {
+            "const": {
+              "token": "keyword",
+              "next": "@typehead_1"
+            },
+            "let": {
+              "token": "keyword",
+              "next": "@typehead_1"
+            },
+            "using": {
+              "token": "keyword",
+              "next": "@typehead_1"
+            },
+            "var": {
+              "token": "keyword",
+              "next": "@typehead_1"
+            }
+          }
+        }
+      ],
+      [
+        "(?:type)(?![\\w$])(?=\\s+@ident\\s*(?:<|=))",
+        {
+          "cases": {
+            "type": {
+              "token": "keyword",
+              "next": "@typehead_2"
+            }
+          }
+        }
+      ]
+    ],
+    "member": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "@ident",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "switchTo": "@root"
+        }
+      ]
+    ],
+    "memberN": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        "@ident",
+        {
+          "token": "identifier",
+          "next": "@pop"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "symbols": [
+      [
+        "\\.\\.\\.|\\?\\.|,|\\?|:|\\.|;|@",
+        "delimiter"
+      ],
+      [
+        "\\[|\\]",
+        "delimiter.square"
+      ],
+      [
+        ">>>=|\\*\\*=|<<=|>>=|\\?\\?=|\\|\\|=|&&=|===|!==|>>>|=>|\\+=|-=|\\*=|%=|&=|\\|=|\\^=|\\?\\?|\\|\\||&&|==|!=|<=|>=|<<|>>|\\*\\*|\\+\\+|--|\\||&|-|!|\\*|\\+|=|\\^|%|~",
+        "operator"
+      ],
+      [
+        "\\(|\\)",
+        "delimiter.parenthesis"
+      ],
+      [
+        "\\{|\\}",
+        "delimiter.bracket"
       ]
     ],
     "exprBody": [
@@ -613,148 +1043,28 @@
           "switchTo": "@value"
         }
       ],
+      {
+        "include": "@typeEntry"
+      },
       [
-        "(?:keyof|is|unique|satisfies)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?@[\\]\\^{|}~])",
+        "(?:keyof|is|unique|satisfies|readonly|abstract|public|private|protected|override|accessor|out|static|asserts|infer|target|meta|source|interface|enum|module|namespace|from|get|set|async|super|class|defer|let|var|using|if|for|while|switch|require|try|finally|global|catch|with|type|constructor)(?![\\w$])(?=\\s*/)",
         {
           "token": "identifier",
           "switchTo": "@value"
         }
       ],
       [
-        "(?:readonly)(?![\\w$])(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|@|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
+        "(?:abstract|public|private|protected|override|accessor|out|static|asserts|infer|target|meta|source|interface|enum|module|namespace|from|get|set|@@new|super|defer|let|var|using|if|for|while|switch|require|try|finally|global|catch|with|type)(?![\\w$])(?=\\s*<)",
         {
           "token": "identifier",
           "switchTo": "@value"
         }
       ],
+      {
+        "include": "@keywordName"
+      },
       [
-        "(?:abstract|public|private|protected|override|accessor|out|static)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\*|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:extends|implements)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:get|set)(?![\\w$])(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:declare)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:async)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:@@new)(?![\\w$])(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:super)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:instanceof|throw|of|case)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:class)(?![\\w$])(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:if|for|while|switch|require)(?![\\w$])(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:else|do)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:try|finally|global)(?![\\w$])(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:catch|with)(?![\\w$])(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:type)(?![\\w$])(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
+        "@ident",
         {
           "cases": {
             "keyof": {
@@ -1129,14 +1439,14 @@
         }
       ],
       [
-        "\\?\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        "\\?\\.(?=\\s*@ident)",
         {
           "token": "delimiter",
           "switchTo": "@member"
         }
       ],
       [
-        "\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        "\\.(?=\\s*@ident)",
         {
           "token": "delimiter",
           "switchTo": "@member"
@@ -1223,7 +1533,7 @@
         "<(?=\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*\\[\\s*\\])*(?:\\s*<\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*\\[\\s*\\])*(?:\\s*,\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*\\[\\s*\\])*)*\\s*>)?(?:\\s*,\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*\\[\\s*\\])*(?:\\s*<\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*\\[\\s*\\])*(?:\\s*,\\s*[\\w$]+(?:\\s*\\.\\s*[\\w$]+)*(?:\\s*\\[\\s*\\])*)*\\s*>)?)*\\s*>(?:\\s*[(`]|\\s*$))",
         {
           "token": "delimiter.angle",
-          "next": "@typeargs"
+          "next": "@type_angle"
         }
       ],
       {
@@ -1273,88 +1583,14 @@
         "(?:#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|#[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
         "variable"
       ],
+      {
+        "include": "@typeEntry"
+      },
+      {
+        "include": "@keywordName"
+      },
       [
-        "(?:keyof|is|unique|satisfies)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:readonly)(?![\\w$])(?!\\s*(?:\\.\\.\\.|!|&|\\(|\\*|-|<|\\?|@|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:abstract|public|private|protected|override|accessor|out|static)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\*|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:extends|implements)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:get|set)(?![\\w$])(?!\\s*(?:\\[))(?=\\s*[!%&()*+,\\-/:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:declare)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:async)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|\\*|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:@@new)(?![\\w$])(?!\\s*(?:\\(|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:super)(?![\\w$])(?!\\s*(?:\\(|\\.|\\[))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:instanceof|throw|of|case)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:class)(?![\\w$])(?!\\s*(?:<|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:if|for|while|switch|require)(?![\\w$])(?!\\s*(?:\\())(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:else|do)(?![\\w$])(?!\\s*(?:\\.\\.\\.|\\(|;|<|@|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:try|finally|global)(?![\\w$])(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:catch|with)(?![\\w$])(?!\\s*(?:\\(|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:type)(?![\\w$])(?!\\s*(?:\\*|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?@[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*",
+        "@ident",
         {
           "cases": {
             "keyof": "operator",
@@ -1461,14 +1697,14 @@
         "operator"
       ],
       [
-        "\\?\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        "\\?\\.(?=\\s*@ident)",
         {
           "token": "delimiter",
           "next": "@memberN"
         }
       ],
       [
-        "\\.(?=\\s*(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*|[$_\\p{ID_Start}])[$\\u200c\\u200d\\p{ID_Continue}]*)",
+        "\\.(?=\\s*@ident)",
         {
           "token": "delimiter",
           "next": "@memberN"
