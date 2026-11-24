@@ -576,11 +576,12 @@ const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr
 // operand that dropped its operator (`price * ;` matches `price`) records its failure at the
 // operator, not at the operand.
 // cappedSeq: the grammar has a capped prefix operator (cappedPrefix), lowered to a sequence arm with a
-// cap: each REC_N_SEQ entry then carries one more cell, the cap (-1: none). Absent, the code and the
-// tables are as before.
+// cap: each REC_N_SEQ entry then carries one more cell, the cap (-1: none). unaryNud: the grammar has a
+// prefix-shaped NUD arm (PrattRule.nudSeqForm): each REC_N_BRACKET and REC_N_SEQ entry then ends in one
+// more cell, the node's form. Absent, the code and the tables are as before.
 // The engine's capped flag, form and tail (ST_CAPPED, ST_FORM, ST_TAIL) as f0, f1, f2.
 const ST_LETS = [let_('f0', call('enSt', n(ST_CAPPED))), let_('f1', call('enSt', n(ST_FORM))), let_('f2', call('enSt', n(ST_TAIL)))];
-const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
+const riNudOf = (cappedSeq: boolean, unaryNud: boolean): Fn => method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
   run('enSetSt', n(ST_CAPPED), n(0)),
   let_('kid', call('enPeekKid')),
   let_('lid', call('enPeekLid')),
@@ -621,7 +622,11 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
         // A bracket arm (its first literal), a sequence arm (its guard; with cappedSeq its cap) or a
         // capped arm (its cap and guard): its steps from the cell after; the bracket and sequence
         // arms' node takes the tail they close and the capped flag their trailing operand left
-        // (fromTail), the capped arm's node is capped.
+        // (fromTail), and with unaryNud the form in the entry's last cell; the capped arm's node is capped.
+        let_('w', n(5)),
+        if_(eq(v('tag'), n(REC_N_CAPPED)), [set('w', n(4))]),
+        ...(cappedSeq ? [if_(eq(v('tag'), n(REC_N_SEQ)), [set('w', n(6))])] : []),
+        ...(unaryNud ? [if_(ne(v('tag'), n(REC_N_CAPPED)), [inc('w', n(1))])] : []),
         let_('hit', or(
           and(eq(v('tag'), n(REC_N_BRACKET)), eq(v('lid'), at(v('x'), 1))),
           and(eq(v('tag'), n(REC_N_SEQ)), ...(cappedSeq ? [or(lt(at(v('x'), 5), n(0)), lt(v('minBp'), at(v('x'), 5)))] : []), call('riGuard', atR(v('x'), 1))),
@@ -633,16 +638,15 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
           let_('ok', call('riList', atR(v('x'), 2), v('d')), 'bool'),
           let_('tl', n(0)),
           let_('cp', n(1)),
+          let_('pf', n(0)),
           if_(ne(v('tag'), n(REC_N_CAPPED)), [
             set('tl', at(v('x'), 3)),
             set('cp', n(0)),
             if_(and(isT(v('x'), 4), ne(call('enSt', n(ST_CAPPED)), n(0))), [set('cp', n(1))]),
+            ...(unaryNud ? [set('pf', T(add(v('x'), sub(v('w'), n(1)))))] : []),
           ]),
-          run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), n(0), v('tl'), v('cp'), v('best')),
+          run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), v('pf'), v('tl'), v('cp'), v('best')),
         ]),
-        let_('w', n(5)),
-        if_(eq(v('tag'), n(REC_N_CAPPED)), [set('w', n(4))]),
-        ...(cappedSeq ? [if_(eq(v('tag'), n(REC_N_SEQ)), [set('w', n(6))])] : []),
         inc('x', v('w')),
       ]),
     ]),
@@ -1024,8 +1028,8 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
-export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): Fn[] {
-  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riFrame, riFrameIn, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBpOf(rebind),
+export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = [], unaryNud = false): Fn[] {
+  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riFrame, riFrameIn, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq, unaryNud), riBpOf(rebind),
     riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, riErrTok, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
@@ -1033,6 +1037,6 @@ export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
 // rbBracket is the native forms' (printed with them).
-export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): string {
-  return printFns({ ...L, inferLocals: true }, recoveryFamilyFns(rebind, ids, cappedSeq, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
+export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, cappedSeq = false, labels: [number, string][] = [], unaryNud = false): string {
+  return printFns({ ...L, inferLocals: true }, recoveryFamilyFns(rebind, ids, cappedSeq, labels, unaryNud), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
 }
