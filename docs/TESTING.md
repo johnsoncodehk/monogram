@@ -77,6 +77,16 @@ disagreement carries a cause class (in `test/cpython.ts`); the files are pinned 
 `test/cpython-record.txt` (regenerate: `node test/cpython.ts --write`). It is the second language's
 oracle: [docs/SECOND-LANGUAGE.md](SECOND-LANGUAGE.md).
 
+`highlighter/monarch-dialect/agreement` (`node test/monarch-dialect.ts --agreement`, tier ci) runs
+the committed TextMate and Monarch grammars of javascript and typescript over the same real code and
+counts their disagreements by class against `test/tm-monarch-agreement.json`. It is a one-sided
+record. It FAILS when a class rises above the record, when a new class appears, or when a corpus's
+agreement percentage falls. A class that FALLS passes, printing one line (`fell: … re-record when
+convenient`), for every class, small ones included: a disagreement that disappears is never a
+failure, so a grammar landing is never stopped by an improvement it brings to the highlighters. The
+landing that improves the agreement on purpose re-records it (`--write`), so the record stays that
+landing's evidence.
+
 A gate is binary and authoritative: if `npm run check` is green, every guaranteed property holds.
 
 ### The inner loop — `node test/check.ts --changed [<base>]`
