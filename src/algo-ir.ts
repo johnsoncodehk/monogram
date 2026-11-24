@@ -174,16 +174,16 @@ export const ELEM: Record<Exclude<ListTy, RecListTy>, Ty> = { metas: 'meta', tok
 // string literal, `packInts`) and decoded by the shared `unpackInts` when the target's engine first
 // needs it; where the decoded table lives and when it is decoded is the target's (`Lowering.tab`).
 export interface IntTable { name: string; data: number[] }
-// The packing: each value v >= -1 as v + 1 in base 32, low digits first, one character per digit:
-// a digit d is the character 48 + d on the last digit of a value and 80 + d before it (ASCII
-// '0'..'o', so the literal is printable in every target; '\\' is the one character a target escapes).
+// The packing: each value v >= -1 as v + 1, low digits first, one character per digit: a value's
+// last digit is the character 35 + d (d < 57, '#'..'['), each digit before it 93 + d (d < 32, base
+// 32: ']'..'|'). Printable in every target, and neither '"' nor '\\' (the characters a target escapes).
 export function packInts(data: readonly number[]): string {
   let out = '';
   for (const v of data) {
     if (!Number.isInteger(v) || v < -1) throw new Error(`algo-ir: an int table holds integers >= -1, not ${v}`);
     let u = v + 1;
-    while (u >= 32) { out += String.fromCharCode(80 + (u % 32)); u = Math.floor(u / 32); }
-    out += String.fromCharCode(48 + u);
+    while (u >= 57) { out += String.fromCharCode(93 + (u % 32)); u = Math.floor(u / 32); }
+    out += String.fromCharCode(35 + u);
   }
   return out;
 }
@@ -202,12 +202,12 @@ export const UNPACK_INTS: Fn = {
     { k: 'let', name: 'sh', ty: 'int', init: ii(0) },
     { k: 'let', name: 'i', ty: 'int', init: ii(0) },
     { k: 'while', c: ib('lt', iv('i'), { k: 'len', e: iv('s') }), body: [
-      { k: 'let', name: 'd', ty: 'int', init: ib('sub', { k: 'code', s: iv('s'), i: iv('i') }, ii(48)) },
-      { k: 'if', c: ib('ge', iv('d'), ii(32)), then: [
-        { k: 'set', name: 'v', e: ib('add', iv('v'), ib('shl', ib('sub', iv('d'), ii(32)), iv('sh'))) },
+      { k: 'let', name: 'd', ty: 'int', init: { k: 'code', s: iv('s'), i: iv('i') } },
+      { k: 'if', c: ib('ge', iv('d'), ii(93)), then: [
+        { k: 'set', name: 'v', e: ib('add', iv('v'), ib('shl', ib('sub', iv('d'), ii(93)), iv('sh'))) },
         { k: 'set', name: 'sh', e: ib('add', iv('sh'), ii(5)) },
       ], else: [
-        { k: 'push', list: 'out', e: ib('sub', ib('add', iv('v'), ib('shl', iv('d'), iv('sh'))), ii(1)) },
+        { k: 'push', list: 'out', e: ib('sub', ib('add', iv('v'), ib('shl', ib('sub', iv('d'), ii(35)), iv('sh'))), ii(1)) },
         { k: 'set', name: 'v', e: ii(0) },
         { k: 'set', name: 'sh', e: ii(0) },
       ] },
@@ -334,7 +334,8 @@ export interface Lowering {
   intTable?(name: string, packed: string): string;
   stmt: {
     comment(text: string): Lines;
-    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean }): Lines;
+    // `infer`: the local's type may be left to the target's inference (`inferLocals`).
+    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean; infer: boolean }): Lines;
     set(id: string, val: string): Lines;
     // `inline` is the sole statement of a branch-free `if` printed on one line, when it is short.
     if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
@@ -348,6 +349,11 @@ export interface Lowering {
     return(vals: string[], fn: { name: string; ret: Ty[]; calls: boolean }): Lines;
     fn(s: { name: string; params: { name: string; type: string }[]; rets: string[]; retTys: Ty[]; doc: string[]; body: Lines; inline: boolean; cold: boolean; method: boolean; reads: boolean }): string;
   };
+  // A local int or bool may be declared without its type where the target infers the one it
+  // would print: a bool, or an int whose value is no literal (a literal's type is the target's
+  // default for it, not the local's). Only the recovery family sets it (other families' emission
+  // keeps its bytes).
+  inferLocals?: boolean;
   // `inline` fns are not printed as functions; each call site prints `inlineFn` of the body
   // instead (for compilers that cannot be told to inline a function).
   spliceInline?: boolean;
@@ -691,6 +697,8 @@ class Printer implements Cx {
       if (isList(pt)) return this.list(r);
       if (fn.params[i].ref) {
         if (a.k !== 'var') throw new Error(`algo-ir: ${e.fn} takes ${fn.params[i].name} by reference: pass a variable`);
+        // A parameter passed by reference is passed on as the reference it is.
+        if (this.cur?.params.some((p) => p.name === a.name && p.ref === true)) return r.c;
         return this.recL().refArg(r);
       }
       return r.c;
@@ -748,7 +756,8 @@ class Printer implements Cx {
         if (L.owns && isList(s.ty) && !r.owned) throw new Error(`algo-ir: let ${s.name} needs an owned list`);
         this.env.set(s.name, { ty: s.ty, owned });
         const emptyList = s.init.k === 'newList' && !s.init.cap;
-        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList });
+        const infer = !!L.inferLocals && (s.ty === 'bool' || (isNum(s.ty) && !r.lit));
+        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList, infer });
       }
       case 'set': {
         const v = this.env.get(s.name);
