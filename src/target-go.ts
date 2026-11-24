@@ -1133,9 +1133,9 @@ const goRowAt = (r: PrattRule, ids: LexIdPlan, lid: string): string => `row_${r.
 // The binary operator read through the row (`row`, loaded at the loop's top: PrattLowering.opRow):
 // the composite read (gtOp) only at a lead lid (the row's lead bit), then that operator's row; lbp 0
 // is no operator (every lbp is >= 1, minBp >= 0).
-function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean): string {
-  // opLid is read by the composite read and by a target context's switch (binLeftOps) only
-  const lid = ids.gtComps.length > 0 || binLeftOps(prattOpTables(r, ids)).length > 0;
+function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean, dem: boolean): string {
+  // opLid is read by the composite read, a target context's switch (binLeftOps) and a demand operator's tests only
+  const lid = ids.gtComps.length > 0 || binLeftOps(prattOpTables(r, ids)).length > 0 || dem;
   const head = `\t\t${lid ? 'opLid, ' : ''}opN${withEnd ? ', opEnd' : ''} := ${lid ? 't.Lid, ' : ''}1${withEnd ? ', t.End' : ''}
 `;
   const lead = ids.gtComps.length === 0 ? '' : `\t\tif row&${OP_ROW.lead} != 0 {
@@ -1461,6 +1461,7 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(infoTgt, opLid, form)` : ''}` : dem.length ? `binDem_${r.name}(infoTgt, opLid)` : '1',
     tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : dem.length ? `(form&3 != 0 || form&${D!.defer} != 0 && !p.demand_${r.name}(int(opLid), int(form), p0, p.pos))` : `${lowGo(ir, 'form')} != 0`,
     p0: dem.length ? '\n\tp0 := p.pos' : '',
+    dem: dem.length > 0,
     lf: (f: string) => lowGo(ir, f),
   };
 }
@@ -1541,7 +1542,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
     noBinary: '\t\tbreak\n\t}',
-    binary: `${goRowOpRead(r, ids, false)}
+    binary: `${goRowOpRead(r, ids, false, T.dem)}
 \t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
@@ -2232,7 +2233,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
     noBinary: '\t\tbreak\n\t}',
-    binary: `${goRowOpRead(r, ids, true)}
+    binary: `${goRowOpRead(r, ids, true, T.dem)}
 \t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
