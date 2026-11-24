@@ -44,12 +44,12 @@ The old gates map to new ones as follows. Cases are each gate's own count line, 
 | emit-parity/ast-builder | emit-parity/builder-reuse | 343 + 115 → 448 (10: the demo ESTree golden) |
 | emit-parity/emit-tsc-gate | emit-parity/emit-standalone (also tsc --strict on js, jsx, tsx) | 83 + 6 → 86 (3 duplicate tsc runs) |
 | emit-parity/emit-tokenize | emit-parity/emit-reentrancy | 63 + 39 → 100 (2; 13 reduced to what emit-lexer-verify does not check) |
-| emit-parity/emit-ts-cst | emit-parity/emit-portable-split | 80 + 21 → 101 |
+| emit-parity/emit-ts-cst | emit-parity/parser-ir-split | 80 + 21 → 101 |
 | emit-parity/shape-codegen | emit-parity/shape-parity | 85 + 21 → 105 (1 duplicate) |
-| emit-parity/syntax-agnostic | emit-parity/define-target | 16 + 4 → 20 checks |
+| emit-parity/syntax-agnostic | emit-parity/define-parser-target | 16 + 4 → 20 checks |
 | emit-parity/relex-family | emit-parity/lex-family (tier ci) | 45 + 5 → 50 checks |
 | core/incremental-verify | core/incremental-grammars | 29,109 + 256 → 29,245 steps (120 seeded random steps) |
-| core/refactor-guard | CURATED_TS_CST of test/emit-corpus.ts (emit-parser-verify, emit-reject-messages) | 112 → 107 snippets (5 exact duplicates) |
+| core/refactor-guard | CURATED_TS_CST of test/emit-corpus.ts (target-js-verify, emit-reject-messages) | 112 → 107 snippets (5 exact duplicates) |
 | highlighter/html-monarch | highlighter/monarch-dialect | 150 rows + 14 checks → 164 rows |
 | highlighter/html-embed-js | highlighter/raw-text-case-sites | 16 + 7 → 16 cells + 7 checks |
 | highlighter/self-close-sites | generative/scope≡role | 6 languages, 32 cells → same |
@@ -154,9 +154,9 @@ three grammars (`calc`, `templatejs`, and `javascript` on the TypeScript target 
 `QUICK_GRAMMARS` in `test/portable-harness.ts`), and `javascript` on Go too when the Go target's own
 code changed (`CHECK_QUICK_GO=1`, set by `check.ts`: only a Go compile sees a variable declared and
 not used, the commonest Go printer mistake, and a small grammar's parser may not reach the code that
-has it); define-target prints its fixtures but not the javascript grammar; edits-small runs one in
+has it); define-parser-target prints its fixtures but not the javascript grammar; edits-small runs one in
 three of its exhaustive one-character edits (`QUICK_EDIT_STRIDE`,
-`test/portable-edits.ts`); `emit-portable-library` runs its source checks of every target's emitted library (the
+`test/portable-edits.ts`); `parser-ir-library` runs its source checks of every target's emitted library (the
 exported surface, package-level state, imports) and the TypeScript target's runtime checks, not the
 Go / Rust build and run. A gate in `QUICK_GATES` without a sample runs whole (it costs about a
 second). `--quick` prints the affected gates it leaves out.
@@ -206,7 +206,7 @@ What `--quick` does not run at all: a Rust parser of a real grammar, the Go pars
 unless the Go target changed, the Go / Rust library build and run, every `ci`-tier gate (the parity
 corpus, edits-1 / edits-2, recovery, wide, test262, look-extent, tm-mutation, ...), the native work
 and allocation gates (portable-work, lexer-work, lexer-reservation, builder-reuse,
-emit-portable-split, alloc-work), jsTarget's standalone type check (emit-standalone), and the
+parser-ir-split, alloc-work), jsTarget's standalone type check (emit-standalone), and the
 generated artifacts' drift (CI runs `npm run gen` and diffs).
 
 The caches (`test/build-cache.ts`, `test/emit-cache.ts`): Go / Rust builds and emitted parsers are

@@ -17,7 +17,7 @@
 // Every target's token stream (kind/text/off/end/nl) is identical, and identical to the
 // frozen lexer golden (type/span/newlineBefore). Missing go/rustc → logged + skipped.
 //
-//   node test/emit-portable-library.ts
+//   node test/parser-ir-library.ts
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

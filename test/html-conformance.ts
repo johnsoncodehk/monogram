@@ -15,7 +15,7 @@
 //       stage reports as a parse error for every input listed.
 //    4. ENGINE PARITY — the emitted parser (src/target-js.ts) is held to all of the above:
 //       the same verdict as the interpreter on every input here, and a byte-identical CST on
-//       every accepted one. (emit-parser-verify.ts pins that parity for TypeScript only; the
+//       every accepted one. (target-js-verify.ts pins that parity for TypeScript only; the
 //       markup element arm — optional end tags, the end tag's name — is exercised here.)
 //
 //  Run: node test/html-conformance.ts

@@ -115,7 +115,7 @@ jobs:
           retention-days: 14
 
   # Engine-parity BREADTH guard. The `test` job already runs the three parity gates
-  # (emit-parser-verify / emit-reject-messages / emit-lexer-verify) on the corpus-free
+  # (target-js-verify / emit-reject-messages / emit-lexer-verify) on the corpus-free
   # in-repo corpus — that is the standing mechanism that forces a interpreter change to
   # propagate to target-js. This job adds the full external TS corpus for breadth, so a
   # divergence on some construct the in-repo corpus does not exercise still gets caught.
@@ -181,7 +181,7 @@ jobs:
         if: steps.changed.outputs.value == 'true'
         run: |
           node test/corpus-pin.ts --fetch
-          node test/emit-parser-verify.ts all
+          node test/target-js-verify.ts all
           node test/emit-reject-messages.ts
           node test/emit-lexer-verify.ts
 

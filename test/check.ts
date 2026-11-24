@@ -50,13 +50,13 @@ const GATES: Gate[] = [
   { group: 'core', name: 'cst-match-totality', args: ['test/cst-match-totality.ts'] },
   { group: 'core', name: 'grammar-names', args: ['test/grammar-names-transparent.ts'] },
   { group: 'core', name: 'shape2-eval', args: ['--stack-size=7000', 'test/shape2-eval.ts'] },
-  { group: 'emit-parity', name: 'emit-parser-verify', args: ['test/emit-parser-verify.ts'] },
+  { group: 'emit-parity', name: 'target-js-verify', args: ['test/target-js-verify.ts'] },
   { group: 'emit-parity', name: 'emit-reject-messages', args: ['test/emit-reject-messages.ts'] },
   { group: 'emit-parity', name: 'emit-lexer-verify', args: ['test/emit-lexer-verify.ts'] },
   { group: 'emit-parity', name: 'emit-reentrancy', args: ['test/emit-reentrancy.ts'] },
   { group: 'emit-parity', name: 'emit-standalone', args: ['test/emit-standalone.ts'] },
-  { group: 'emit-parity', name: 'emit-portable-library', args: ['test/emit-portable-library.ts'] },
-  { group: 'emit-parity', name: 'emit-portable-split', args: ['test/emit-portable-split.ts'] },
+  { group: 'emit-parity', name: 'parser-ir-library', args: ['test/parser-ir-library.ts'] },
+  { group: 'emit-parity', name: 'parser-ir-split', args: ['test/parser-ir-split.ts'] },
   // The portable targets ≡ the interpreter, one gate per class (test/portable-harness.ts); the
   // edits class is sharded by grammar (PORTABLE_EDIT_SHARDS). The Go / Rust builds are shared through the
   // harness's build cache, so the shards build each grammar once between them.
@@ -79,7 +79,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'lexer-reservation', args: ['test/lexer-reservation.ts'] },
   { group: 'emit-parity', name: 'alloc-work', args: ['test/alloc-work.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'builder-reuse', args: ['test/builder-reuse.ts'] },
-  { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'], reads: ['src/emit.ts', 'src/target-js.ts'] },
+  { group: 'emit-parity', name: 'define-parser-target', args: ['test/define-parser-target.ts'], reads: ['src/emit.ts', 'src/target-js.ts'] },
   { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'shape-rust', args: ['test/shape-rust.ts'], tier: 'ci' },
   // the typed Rust shape-building parser ≡ the evaluator (needs rustc: on the dev box through rustlink)
@@ -122,9 +122,9 @@ const GATES: Gate[] = [
 // CI. Chosen from the real failures of land/** branches (2026-11-22/23: which gates caught them) and
 // the CI times (each about 3 s or less there, or sampled to that).
 const QUICK_GATES = new Set([
-  'emit-parity/portable-targets/lists', 'emit-parity/portable-targets/edits-small', 'emit-parity/define-target',
+  'emit-parity/portable-targets/lists', 'emit-parity/portable-targets/edits-small', 'emit-parity/define-parser-target',
   'emit-parity/shape-parity', 'emit-parity/guard-refutation', 'emit-parity/guard-lead', 'emit-parity/predictive-first',
-  'emit-parity/emit-reentrancy', 'emit-parity/emit-portable-library', 'core/recovery', 'core/template-holes', 'core/diagnostic-labels', 'core/issue-cases',
+  'emit-parity/emit-reentrancy', 'emit-parity/parser-ir-library', 'core/recovery', 'core/template-holes', 'core/diagnostic-labels', 'core/issue-cases',
   'core/env-spec-regressions', 'core/nullable-rules', 'core/agnostic', 'core/tag-open-entry', 'core/left-recursion',
   'core/indent-extensions', 'core/text-dialect', 'conformance/js', 'conformance/tsx', 'conformance/jsx', 'conformance/html',
   'conformance/ts-ast-structure', 'highlighter/tm-guards', 'highlighter/treesitter-assertions', 'highlighter/tm-dialect',

@@ -142,7 +142,7 @@ concurrent)
   T=$(mktemp -d); C=$T/monogram-build-cache
   row ' gate ' ' run 1 ' ' run 2 ' ' warm run ' ' entries ' ' complete ' ' locks left ' ' tmp left '
   row '---' '---' '---' '---' '---:' '---:' '---:' '---:'
-  for g in "test/portable-lists.ts --grammars=calc,templatejs" "test/emit-portable-library.ts"; do
+  for g in "test/portable-lists.ts --grammars=calc,templatejs" "test/parser-ir-library.ts"; do
     rm -rf "$C"
     TMPDIR=$T node $g > /tmp/cc-1.txt 2>&1 & p1=$!
     TMPDIR=$T node $g > /tmp/cc-2.txt 2>&1 & p2=$!

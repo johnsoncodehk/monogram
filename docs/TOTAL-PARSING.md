@@ -228,7 +228,7 @@ first-error agreement 57.5%.
   determinism on an invalid corpus, a char-by-char typing session, and
   exact-match diagnostic pins (synthesis quality must not silently regress to
   absorption).
-- `test/emit-parser-verify.ts` / `test/emit-reject-messages.ts` /
+- `test/target-js-verify.ts` / `test/emit-reject-messages.ts` /
   `test/emit-lexer-verify.ts` — the emitted runtime ≡ the interpreter (CST,
   token streams, and reject messages). They run on a corpus-free in-repo corpus
   (`test/emit-corpus.ts`: curated snippets + the repo's own sources), so they are
