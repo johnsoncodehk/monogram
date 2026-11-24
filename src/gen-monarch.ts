@@ -655,12 +655,13 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       [ident, { cases: { ...typeCases, '@default': 'type.identifier' } }],
       { include: '@symbols' },
     ];
-    // a name before `:` / `?:` in a parameter list or tuple, before `:` `?` `(` `<` in an object type
+    // a name before `:` / `?:` in a parameter list or tuple; in an object type also before `(` or
+    // `<…>(` (a method signature: `NonNullable<T>` is no member name)
     const nameBefore = (f: string): MonarchRule => [`${ident}(?=\\s*${f})`, 'identifier'];
     for (const [o, c, st] of groups) tokenizer[st] = [
       [escapeRegex(c), { token: o === '<' ? 'delimiter.angle' : tok(c), next: '@pop' }],
       ...o === '<' ? [['(?=[;)\\]}])', { token: '', next: '@pop' }] as MonarchRule] : [],
-      ...o === '(' || o === '[' ? [nameBefore('\\??\\s*:')] : o === '{' ? [nameBefore('\\??\\s*[:(<]')] : [],
+      ...o === '(' || o === '[' ? [nameBefore('\\??\\s*:')] : o === '{' ? [nameBefore('\\??\\s*(?:[:(]|<[^<>]*>\\s*\\()')] : [],
       { include: '@type' },
     ];
     // ── the type positions: one state per closer set ──
