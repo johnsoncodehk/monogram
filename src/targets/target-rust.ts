@@ -216,6 +216,16 @@ function renderIdTablesRust(ids: LexIdPlan): string {
     }).join('\n');
   const kwArms = lenArmsOf(tables.word);
   const puArms = lenArmsOf(tables.rest);
+  // a table with no literal is not printed: its lookup is 0
+  const kwCall = kwArms ? 'lid_of_kw(text, text.len())' : '0', puCall = puArms ? 'lid_of_punct(text, text.len())' : '0';
+  const lenFn = (name: string, arms: string) => arms ? `#[inline(never)]
+fn ${name}(text: &[u8], n: usize) -> u16 {
+    match n {
+${arms}
+        _ => 0,
+    }
+}
+` : '';
   const pf = buildLidPrefilter(ids, UNITS);
   const bitsLit = [...pf.firstByLenBits].join(', ');
   // The byte pattern of lidWordByte, from the function itself (ranges of consecutive bytes).
@@ -250,30 +260,16 @@ fn lid_key_is_literal(text: &[u8]) -> bool {
 #[inline(always)]
 fn lid_of(text: &[u8]) -> u16 {
     if !lid_key_is_literal(text) { return 0; }
-    if matches!(text[0], ${wordBytes.join(' | ')}) { lid_of_kw(text, text.len()) } else { lid_of_punct(text, text.len()) }
+    if matches!(text[0], ${wordBytes.join(' | ')}) { ${kwCall} } else { ${puCall} }
 }
 /// lid_of for a token whose kind can equal word literals only (the generator proved it from the
 /// kind's shape, tokenLiterals): the word table, without the first-byte routing.
 #[inline(always)]
 fn lid_of_word(text: &[u8]) -> u16 {
     if !lid_key_is_literal(text) { return 0; }
-    lid_of_kw(text, text.len())
+    ${kwCall}
 }
-#[inline(never)]
-fn lid_of_kw(text: &[u8], n: usize) -> u16 {
-    match n {
-${kwArms || '        // no keyword lids'}
-        _ => 0,
-    }
-}
-#[inline(never)]
-fn lid_of_punct(text: &[u8], n: usize) -> u16 {
-    match n {
-${puArms || '        // no punct lids'}
-        _ => 0,
-    }
-}
-`;
+${lenFn('lid_of_kw', kwArms)}${lenFn('lid_of_punct', puArms)}`;
 }
 
 /** Emit TT_NAMES / RULE_NAMES from ArenaIdPlan (slim arena leaf + rule ids). */

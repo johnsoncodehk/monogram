@@ -359,7 +359,12 @@ class LexScan {
         const stop = intersect(complement(ex), [[0, 0xffff]]);
         const stopUnits = stop.flatMap(([a, b]) => (b - a < 8 ? Array.from({ length: b - a + 1 }, (_, i) => a + i) : [-1]));
         if (stop.length === 0 && k === 0) return mk([ret(end1)]);
-        if (stop.length === 0) body.push(ret(end1));
+        if (stop.length === 0) {
+          // the read runs to the end: the advance past the last prefix item is never read
+          const last = body.pop();
+          if (last?.k !== 'set' || last.name !== 'q') throw new Error(`lex-family: ${name}: expected the advance of q last`);
+          body.push(ret(end1));
+        }
         else if (stopUnits.length <= 4 && stopUnits.every((c) => c >= 0 && (c < 0xd800 || c > 0xdfff))) body.push(ret(add(this.findAny('q', stopUnits), I(1))));
         else {
           // The run of the units it can pass: an ASCII unit by its table (one per distinct set, shared
