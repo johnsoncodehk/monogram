@@ -546,6 +546,11 @@ export interface PrecOperator {
   // expression. ECMAScript AssignmentTargetType, enforced at parse time (JS `=`/`+=`/…,
   // postfix `++`/`--`). A parenthesized cover or member/element/call/non-null tail passes.
   requireTarget?: boolean;
+  // A prefix operator CAPPED at its own level (`cappedPrefix`): it may begin an operand only where
+  // the enclosing Pratt minBp is looser than its level, so it is never the operand of a tighter
+  // operator (Python `a == not b`, `-not x` have no parse). Its own operand and the leds after it
+  // are those of an ordinary prefix operator. Read only by the Pratt cores.
+  capped?: boolean;
 }
 
 export interface PrecLevel {
@@ -600,11 +605,15 @@ type RuleExprNode =
   // parsed only when the enclosing Pratt minBp is LOOSER than the named connector's
   // binding power, and once parsed admits NO led (a tighter operator can neither take it
   // as an operand nor continue it). Read only by the expression-engine Pratt core.
+  // atLevel: the body is a reference to a Pratt rule parsed at the named operator's level: only
+  // that level's operators and tighter ones (and the nuds their minBp admits) are read, as the
+  // operand of a level-`atLevel` operator would be. Python's `'*' bitwise_or`: a starred operand
+  // is never a comparison. Read only by the parsers; every other consumer sees a plain group.
   // `tsRuleName`: when a tsRelaxed group carries it, gen-treesitter emits `tsRelaxed` ONCE
   // as a shared rule of this name and renders each reference as `$.<name>` — sharing its
   // states instead of inlining (and duplicating) them at every use site (issue #46).
   // Visibility follows tree-sitter's `_`-prefix convention.
-  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr; tsRuleName?: string; capBelow?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr; tsRuleName?: string; capBelow?: string; atLevel?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
