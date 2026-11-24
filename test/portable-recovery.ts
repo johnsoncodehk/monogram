@@ -77,9 +77,12 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // supplied, and `of => y in x` is again the arrow body taking the `in`. The LOOKAHEAD BYPASS of
 // stage 3 (`async { class C {}`: a supplied 'function' that the statement's
 // `[lookahead ∉ { async function }]` refuses) is repaired another way now and no longer drawn.
+// typescript + 'for (x = (y = (a in b)) declare c);' (master b8e42329, #199: its new literals draw
+// another set): the parse supplies '=>' twice and 'in'; in `… =>  declare =>  c in  x` the arrow
+// body takes the `in`. Re-measured on that merge: javascript unchanged.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
