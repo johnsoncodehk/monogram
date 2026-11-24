@@ -40,7 +40,9 @@ import { FACTS as RS_FACTS } from '../src/target-rust.ts';
 // of a recovery against a strict interpretation of the same input, P10's checkable share) are
 // printed for the TS target.
 const RECOVERY_MUTANTS = 3, RECOVERY_SEED = 20261123;
-const TOTAL_K = 3;
+// 3 -> 4 (the NUD, list and choice repairs): measured max 3.07 (typescript, `export @aa  true`: a
+// short input, where the attempts' fixed work dominates); javascript 1.11.
+const TOTAL_K = 4;
 // The farthest-hint agreement is a floor per grammar (the count of rejects whose related location
 // is the interpreter's farthest token): it may rise, never drop below what is recorded here.
 // The mutants are drawn from the accept lists (seeded), so a list entry added or removed draws
@@ -69,8 +71,8 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // stage 3 (`async { class C {}`: a supplied 'function' that the statement's
 // `[lookahead ∉ { async function }]` refuses) is repaired another way now and no longer drawn.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
-  javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);'],
+  javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
