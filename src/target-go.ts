@@ -3337,6 +3337,7 @@ func (rv *recov) enMiss(r int) {
 	if p.pos < len(p.toks) { off = int(p.toks[p.pos].Off) } else if p.pos > 0 { off = int(p.toks[p.pos-1].End) }
 	n := p.finishW(uint16(r), len(p.scratch), off, p.pos)
 	if n.present { p.scratch = append(p.scratch, n.h) }
+	rv.finOff = off
 }
 func (rv *recov) enLookEnd() int { return rv.p.lookEnd() }
 func (rv *recov) enLookSet(e int) { rv.p.maxLook, rv.p.peekEnd = e, 0 }
@@ -3441,10 +3442,11 @@ function recoveryRegionGo(ir: ParserIR, shared: SharedAlgorithms): string {
 type diag struct{ Kind, Off, End, RelOff, RelEnd, Arg int }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 type bestCand struct{ Pos, Off, Won, Form, Tail, Capped, H0, Hb int }
-// The words of a repair's message: a literal's text (by lid), a token kind's name.
+// The words of a repair's message: a literal's text (by lid), a token kind's name, a rule's name.
 var lidTexts = []string{${ids.lids.map(J).join(', ')}}
 func litText(x int) string { return lidTexts[x] }
 func kindText(x int) string { return kindStr[x] }
+func ruleText(x int) string { return RULE_NAMES[x] }
 ${shared.recoveryFamily(ir)}
 ${recoveryEngineGo(ir)}
 // Diagnostic is a span of the source (byte offsets), its message, and a related location or nil.

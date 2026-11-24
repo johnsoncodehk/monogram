@@ -28,8 +28,9 @@ export const DIAG: RecordDecl = {
 // its kid) the parse supplied where it was missing, a zero-width `$missing` node; tokens the parse
 // skipped, an `$error` node over them (arg: the end of its first token; at the end of input, off).
 // The strict parse's error (stage 1, the interpreter's primary error): the entry rule failed at a
-// token; it failed with no token left; it matched and a token is left over.
-export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5;
+// token; it failed with no token left; it matched and a token is left over. A required operand of a
+// Pratt rule the parse supplied, a zero-width `$missing` node (arg: the rule's id).
+export const DK_MISS_LIT = 0, DK_MISS_TOK = 1, DK_SKIP = 2, DK_UNEXPECTED = 3, DK_EOF = 4, DK_LEFTOVER = 5, DK_MISS_RULE = 6;
 // The best candidate of a longest match so far (riCand): where it ended, its node's offset, whether
 // one won, the node's form, tail and capped flag, and where the repair memory stood when the
 // match began (h0) and where the best's repairs end (hb).
@@ -47,8 +48,9 @@ const tok = (i: Expr, f: 'off' | 'end'): Expr => ({ k: 'tokInt', t: { k: 'at', l
 const ret = (...es: Expr[]): Stmt => ({ k: 'return', es });
 const diag = (kind: Expr, off: Expr, end: Expr, relOff: Expr, relEnd: Expr, arg: Expr = n(0)): Expr => ({ k: 'mkRec', rec: 'Diag', fields: { kind, off, end, relOff, relEnd, arg } });
 
-// The message of a diagnostic of src.
-const diagMessage: Fn = {
+// The message of a diagnostic of src. A missing rule is named by its label (`rule(..., { label })`,
+// RuleDecl.label: [rule id, label] in `labels`), else by its name.
+const diagMessageOf = (labels: [number, string][]): Fn => ({
   name: 'diagMessage',
   doc: '',
   params: [{ name: 'src', ty: 'str' }, { name: 'd', ty: 'rec_Diag' }],
@@ -56,6 +58,10 @@ const diagMessage: Fn = {
   body: [
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_LIT)), then: [ret({ k: 'cat', parts: [s("expected '"), { k: 'call', fn: 'litText', args: [fld(v('d'), 'arg')] }, s("'")] })] },
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_TOK)), then: [ret({ k: 'cat', parts: [s('expected '), { k: 'call', fn: 'kindText', args: [fld(v('d'), 'arg')] }] })] },
+    { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_MISS_RULE)), then: [
+      ...labels.map(([rid, label]): Stmt => ({ k: 'if', c: bin('eq', fld(v('d'), 'arg'), n(rid)), then: [ret(s(`expected ${label}`))] })),
+      ret({ k: 'cat', parts: [s('expected '), { k: 'call', fn: 'ruleText', args: [fld(v('d'), 'arg')] }] }),
+    ] },
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_SKIP)), then: [
       { k: 'if', c: bin('eq', fld(v('d'), 'arg'), fld(v('d'), 'off')), then: [ret(s('unexpected end of input'))] },
       ret({ k: 'cat', parts: [s("unexpected '"), { k: 'substr', s: v('src'), a: fld(v('d'), 'off'), b: fld(v('d'), 'arg') }, s("'")] }),
@@ -65,7 +71,7 @@ const diagMessage: Fn = {
     { k: 'if', c: bin('eq', fld(v('d'), 'kind'), n(DK_LEFTOVER)), then: [ret({ k: 'cat', parts: [v('text'), s(' after successful parse')] })] },
     ret(v('text')),
   ],
-};
+});
 
 // The message of a diagnostic's related location (relOff >= 0).
 const diagRelated: Fn = {
@@ -153,15 +159,15 @@ export const ENGINE_EXTERNS: Fn[] = [
   // back to it, so the repairs a losing attempt recorded vanish with its nodes.
   extR('enRm', [['i', 'int']], ['int']), ext('enRmSet', [['i', 'int'], ['v', 'int']]), extR('enRmLen', [], ['int']), ext('enRmPush', [['v', 'int']]), ext('enRmCut', [['n', 'int']]),
   // A node of rule r with no children at the position (zero-width: at its token, or after the last
-  // token at the end of input), appended to the list.
+  // token at the end of input), appended to the list (its offset: enFinOff).
   ext('enMiss', [['r', 'int']]),
   // The examined extent (one past the furthest token examined: lookEnd), and its reset to e.
   extR('enLookEnd', [], ['int']), ext('enLookSet', [['e', 'int']]),
 ];
-// The text of a literal (by lid) and the name of a token kind (by kid): the words of a repair's
-// message (each target prints them over its own tables).
+// The text of a literal (by lid), the name of a token kind (by kid) and of a rule (by id): the
+// words of a repair's message (each target prints them over its own tables).
 const textExt = (name: string): Fn => ({ name, doc: '', params: [{ name: 'x', ty: 'int' }], ret: ['str'], body: [], extern: true });
-export const TEXT_EXTERNS: Fn[] = [textExt('litText'), textExt('kindText')];
+export const TEXT_EXTERNS: Fn[] = [textExt('litText'), textExt('kindText'), textExt('ruleText')];
 // The repair memory's layout: whether a total parse is recovering; the farthest token index a
 // required literal / token / NUD failed at in this attempt (-1: none); where the innermost probe
 // began (an optional, a repetition's element, an ordered branch: no repair before it consumed;
@@ -173,6 +179,10 @@ export const ST_CAPPED = 0, ST_FORM = 1, ST_TAIL = 2, ST_SUP_NEXT = 3, ST_SUP_CU
 const ST_ALL = [ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, ST_CTX];
 
 const T = (i: Expr): Expr => ({ k: 'tab', t: 'rt', i });
+// The trailer of the plan's table ([2 + N] holds its index): the rule ids of `$error`, `$missing`
+// and the entry rule; the top-level element (-1: the scope is the whole input); the FIRST
+// signature of a top-level entry (-1: unknown).
+const TR = (k: number): Expr => bin('add', T(bin('add', n(2), T(n(0)))), n(k));
 const add = (a: Expr, b: Expr): Expr => bin('add', a, b);
 const sub = (a: Expr, b: Expr): Expr => bin('sub', a, b);
 const eq = (a: Expr, b: Expr): Expr => bin('eq', a, b);
@@ -229,12 +239,16 @@ const riIn = method('riIn', [['l', 'int'], ['x', 'int']], ['bool'], [
   ret(fls),
 ]);
 // Whether Guard g admits the token at the position (-1: no guard). A guard that tests anything
-// refuses at the end of input, as the native candidate frame does.
+// refuses at the end of input, as the native candidate frame does. Recovering, its tests of the
+// token after (second, pairs: FIRST facts, which only skip a candidate that cannot match) are
+// waived where a repair can fire at that token (riNear): `if =>a)` tries the if statement, whose
+// '(' is missing there.
 const riGuardIn = method('riGuardIn', [['g', 'int']], ['bool'], [
   if_(lt(v('g'), n(0)), [ret(tru)]),
   if_(lt(call('enPeekKid'), n(0)), [ret(fls)]),
   if_(and(ge(at(v('g'), 0), n(0)), not(call('enAhead', at(v('g'), 0), tru))), [ret(fls)]),
-  if_(and(ge(at(v('g'), 1), n(0)), not(call('enSecondIn', at(v('g'), 1)))), [ret(fls)]),
+  let_('w', call('riNear', add(call('enPos'), n(1))), 'bool'),
+  if_(and(ge(at(v('g'), 1), n(0)), not(v('w')), not(call('enSecondIn', at(v('g'), 1)))), [ret(fls)]),
   let_('nl', at(v('g'), 2)),
   let_('i', n(0)),
   while_(lt(v('i'), v('nl')), [
@@ -248,7 +262,7 @@ const riGuardIn = method('riGuardIn', [['g', 'int']], ['bool'], [
   set('i', n(0)),
   while_(lt(v('i'), v('np')), [
     let_('x', add(add(v('pb'), n(1)), add(v('i'), v('i')))),
-    if_(and(call('enAhead', at(v('x'), 0), tru), not(call('enSecondIn', at(v('x'), 1)))), [ret(fls)]),
+    if_(and(not(v('w')), call('enAhead', at(v('x'), 0), tru), not(call('enSecondIn', at(v('x'), 1)))), [ret(fls)]),
     inc('i'),
   ]),
   let_('fs', R(add(add(v('pb'), n(1)), add(v('np'), v('np'))))),
@@ -372,27 +386,59 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   ]),
   // A repetition stops at a body that matches nothing (an interpreted loop drops a zero-width
   // iteration: termination T1); the native loop never meets one on input it accepts.
+  // Recovering, an element that fails where a repair fires (riRep) may follow an extra token: the
+  // token becomes an `$error` node and the element is tried after it (the extra token in a list).
   op(REC_S_STAR, [
     while_(tru, [
-      guarded([brk]),
       let_('p0', call('enPos')),
-      ...probe('pr', attempt('ok', call('riStep', S2R, v('d')))),
+      let_('ok', fls, 'bool'),
+      if_(and(ge(S1, n(0)), not(call('enAhead', S1, tru))), [run('riFail', v('p0'))], [
+        ...probe('pr', attempt('o1', call('riStep', S2R, v('d')))),
+        set('ok', v('o1')),
+      ]),
+      if_(and(not(v('ok')), ge(call('enPeekKid'), n(0)), call('riRep', v('p0'))), [
+        let_('ke', call('enMark')),
+        let_('ce', call('enSh')),
+        run('enLeafKid'),
+        run('riErrNode', v('ce'), v('p0')),
+        ...probe('pr', [set('ok', call('riStep', S2R, v('d')))]),
+        if_(v('ok'), [run('enUnmark', v('ke'))], [run('enReset', v('ke')), run('enUnmark', v('ke'))]),
+      ]),
       if_(or(not(v('ok')), eq(call('enPos'), v('p0'))), [brk]),
     ]),
     ret(tru),
   ]),
   op(REC_S_OPT, [guarded([ret(tru)]), ...probe('pr', attempt('ok', call('riList', S2R, v('d')))), ret(tru)]),
-  // elem (delim elem)*: a trailing delimiter stays matched.
+  // elem (delim elem)*: a trailing delimiter stays matched. Recovering, where the delimiter is not
+  // there and a repair fires (riRep): the token there is extra when the delimiter follows it (an
+  // `$error` node), else the delimiter is missing (a `$missing` node) before an element that
+  // consumes; a repaired delimiter whose element fails is undone with it.
   op(REC_S_SEP, [
     guarded([ret(tru)]),
     let_('el', S2R),
     ...probe('pr', attempt('ok', call('riStep', v('el'), v('d')))),
     if_(not(v('ok')), [ret(tru)]),
-    while_(call('enLit', S3), [
+    while_(tru, [
+      let_('pd', call('enPos')),
+      let_('km', call('enMark')),
+      let_('dl', call('enLit', S3), 'bool'),
+      let_('rp', fls, 'bool'),
+      if_(and(not(v('dl')), ge(call('enPeekKid'), n(0)), call('riRep', v('pd'))), [
+        set('rp', tru),
+        let_('ce', call('enSh')),
+        run('enLeafKid'),
+        run('riErrNode', v('ce'), v('pd')),
+        set('dl', call('enLit', S3)),
+        if_(not(v('dl')), [run('enReset', v('km')), run('riRepNode', T(TR(1)), n(DK_MISS_LIT), S3), set('dl', tru)]),
+      ]),
+      if_(not(v('dl')), [run('enUnmark', v('km')), brk]),
       let_('k2', call('enMark')),
       ...probe('pr2', [let_('ok2', call('riStep', v('el'), v('d')), 'bool')]),
-      if_(not(v('ok2')), [run('enReset', v('k2')), run('enUnmark', v('k2')), brk]),
-      run('enUnmark', v('k2')),
+      if_(or(not(v('ok2')), and(v('rp'), bin('le', call('enPos'), v('pd')))), [
+        if_(v('rp'), [run('enReset', v('km'))], [run('enReset', v('k2'))]),
+        run('enUnmark', v('km')), brk,
+      ]),
+      run('enUnmark', v('km')),
     ]),
     ret(tru),
   ]),
@@ -418,7 +464,25 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       ]),
       inc('i'),
     ]),
-    run('riFail', call('enPos')),
+    // Recovering, where no branch matched and a repair fires (riRep): the branches the token did not
+    // admit (their FIRST signature refused it), in order, each required (no probe: its repairs fire
+    // at its first token), the first that matches (a statement's `asi()` supplies its ';'). A branch
+    // that was tried had its repairs after its first token already; trying it again would repeat
+    // its work at every nesting level (the cost grows with the depth: `A<B<C<D<E<const const, x>`).
+    let_('pa', call('enPos')),
+    if_(call('riRep', v('pa')), [
+      set('i', n(0)),
+      while_(lt(v('i'), S2), [
+        let_('a2', add(add(v('s'), n(3)), add(v('i'), v('i')))),
+        let_('f2', atR(v('a2'), 0)),
+        if_(and(ge(v('f2'), n(0)), not(call('riSig', v('f2')))), [
+          ...attempt('o2', call('riList', atR(v('a2'), 1), v('d'))),
+          if_(v('o2'), [ret(tru)]),
+        ]),
+        inc('i'),
+      ]),
+    ]),
+    run('riFail', v('pa')),
     ret(fls),
   ]),
   op(REC_S_LOOK, [ret(eq(call('enLook', S1), eq(S2, n(1))))]),
@@ -479,19 +543,28 @@ const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr
 ];
 // The NUD: every arm a candidate of a longest match. It returns whether one matched and the
 // offset of its node, and leaves the node's capped flag, form and tail in the engine.
+// When no arm matches (the operand a Pratt rule requires is not there) and a repair fires (riRep),
+// the operand is repaired (stage 3, the NUD repairs): the token at the position is extra (an
+// `$error` node over it, then the NUD from the token after, as a probe: no repair at its first
+// token) when that matches, else the operand is supplied, a zero-width `$missing` node and its
+// repair record `expected <rule>`, a target (form 0, so an operator that requires one takes it).
+// The one that matches ends farther, so the order is the longest match's.
+// The window reaches back one token (a bar at the token before: the operator): a native-first
+// operand that dropped its operator (`price * ;` matches `price`) records its failure at the
+// operator, not at the operand.
 // cappedSeq: the grammar has a capped prefix operator (cappedPrefix), lowered to a sequence arm with a
 // cap: each REC_N_SEQ entry then carries one more cell, the cap (-1: none). Absent, the code and the
 // tables are as before.
 const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
   run('enSetSt', n(ST_CAPPED), n(0)),
   let_('kid', call('enPeekKid')),
-  if_(lt(v('kid'), n(0)), [ret(fls, n(0))]),
   let_('lid', call('enPeekLid')),
   let_('save', call('enPos')), let_('sb', call('enSh')),
   { k: 'let', name: 'best', ty: 'rec_BestCand', init: newBest(v('save')) },
   let_('x', add(sec(P_ARMS), n(1))),
   let_('i', n(0)),
-  while_(lt(v('i'), T(sec(P_ARMS))), [
+  // (no arm at the end of input)
+  while_(and(ge(v('kid'), n(0)), lt(v('i'), T(sec(P_ARMS)))), [
     let_('tag', T(v('x'))),
     if_(eq(v('tag'), n(REC_N_TOK)), [
       // A token arm's leaf is offered only when its one-token match would win.
@@ -539,7 +612,35 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
     ]),
     inc('i'),
   ]),
-  if_(eq(fld(v('best'), 'won'), n(0)), [run('riFail', v('save'))]),
+  if_(and(eq(fld(v('best'), 'won'), n(0)), or(call('riNear', sub(v('save'), n(1))), call('riRep', v('save')))), [
+    if_(ge(v('kid'), n(0)), [
+      let_('ke', call('enMark')),
+      let_('ce', call('enSh')),
+      run('enLeafKid'),
+      run('riErrNode', v('ce'), v('save')),
+      let_('eo', call('enFinOff')),
+      // (not across a line break: a token that ends its line ends an unfinished construct, `x = ;`)
+      let_('oke', fls, 'bool'),
+      if_(not(call('enPeekNl')), [
+        ...probe('pr', [{ k: 'letCall', names: ['ok3', '_'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) }]),
+        set('oke', v('ok3')),
+      ]),
+      if_(v('oke'), [
+        run('enUnmark', v('ke')),
+        { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
+        { k: 'setField', name: 'best', f: 'off', e: v('eo') },
+        { k: 'setField', name: 'best', f: 'won', e: n(1) },
+        { k: 'setField', name: 'best', f: 'form', e: call('enSt', n(ST_FORM)) },
+        { k: 'setField', name: 'best', f: 'tail', e: call('enSt', n(ST_TAIL)) },
+        { k: 'setField', name: 'best', f: 'capped', e: call('enSt', n(ST_CAPPED)) },
+      ], [run('enReset', v('ke')), run('enUnmark', v('ke'))]),
+    ]),
+    if_(eq(fld(v('best'), 'won'), n(0)), [
+      run('riRepNode', T(TR(1)), n(DK_MISS_RULE), v('r')),
+      { k: 'setField', name: 'best', f: 'off', e: call('enFinOff') },
+      { k: 'setField', name: 'best', f: 'won', e: n(1) },
+    ]),
+  ]),
   // A sub-parse may leave the capped flag set: only a capped arm that won makes this node capped.
   run('enSetSt', n(ST_CAPPED), fld(v('best'), 'capped')), run('enSetSt', n(ST_FORM), fld(v('best'), 'form')), run('enSetSt', n(ST_TAIL), fld(v('best'), 'tail')),
   ...wonPos,
@@ -556,7 +657,7 @@ const ledOk = (x: Expr): Expr => and(
   not(call('riIn', add(x, n(10)), v('sup'))),
 );
 const finLed = (form: Expr): Stmt[] => [
-  run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('hl', call('enSh')), set('fm', form), set('prog', tru),
+  run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('fm', form), set('prog', tru),
 ];
 // The led at record x matched: its node; capped by its trailing operand (capsFromTail), it returns
 // at once, still capped (PrattLowering.ledArm); else the tail closes when the led closes it.
@@ -574,7 +675,6 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
   let_('fm', call('enSt', n(ST_FORM))),
   if_(ne(call('enSt', n(ST_CAPPED)), n(0)), [ret(tru)]),
   let_('tc', call('enSt', n(ST_TAIL))),
-  let_('hl', call('enSh')),
   while_(tru, [
     let_('kid', call('enPeekKid')),
     if_(lt(v('kid'), n(0)), [brk]),
@@ -618,9 +718,11 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
       let_('b', call('riOp', sec(P_BIN), n(5), v('opl'))),
       if_(or(lt(v('b'), n(0)), bin('le', at(v('b'), 1), v('minBp'))), [brk]),
       if_(or(and(isT(v('b'), 3), ne(v('fm'), n(0))), and(isT(v('b'), 4), eq(v('fm'), n(2)))), [ret(fls)]),
-      let_('ls', call('enPos')),
+      // (a mark, not a cut: an operand that fails may have recorded repairs, which go with it)
+      let_('kb', call('enMark')),
       run('enLeafOpN'),
-      if_(not(operand(at(v('b'), 2))), [run('enBack', v('ls')), run('enCut', v('hl')), brk]),
+      if_(not(operand(at(v('b'), 2))), [run('enReset', v('kb')), run('enUnmark', v('kb')), brk]),
+      run('enUnmark', v('kb')),
       ...finLed(n(1)),
       // A capped right operand caps this node: it returns at once, still capped (PrattLowering.binary).
       if_(ne(call('enSt', n(ST_CAPPED)), n(0)), [run('enSetSt', n(ST_FORM), n(1)), ret(tru)]),
@@ -650,10 +752,6 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
 // interpreted. A frame that failed is interpreted, so a failure's position is known.
 const INF = 1 << 30;
 const rm = (i: number): Expr => call('enRm', n(i));
-// The trailer of the plan's table ([2 + N] holds its index): the rule ids of `$error`, `$missing`
-// and the entry rule; the top-level element (-1: the scope is the whole input); the FIRST
-// signature of a top-level entry (-1: unknown).
-const TR = (k: number): Expr => add(T(add(n(2), T(n(0)))), n(k));
 // Cells [a, b) of the repair memory removed (the cells after them moved down).
 const riRmDrop = method('riRmDrop', [['a', 'int'], ['b', 'int']], [], [
   let_('ln', call('enRmLen')),
@@ -680,30 +778,48 @@ const riMatch = method('riMatch', [['op', 'int'], ['x', 'int']], ['bool'], [
   if_(eq(v('op'), n(REC_S_COMP)), [ret(call('enComp', v('x')))]),
   ret(call('enTok', v('x'))),
 ]);
-// A required literal or token (step op, x its lid / kid) is not at the position. When a bar is near
-// and no probe is still unconsumed it is repaired: when it is the token after, the token at the
-// position is extra (an `$error` node over it, then the match); else it is supplied (a `$missing`
-// node). Otherwise a failure.
+// Whether a repair fires at token p (where a required item failed): a bar is near (in [p, p + 2])
+// and no probe is still unconsumed there; else the failure is recorded.
+const riRep = method('riRep', [['p', 'int']], ['bool'], [
+  if_(call('riNear', v('p')), [ret(tru)]),
+  run('riFail', v('p')),
+  ret(fls),
+]);
+// Whether a repair can fire at token p (riRep, nothing recorded).
+const riNear = method('riNear', [['p', 'int']], ['bool'], [
+  let_('pr', rm(RM_PROBE)),
+  ret(and(or(lt(v('pr'), n(0)), gt(v('p'), v('pr'))), call('riBarIn', v('p'), add(v('p'), n(2))))),
+]);
+// An `$error` node over the leaves from height c, the tokens from p to the position, and its repair.
+const riErrNode = method('riErrNode', [['c', 'int'], ['p', 'int']], [], [
+  run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
+  run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p')), run('enRmPush', call('enPos')),
+]);
+// A zero-width node of rule r at the position, and its repair (kind, the node's offset, arg). The
+// offset is the node's, not a token index: at the end of a capped operand's tokens (a re-bind's
+// cap) it lies after the cap's last token, which the token after it would not say.
+const riRepNode = method('riRepNode', [['r', 'int'], ['kind', 'int'], ['arg', 'int']], [], [
+  run('enMiss', v('r')),
+  let_('o', call('enFinOff')),
+  run('enRmPush', v('kind')), run('enRmPush', v('o')), run('enRmPush', v('arg')),
+]);
+// A required literal or token (step op, x its lid / kid) is not at the position. When a repair
+// fires it is repaired: when it is the token after, the token at the position is extra (an `$error`
+// node over it, then the match); else it is supplied (a `$missing` node). Otherwise a failure.
 const riMiss = method('riMiss', [['op', 'int'], ['x', 'int']], ['bool'], [
   let_('p', call('enPos')),
-  let_('pr', rm(RM_PROBE)),
-  if_(or(and(ge(v('pr'), n(0)), bin('le', v('p'), v('pr'))), not(call('riBarIn', v('p'), add(v('p'), n(2))))), [run('riFail', v('p')), ret(fls)]),
+  if_(not(call('riRep', v('p'))), [ret(fls)]),
   if_(ge(call('enPeekKid'), n(0)), [
     let_('k', call('enMark')),
     let_('c', call('enSh')),
     run('enLeafKid'),
-    run('enFinLed', T(TR(0)), v('c'), n(0), v('p')),
-    if_(call('riMatch', v('op'), v('x')), [
-      run('enUnmark', v('k')),
-      run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p')), run('enRmPush', add(v('p'), n(1))),
-      ret(tru),
-    ]),
+    run('riErrNode', v('c'), v('p')),
+    if_(call('riMatch', v('op'), v('x')), [run('enUnmark', v('k')), ret(tru)]),
     run('enReset', v('k')), run('enUnmark', v('k')),
   ]),
-  run('enMiss', T(TR(1))),
   let_('kind', n(DK_MISS_LIT)),
   if_(eq(v('op'), n(REC_S_TOK)), [set('kind', n(DK_MISS_TOK))]),
-  run('enRmPush', v('kind')), run('enRmPush', v('p')), run('enRmPush', v('x')),
+  run('riRepNode', T(TR(1)), v('kind'), v('x')),
   ret(tru),
 ]);
 // Native-first (recovering only): rule r (bp < 0) or Pratt rule r at bp, natively; kept when it
@@ -786,7 +902,7 @@ const riAttempts = method('riAttempts', [['el', 'int'], ['upto', 'int']], ['bool
 const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
   let_('p0', call('enPos')),
   let_('c', call('enSh')),
-  if_(lt(call('enPeekKid'), n(0)), [run('enMiss', T(TR(0))), run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p0')), run('enRmPush', v('p0')), ret()]),
+  if_(lt(call('enPeekKid'), n(0)), [run('riRepNode', T(TR(0)), n(DK_SKIP), n(0)), ret()]),
   run('enLeafKid'),
   while_(ge(call('enPeekKid'), n(0)), [
     if_(and(ge(v('el'), n(0)), or(lt(v('sync'), n(0)), call('riSig', v('sync')))), [
@@ -799,8 +915,7 @@ const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
     ]),
     run('enLeafKid'),
   ]),
-  run('enFinLed', T(TR(0)), v('c'), n(0), v('p0')),
-  run('enRmPush', n(DK_SKIP)), run('enRmPush', v('p0')), run('enRmPush', call('enPos')),
+  run('riErrNode', v('c'), v('p0')),
 ]);
 // The total parse from the first token: the entry rule's node over every top-level entry (each
 // parsed by its attempts, or skipped), or over the whole input; its repairs in the repair memory
@@ -845,19 +960,20 @@ const riTotal = method('riTotal', [], [], [
   ]),
   run('enRmSet', n(RM_REC), n(0)),
 ]);
-// A repair's diagnostic (kind, token index t, arg as riMiss / riSkip recorded it): a missing
-// literal or token is zero-width where its node is; a skip spans its tokens [t, arg).
+// A repair's diagnostic (kind, t, arg as riErrNode / riRepNode recorded them): a skip spans its
+// tokens [t, arg); a zero-width repair (a missing literal, token or operand; a skip at the end of
+// input, arg 0: a skip ends past its first token) is at its node's offset t.
 const repairDiag: Fn = {
   name: 'repairDiag',
   doc: '',
   params: [{ name: 'toks', ty: 'toks' }, { name: 'kind', ty: 'int' }, { name: 't', ty: 'idx' }, { name: 'arg', ty: 'idx' }],
   ret: ['rec_Diag'],
   body: [
-    if_(and(eq(v('kind'), n(DK_SKIP)), gt(v('arg'), v('t'))), [ret(diag(v('kind'), tok(v('t'), 'off'), tok(sub(v('arg'), n(1)), 'end'), n(-1), n(-1), tok(v('t'), 'end')))]),
-    let_('off', n(0)),
-    if_(lt(v('t'), { k: 'len', e: v('toks') }), [set('off', tok(v('t'), 'off'))], [if_(gt(v('t'), n(0)), [set('off', tok(sub(v('t'), n(1)), 'end'))])]),
-    if_(eq(v('kind'), n(DK_SKIP)), [ret(diag(v('kind'), v('off'), v('off'), n(-1), n(-1), v('off')))]),
-    ret(diag(v('kind'), v('off'), v('off'), n(-1), n(-1), v('arg'))),
+    if_(eq(v('kind'), n(DK_SKIP)), [
+      if_(gt(v('arg'), n(0)), [ret(diag(v('kind'), tok(v('t'), 'off'), tok(sub(v('arg'), n(1)), 'end'), n(-1), n(-1), tok(v('t'), 'end')))]),
+      ret(diag(v('kind'), v('t'), v('t'), n(-1), n(-1), v('t'))),
+    ]),
+    ret(diag(v('kind'), v('t'), v('t'), n(-1), n(-1), v('arg'))),
   ],
 };
 
@@ -873,15 +989,15 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
-export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false): Fn[] {
-  return [rejectDiag, repairDiag, diagMessage, diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBp, riBpOf(rebind),
-    riRmDrop, riBarIn, riFail, riMatch, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
+export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): Fn[] {
+  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBp, riBpOf(rebind),
+    riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
 // rbBracket is the native forms' (printed with them).
-export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, cappedSeq = false): string {
-  return printFns(L, recoveryFamilyFns(rebind, ids, cappedSeq), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
+export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): string {
+  return printFns(L, recoveryFamilyFns(rebind, ids, cappedSeq, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
 }
