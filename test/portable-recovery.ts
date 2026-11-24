@@ -63,9 +63,12 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
 // typescript 'for ((async) from y);' -> 'for (() of y);' (land/recovery-stage3 merged with master
 // 1f944fcf: two accept rows added at the front of the typescript list draw another mutant set).
+// typescript + 'for (x = (y = (a in b)) constructor c);' (land/sound-lt-compose: its `<` composite
+// accept rows draw another mutant set; the parse supplies '=>' and 'in', and the arrow body's
+// operator loop takes `in c` in the substituted text, the same class).
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (() of x);', 'for (() of y);'],
-  typescript: ['for (() of y);'],
+  typescript: ['for (() of y);', 'for (x = (y = (a in b)) constructor c);'],
 };
 // P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A negative lookahead was decided on the
 // original tokens and a supplied token makes the repaired text one it refuses: in `async { class C {}`
