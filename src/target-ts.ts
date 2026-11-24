@@ -1138,14 +1138,14 @@ ${kids.map((k) => `      case ${k}:
     if (_capped) { _form = ${binF}; return true; }
     form = ${binF}; tailClosed = true;
   }`,
-    entry: `${tsPrattOpTables(r, ids)}
+    entry: (bp) => `${tsPrattOpTables(r, ids)}
 function parse${r.name}W(): boolean {
   const prev = _suppressCur; _suppressCur = _suppressNext; _suppressNext = 0;
-  const r = ${r.name}_bpW(0);
+  const r = ${r.name}_bpW(${bp ? '0' : ''});
   _suppressCur = prev;
   return r;
 }`,
-    bpOpen: (label, nudBp) => `function ${r.name}_bpW(minBp: number): boolean {
+    bpOpen: (label, nudBp, bp) => `function ${r.name}_bpW(${bp ? 'minBp: number' : ''}): boolean {
   const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : dem.length ? ' const p0 = pos;' : ''}
   if (!${r.name}_nudW(${nudBp ? 'minBp' : ''})) return false;
   let form = _form;

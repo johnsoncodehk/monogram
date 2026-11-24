@@ -1545,16 +1545,16 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
+    entry: (bp) => `${goPrattOpTables(r, ids, ir.assignTargets?.demand)}
 func (p *engine) parse${r.name}() int32 {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
 \tp.suppressNext = 0
-\tr := p.bp_${r.name}(0)
+\tr := p.bp_${r.name}(${bp ? '0' : ''})
 \tp.suppressCur = prev
 \treturn r
 }`,
-    bpOpen: (label, nudBp) => `func (p *engine) bp_${r.name}(minBp int) int32 {${T.p0}
+    bpOpen: (label, nudBp, bp) => `func (p *engine) bp_${r.name}(${bp ? 'minBp int' : ''}) int32 {${T.p0}
 \tleft := p.nud_${r.name}(${nudBp ? 'minBp' : ''})
 \tif left < 0 { return -1 }
 \tform := p.form
@@ -2240,15 +2240,15 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\tif p.capped { p.form = ${T.bin}; return left, true }
 \t\tform = ${T.bin}; tailClosed = true
 \t}`,
-    entry: `func (p *${recv}) parse${r.name}W() (spanned, bool) {
+    entry: (bp) => `func (p *${recv}) parse${r.name}W() (spanned, bool) {
 \tprev := p.suppressCur
 \tp.suppressCur = p.suppressNext
 \tp.suppressNext = 0
-\tr, ok := p.bpW_${r.name}(0)
+\tr, ok := p.bpW_${r.name}(${bp ? '0' : ''})
 \tp.suppressCur = prev
 \treturn r, ok
 }`,
-    bpOpen: (label, nudBp) => `func (p *${recv}) bpW_${r.name}(minBp int) (spanned, bool) {${T.p0}
+    bpOpen: (label, nudBp, bp) => `func (p *${recv}) bpW_${r.name}(${bp ? 'minBp int' : ''}) (spanned, bool) {${T.p0}
 \tleft, ok := p.nudW_${r.name}(${nudBp ? 'minBp' : ''})
 \tif !ok { return spanned{}, false }
 \tform := p.form

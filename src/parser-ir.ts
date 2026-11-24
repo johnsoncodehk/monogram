@@ -1985,8 +1985,8 @@ export type PrattLowering = {
   noBinary: string;                              // the loop's end in a rule without binary operators (the loop leaves: nothing else continues it)
   binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
-  entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
-  bpOpen(label: boolean, nudBp: boolean): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power)
+  entry(bp: boolean): string;                    // the entry function (and the operator tables, where the target prints them beside it); bp: `bp` takes the binding power
+  bpOpen(label: boolean, nudBp: boolean, bp: boolean): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power; bp: `bp` takes it)
   bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
   nudEnter(bp: boolean): string;                 // `nud` up to its buffered token `t` (none: no match); bp: it takes the binding power (a capped arm reads it)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
@@ -2002,7 +2002,30 @@ export type PrattLowering = {
   commitSw: CommitLowering;
 };
 /** A Pratt rule's functions in the form `L` spells. */
-export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
+// The Pratt rules a step calls at a binding power (a ruleBp step), once per IR.
+const bpCallees = new WeakMap<object, Set<string>>();
+function calledAtBp(ir: Pick<ParserIR, 'rules' | 'lookaheads'>): Set<string> {
+  let out = bpCallees.get(ir.rules);
+  if (out !== undefined) return out;
+  const found = new Set<string>();
+  const seen = new Set<Step>();
+  const walk = (s: Step): void => { if (seen.has(s)) return; seen.add(s); if (s.t === 'ruleBp') found.add(s.name); for (const k of stepKids(s)) walk(k); };
+  for (const r of ir.rules) for (const body of ruleBodies(r)) for (const s of body) walk(s);
+  for (const alt of ir.lookaheads) for (const s of alt) walk(s);
+  out = found;
+  bpCallees.set(ir.rules, out);
+  return out;
+}
+// Only a capped arm reads the binding power in `nud` (capBelow): without one, nud takes none.
+const nudTakesBp = (r: PrattRule): boolean => r.nudOrder.some((a) => a.kind === 'capped' || (a.kind === 'seq' && a.capBp !== undefined));
+// Whether `bp` takes the binding power: something reads it (nud, a prefix or binary or postfix
+// operator, a precedence-gated led, a re-bind) or a step calls the rule at one. A rule without
+// is called at none, natively or by the recovery's interpreter (recovery-family.ts nativeCases).
+export function prattTakesBp(r: PrattRule, ir: Pick<ParserIR, 'rules' | 'lookaheads'>): boolean {
+  return nudTakesBp(r) || r.binary.length > 0 || r.postfix.length > 0 || r.prefix.length > 0 || r.ledLbp.some((l) => l !== null) || r.ledRebind.some((x) => x !== null && x !== undefined) || calledAtBp(ir).has(r.name);
+}
+
+export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'rules' | 'lookaheads' | 'tokens' | 'tpl' | 'elements' | 'identToken' | 'identLike' | 'puncts' | 'gtComps'>, ids: LexIdPlan, L: PrattLowering): string {
   const cond = (steps: Step[]) => armConj(steps, L.steps);
   const armCond = (i: number, steps: Step[]) => accCond(r.nudForm?.[i], cond(steps), L.steps);
   const tailCap = (fromTail: boolean): NodeCap => (fromTail ? 'tail' : 'none');
@@ -2065,9 +2088,8 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   // A rule without postfix (binary) operators prints no postfix (binary) test: its row has no such
   // field, and a test that never passes still costs its instructions on every iteration.
   const hasBin = r.binary.length > 0, hasPost = r.postfix.length > 0;
-  // Only a capped arm reads the binding power in `nud` (capBelow): without one, nud takes none.
-  const nudBp = r.nudOrder.some((a) => a.kind === 'capped' || (a.kind === 'seq' && a.capBp !== undefined));
-  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  const nudBp = nudTakesBp(r), takesBp = prattTakesBp(r, ir);
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp, takesBp), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
   // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
   // decides it, its guard's remaining tests, a capped arm's binding power.
   const tests = (t: CommitTest): string[] => {
@@ -2094,7 +2116,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   const commit = r.nudCommit === undefined ? [] : [commitWalk(r.nudCommit, ids, act, tests, L.commitSw)];
   const frame = r.nudCommit !== undefined && dispatchArms(d).size === 0 ? [L.commitFail, L.nudEnd] : [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose];
   const nud = [L.nudEnter(nudBp), ...commit, ...frame].join('\n');
-  return [L.entry, bp, nud].join('\n');
+  return [L.entry(takesBp), bp, nud].join('\n');
 }
 
 function formsOf(rules: RuleIR[], lookaheads: Alt[], nShared: number, entry: string): Forms {

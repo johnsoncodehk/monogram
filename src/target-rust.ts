@@ -1675,11 +1675,11 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             if self.capped { self.form = ${binF}; return Some(left); }
             form = ${binF}; tail_closed = true;
         }`,
-    entry: `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
+    entry: (bp) => `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let prev = self.suppress_cur;
         self.suppress_cur = self.suppress_next;
         self.suppress_next = 0;
-        let r = self.${r.name}_bp(0);
+        let r = self.${r.name}_bp(${bp ? '0' : ''});
         self.suppress_cur = prev;
         r
     }
@@ -1688,7 +1688,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
 `,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
-    bpOpen: (_label, nudBp) => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
+    bpOpen: (_label, nudBp, bp) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
         let mut left = self.${r.name}_nud(${nudBp ? 'min_bp' : ''})?;
         let mut form = self.form;
         if self.capped { return Some(left); }

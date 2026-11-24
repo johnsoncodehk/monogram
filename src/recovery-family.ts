@@ -17,7 +17,7 @@
 
 import { type Expr, type Fn, type Lowering, type RecordDecl, type Stmt, printFns } from './algo-ir.ts';
 import { RI_RB_SCAN, RB_EXTERNS_INTERP, REBIND_EXTERNS, rbBracketFn } from './rebind-family.ts';
-import { type ArenaIdPlan, type LexIdPlan, type ParserIR, ruleIdOf, tplHoleRules } from './parser-ir.ts';
+import { type ArenaIdPlan, type LexIdPlan, type ParserIR, prattTakesBp, ruleIdOf, tplHoleRules } from './parser-ir.ts';
 import { REC_RD, REC_N_TOK, REC_N_BRACKET, REC_N_SEQ, REC_N_CAPPED, REC_N_PREFIX, REC_S_LIT, REC_S_COMP, REC_S_TOK, REC_S_TPLTOK, REC_S_RULE, REC_S_RULEBP, REC_S_STAR, REC_S_OPT, REC_S_SEP, REC_S_ALTLIT, REC_S_ALT, REC_S_LOOK, REC_S_AHEAD, REC_S_AHEADCTX, REC_S_SEQ, REC_S_SAMELINE, REC_S_SUPPRESS, REC_S_CTX, REC_S_SHARED, REC_S_WHEN } from './parser-ir.ts';
 
 export const DIAG: RecordDecl = {
@@ -174,7 +174,7 @@ export function nativeCases(ir: ParserIR, ar: ArenaIdPlan): NativeCases {
   return {
     look: ir.lookaheads.map((_, i) => [i, i]),
     rule: build.map((r) => [ruleIdOf(ar, r.name), r.name]),
-    bp: build.filter((r) => r.kind === 'pratt').map((r) => [ruleIdOf(ar, r.name), r.name]),
+    bp: build.filter((r) => r.kind === 'pratt' && prattTakesBp(r, ir)).map((r) => [ruleIdOf(ar, r.name), r.name]),
     shared: ir.shared.flatMap((_, i): [number, number][] => (ir.forms.buildShared[i] ? [[i, i]] : [])),
     tpl: (ir.tpl ? tplHoleRules(ir) : []).map((h) => [ruleIdOf(ar, h), h]),
   };
