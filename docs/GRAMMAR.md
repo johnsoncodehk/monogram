@@ -171,6 +171,42 @@ every operand position (Python's, [`python.ts`](../python.ts); fixture
 
   The body must be a reference to a Pratt rule; anything else is refused by name.
 
+## Declared assignment-target contexts
+
+`lhsTarget` checks only the outermost shape of an operand (no prefix or postfix operator, no binary
+node). A language whose targets are DESTRUCTURING patterns, such as ECMAScript's `[a, ...b] = x` or
+Python's `a, *b = x` and `del a, b.c`, declares what may stand there instead. Each target context
+names arms by their stable names (see `arm`):
+
+```ts
+targets: {
+  pattern: {
+    leaves: ['ident', 'member', 'paren', 'shorthand'],   // arms that are a target as they are
+    containers: { array: 'all', object: 'all', init: 'value', '=': 'left' },   // arms whose children must be targets
+    last: ['spread'],   // arms that pass only as a container's final child, with no ',' after it
+  },
+},
+```
+
+A node passes a context when its arm is a leaf, or a container whose children at the named child
+(`'all'`: every rule child; a binary operator's text with `'left'`: its left operand) all pass. A
+node whose arm is one rule reference and nothing else (a unit arm that belongs to no context)
+passes when its child passes. Two markers read a context:
+
+- `target('ctx')` after a rule reference in a sequence matches nothing and holds when the node just
+  before it passes: `[Exprs, target('star'), '=', Exprs]`. The head is parsed once, as an
+  expression, and checked only where the `=` tail is taken.
+- `targetOps('ctx', ...ops)` in a precedence level: the left operand of these infix operators must
+  pass the context (ECMAScript's `=` takes a pattern; `+=` keeps `lhsTarget`).
+
+A grammar declares at most three contexts. The portable engine computes the check as part of the
+form every Pratt call already returns, so a grammar without `targets` emits the same parser as
+before. The interpreter checks the same thing by walking its tree. Fixtures:
+[`test/fixtures/patterncalc.ts`](../test/fixtures/patterncalc.ts) (an ECMAScript-style pattern)
+and [`test/fixtures/startargets.ts`](../test/fixtures/startargets.ts) (Python's star, single and
+del targets). Three things refuse a grammar that declares contexts, by name: total parsing (`{
+recovery: true }`), the typed-AST shape forms and the retiring jsTarget emitter.
+
 ## No nullable rule except the entry
 
 `defineGrammar` rejects a rule other than the entry that can match the **empty string**
