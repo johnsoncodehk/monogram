@@ -22,7 +22,7 @@ const corpusPaths = (c: string): string[] =>
 
 /** The ShapeSpec fixture's parseAst as a candidate (emits the TS target once). */
 export async function fixtureCandidate(): Promise<Producer> {
-  const { emitTs } = await import('../src/target-ts.ts');
+  const { emitTs } = await import('../src/targets/target-ts.ts');
   const { scratchDir } = await import('./scratch.ts');
   const { typescriptShape, typescriptEstreeCustoms } = await import('./fixtures/shape-typescript.ts');
   const grammar = (await import('../typescript.ts')).default;

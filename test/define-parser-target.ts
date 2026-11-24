@@ -15,25 +15,59 @@
 //      no C-family surface, and every IR construct comes out as its own printed form.
 //
 //   node test/define-parser-target.ts
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { posix, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { QUICK } from './check-targets.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import { defineParserTarget, registeredTargets } from '../src/define-parser-target.ts';
-import { buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, portableIR } from '../src/parser-ir.ts';
-import { planShape } from '../src/shape-plan.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import { defineParserTarget, registeredTargets } from '../src/targets/define-parser-target.ts';
+import { buildLexIdPlan, hasCappedSeq, hasRebind, hasUnaryNud, portableIR } from '../src/ir/parser-ir.ts';
+import { planShape } from '../src/shape/shape-plan.ts';
 import namedcalcShape from './fixtures/shape-namedcalc.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
-import { relexFamily, relexFamilyFns, relexMode } from '../src/relex-family.ts';
-import { lexScanFamily } from '../src/lex-family.ts';
-import { reuseFamilyFns } from '../src/reuse-family.ts';
-import { recoveryFamilyFns } from '../src/recovery-family.ts';
-import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt, UNPACK_INTS, packInts, printFns } from '../src/algo-ir.ts';
+import { relexFamily, relexFamilyFns, relexMode } from '../src/ir/relex-family.ts';
+import { lexScanFamily } from '../src/ir/lex-family.ts';
+import { reuseFamilyFns } from '../src/ir/reuse-family.ts';
+import { recoveryFamilyFns } from '../src/ir/recovery-family.ts';
+import { ATOM, type BinOp, type Expr, type Fn, type Lowering, type Stmt, UNPACK_INTS, packInts, printFns } from '../src/ir/algo-ir.ts';
 
-const src = (f: string) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
 let failures = 0;
 const fail = (msg: string) => { failures++; console.log(`  ✗ ${msg}`); };
+
+// every src/**/*.ts by its base name (the layer directories do not change a file's name)
+const SRC_DIR = fileURLToPath(new URL('../src/', import.meta.url));
+const SRC_FILES = (readdirSync(SRC_DIR, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).map((f) => f.split(sep).join('/'));
+const srcPath = (f: string) => { const p = SRC_FILES.find((x) => x === f || x.endsWith('/' + f)); if (!p) throw new Error(`no src file ${f}`); return p; };
+const src = (f: string) => readFileSync(SRC_DIR + srcPath(f), 'utf8');
+
+// ── 0. the layer rule: src/ is laid out by layer, and a layer imports only the layers below it ──
+// grammar: nothing outside itself; interpreter, ir: grammar and themselves; shape: also interpreter and ir;
+// targets: also shape; editor: grammar, interpreter and itself; the entry points at the top (api, emit,
+// shape, cli) may import anything. (shape/v1 is part of the shape layer.)
+const LAYER_MAY_IMPORT: Record<string, string[]> = {
+  grammar: ['grammar'],
+  interpreter: ['grammar', 'interpreter'],
+  ir: ['grammar', 'ir'],
+  shape: ['grammar', 'interpreter', 'ir', 'shape'],
+  targets: ['grammar', 'interpreter', 'ir', 'shape', 'targets'],
+  editor: ['grammar', 'interpreter', 'editor'],
+};
+const layerOf = (p: string) => (p.includes('/') ? p.split('/')[0]! : '.');
+for (const f of SRC_FILES) {
+  const layer = layerOf(f);
+  const may = LAYER_MAY_IMPORT[layer];
+  if (layer !== '.' && !may) { fail(`src/${f}: a directory that is not a layer (${layer})`); continue; }
+  if (!may) continue;
+  const text = readFileSync(SRC_DIR + f, 'utf8');
+  // every form that names a module: `from '…'`, a bare `import '…'`, `import('…')`; either quote
+  for (const m of text.matchAll(/(?:\bfrom|\bimport)\s*\(?\s*['"](\.[^'"]*)['"]/g)) {
+    const target = posix.normalize(posix.join(posix.dirname(f), m[1]!));
+    if (!may.includes(layerOf(target))) fail(`layer rule: src/${f} -> ${m[1]} (${layer} may not import ${layerOf(target)})`);
+  }
+}
+
 
 const CORE = ['algo-ir.ts', 'relex-family.ts', 'lex-family.ts', 'reuse-family.ts', 'define-parser-target.ts'];
 const TARGETS = [
@@ -47,7 +81,7 @@ const imports = (s: string) => [...s.matchAll(/^import [^;]*? from '([^']+)'/gms
 // String literals with interpolations removed; import paths and error messages skipped.
 const literals = (s: string) => [...s.matchAll(/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g)]
   .map((m) => { let l = m[0]; while (/\$\{[^{}]*\}/.test(l)) l = l.replace(/\$\{[^{}]*\}/g, ''); return l; })
-  .filter((l) => !/^.\.\//.test(l) && !/^.(algo-ir|defineParserTarget|relex-family|lex-family):/.test(l));
+  .filter((l) => !/^.\.{1,2}\//.test(l) && !/^.(algo-ir|defineParserTarget|relex-family|lex-family):/.test(l));
 
 const TARGET_NAMES = /\b(ts|go|rust|typescript|golang|TS|Go|Rust|TypeScript|Golang)\b/;
 const HOST_SWITCH = /\b(host|Host|HOSTS)\b/;
@@ -367,7 +401,7 @@ for (const path of FIXTURES) {
   console.log(`  int table probe: ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
 }
 
-// A shape's construct plans (src/shape-plan.ts, algo-ir's shape-value section): the namedcalc
+// A shape's construct plans (src/shape/shape-plan.ts, algo-ir's shape-value section): the namedcalc
 // shape and the S1-supported part of the ESTree expression shape, every construct printed once.
 for (const [path, shape] of [['./fixtures/shape-namedcalc.ts', namedcalcShape], ['./fixtures/shape-v2-estree-expr.ts', estreeExprShape]] as const) {
   const plan = planShape(shape, portableIR(shape.source));
@@ -381,7 +415,7 @@ for (const [path, shape] of [['./fixtures/shape-namedcalc.ts', namedcalcShape], 
   for (const k of ['make-node', 'case-of', 'need']) if (!want.has(k)) fail(`${path} plans: no ${k}: the probe does not reach the shape constructs`);
   console.log(`  ${path} construct plans: ${plan.fns.length} functions, ${[...want.values()].reduce((a, b) => a + b, 0)} IR constructs ≡ printed forms`);
   // Go has no Lowering.shape: it refuses a shape loudly, never guesses a spelling. Rust prints the
-  // typed form (src/rust-shape.ts) and refuses what that form does not build yet (the
+  // typed form (src/targets/rust-shape.ts) and refuses what that form does not build yet (the
   // ESTree shape's inherited attributes).
   for (const t of [goTarget, rustTarget]) {
     let msg = '';

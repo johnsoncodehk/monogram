@@ -35,9 +35,9 @@ import { join } from 'node:path';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import { parseFragment } from 'parse5';
-import { createParser, type CstNode } from '../src/interpreter.ts';
+import { createParser, type CstNode } from '../src/interpreter/interpreter.ts';
 import { scratchDir } from './scratch.ts';
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { generateInputs, type GenInput } from './grammar-gen.ts';
 // The scope≡role divergence detection is factored into generative-detect.ts so the gap ledger
 // (test/gap-ledger.ts) reuses the EXACT same logic. This driver's gate behaviour is unchanged.

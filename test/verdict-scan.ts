@@ -24,7 +24,7 @@
 //   node test/verdict-scan.ts --write    re-record
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import * as acorn from 'acorn';
 import ts from 'tsc-oracle';
 import javascript from '../javascript.ts';

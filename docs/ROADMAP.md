@@ -15,13 +15,13 @@ in the [README](../README.md#what-you-get).
 
 ## 1. One portable engine, one shared runtime description
 
-**Why.** There are two execution paths today besides the interpreter (`src/interpreter.ts`, the
-reference): the emitted JavaScript parser (`jsTarget`: `src/target-js.ts`, with the lexer
-emitter in `src/lexer.ts`) and the portable targets (`tsTarget`, `goTarget`,
-`rustTarget`: `src/parser-ir.ts` plus one printer each in `src/target-*.ts`). The shared
+**Why.** There are two execution paths today besides the interpreter (`src/interpreter/interpreter.ts`, the
+reference): the emitted JavaScript parser (`jsTarget`: `src/targets/target-js.ts`, with the lexer
+emitter in `src/interpreter/lexer.ts`) and the portable targets (`tsTarget`, `goTarget`,
+`rustTarget`: `src/ir/parser-ir.ts` plus one printer each in `src/targets/target-*.ts`). The shared
 layer of the portable targets covers the analysis, the parse plan (`ParserIR`), the token
-scanners (`src/lex-family.ts`, `src/lex-match-plan.ts`) and the re-lex family
-(`src/relex-family.ts`, through `src/algo-ir.ts`). The rest of each printer is a hand-written
+scanners (`src/ir/lex-family.ts`, `src/grammar/lex-match-plan.ts`) and the re-lex family
+(`src/ir/relex-family.ts`, through `src/ir/algo-ir.ts`). The rest of each printer is a hand-written
 copy of the same runtime in its language: the lexer main loop and its per-mode state, the
 builder protocol and default builders, the parser engine's step walk and candidate frames, and
 the incremental `Doc`. A mechanism added to one printer has to be written again in the other
@@ -53,7 +53,7 @@ two, and the copies drift.
 | Markup grammars (`html.ts`) | refused by `buildIR` |
 | Incremental editing for all six grammars, gated by `incremental-grammars` | `Doc` for token-stream and newline grammars |
 | The arena handle API: `visit` / `tree` / `tokenAt`, isolated documents through `createParser()` | plain-object CST (TS), builder arenas (Go, Rust) |
-| The generated destructurers `<name>.cst-match.ts`, which read the `jsTarget` arena through its `tree` export (`src/gen-cst-match.ts`) | none |
+| The generated destructurers `<name>.cst-match.ts`, which read the `jsTarget` arena through its `tree` export (`src/targets/gen-cst-match.ts`) | none |
 
 Who depends on `jsTarget` in this repository: the gates `recovery`, `multi-doc`,
 `incremental-grammars`, `exhaustive-edits`, `diagnostic-labels`,
@@ -62,7 +62,7 @@ Who depends on `jsTarget` in this repository: the gates `recovery`, `multi-doc`,
 `nullable-rules`, `conformance/html` (engine parity), the JS rows of `alloc-work`, and the
 benches `test/head-to-head.ts` and `test/recovery-conformance.ts`. The project listed under
 "Used by" ships the TextMate grammars and the language configuration, not a parser. The
-interpreter and several gates use `compileTokenizer` from `src/lexer.ts` as their lexer,
+interpreter and several gates use `compileTokenizer` from `src/interpreter/lexer.ts` as their lexer,
 so that part of the file is not retired with `jsTarget`.
 
 **Done means:** the three printers hold only their language's spelling (syntax, type spelling,
@@ -78,7 +78,7 @@ evaluation asked for. That evaluation (a TSX dialect; reproduced on master `1d41
 parser accepts each dialect form but every form fails in at least one generator: 26 of its 38
 editor test cases fail and innermost-scope agreement is 80.0%. The causes are in the engine:
 
-- `src/gen-textmate.ts` detects element syntax from the grammar, then emits a fixed repository of
+- `src/editor/gen-textmate.ts` detects element syntax from the grammar, then emits a fixed repository of
   patterns that reads no rule (`generateJsxPatterns`), so a dialect's additions never reach
   the output; JSDoc has a built-in sub-grammar in the same way. No gate checks the generators
   for language-specific code; `test/agnostic.ts` covers the parser.
@@ -172,7 +172,7 @@ reference parser (its ESTree-like fixture matched acorn on 0 of 1,330 files).
 
 - Stable names in the grammar API (`arm(name, …)`, `field(name, item)`), transparent to every
   parser and carried by the portable IR (PRs #146, #152).
-- Spec v2 (`src/shape2-schema.ts`, `src/shape2-eval.ts`): a closed calculus over those names:
+- Spec v2 (`src/shape/shape2-schema.ts`, `src/shape/shape2-eval.ts`): a closed calculus over those names:
   a node's value synthesized from its arm's named children, synthesized and inherited scalar
   attributes, a fixed operator set, no escape to code; a reference interpreter and a load-time
   type check (PR #151).

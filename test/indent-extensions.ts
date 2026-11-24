@@ -24,8 +24,8 @@
 // All default OFF / neutral — a grammar declaring none (YAML opts in field-by-
 // field) tokenizes byte-identically, which the yaml gates already enforce.
 import { token, rule, defineGrammar, alt, many, opt, seq, noneOf, range, star, plus, never } from '../src/api.ts';
-import type { IndentConfig } from '../src/types.ts';
-import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
+import type { IndentConfig } from '../src/grammar/types.ts';
+import { compileTokenizer, lexSpecOf } from '../src/interpreter/lexer.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { cond ? ok++ : (fail++, console.log('  ✗', label)); };

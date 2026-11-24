@@ -17,17 +17,17 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createParser } from '../src/interpreter.ts';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { generateTreeSitter } from '../src/editor/gen-tree-sitter.ts';
 import {
   token, rule, defineGrammar, left, op, seq, oneOf, range, star, plus, many,
   altPattern, noneOf, notFollowedBy, withHoles, awaitCtx, reservableNot, alt,
 } from '../src/api.ts';
-import type { Grammar, RuleExpr } from '../src/types.ts';
+import type { Grammar, RuleExpr } from '../src/grammar/types.ts';
 import { asGoMain } from './go-main.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';

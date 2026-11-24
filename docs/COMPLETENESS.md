@@ -1,6 +1,6 @@
 # Total derivation: the completeness spine
 
-Why `src/gen-textmate.ts` emits *every* TextMate construct the grammar requires — not by
+Why `src/editor/gen-textmate.ts` emits *every* TextMate construct the grammar requires — not by
 testing a corpus, but because the generator's input is a **closed, finite algebra**, so
 "every obligation" is enumerable and each is discharged by a reachable emission. This is
 the dual of the soundness ledger (`KNOWN-GAPS.md`, which finds *wrong* paints); here we
@@ -41,7 +41,7 @@ loses nothing representable.
 A TextMate grammar written by hand has no completeness theorem — there is no enumerable set
 of "everything it should match." Monogram's does, because `generateTmLanguage` consumes a
 value of a **closed union**: `RuleExpr` has 15 constructors and `TokenPattern` has 10
-(`src/types.ts`), plus the finite config records (`TokenDecl`, `MarkupConfig`,
+(`src/grammar/types.ts`), plus the finite config records (`TokenDecl`, `MarkupConfig`,
 `IndentConfig`, `NewlineConfig`, the Pratt tables, `scopeOverrides`, `canonicalRepoNames`,
 `aliasScopes`, `expressionRule`, `manifest`). An *obligation* is induced by a
 constructor-occurrence or a config-field-occurrence. So completeness reduces to: **for each
@@ -63,13 +63,13 @@ marker into one grammar and confirming the lowered bodies use all 15 constructor
 nothing outside them (`checkRuleExprClosure`). `formatExpr` in `src/cli.ts` is an
 independent exhaustive `switch` over the same 15 — a second guard that the union is closed.
 
-**A2 — TokenPattern compiler closure.** `tokenPatternToRegex`'s `emit` (`src/token-pattern.ts`)
+**A2 — TokenPattern compiler closure.** `tokenPatternToRegex`'s `emit` (`src/grammar/token-pattern.ts`)
 is a single `switch` over the 10 `TokenPattern` constructors with no `default` — TypeScript
 exhaustiveness makes a missing case a compile error. Witnessed by compiling every public
 token builder to a regex (`checkTokenPatternClosure`).
 
 **A3 — the literal-collection backbone is total.** Flat keyword / operator scoping is driven
-by the shared `collectLiterals` (`src/grammar-utils.ts`), looped over every rule body. It
+by the shared `collectLiterals` (`src/grammar/grammar-utils.ts`), looped over every rule body. It
 recurses into *all consuming* structural constructors (`seq`, `alt`, `quantifier`, `group`,
 `sep`) and omits only the ones that carry no consumed literal: `not` (a negative lookahead —
 the word is *absent* at the site) and `ref` (a cross-rule edge, collected when that rule's

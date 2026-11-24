@@ -9,7 +9,7 @@ import {
   seq, oneOf, range, star, many, opt, sep, not, alt, sameLine, exclude,
   capExpr, notLeftLeaf,
 } from '../../src/api.ts';
-import type { ShapeSpec } from '../../src/shape-schema.ts';
+import type { ShapeSpec } from '../../src/shape/v1/shape-schema.ts';
 
 const digit = range('0', '9');
 const identStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');

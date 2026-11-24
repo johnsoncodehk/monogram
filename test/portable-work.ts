@@ -23,10 +23,10 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
 import { scratchDir } from './scratch.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 

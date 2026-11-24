@@ -3,7 +3,7 @@
 How the handle API (`createParser()`) parses *every* text into a tree plus
 `cst.errors` while keeping two byte-identity guarantees no mainstream engine
 makes, and why each piece is sound. The implementation lives in
-`src/target-js.ts` (emitted runtime) and is held exact by the gates listed at
+`src/targets/target-js.ts` (emitted runtime) and is held exact by the gates listed at
 the end.
 
 ## The contract

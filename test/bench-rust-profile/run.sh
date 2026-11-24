@@ -216,7 +216,7 @@ for f in $INPUTS; do
   done
 done
 
-phase shape "shape: the typed Rust AST build (src/rust-shape.ts) against the CST build, on the part of checker.ts the shape covers"
+phase shape "shape: the typed Rust AST build (src/targets/rust-shape.ts) against the CST build, on the part of checker.ts the shape covers"
 # M only (the typed target is new): the tsc expression shape's synthesized subset
 # (test/fixtures/shape-tsc-synthesized.ts), on checker.cov.ts = checker.ts's outermost expression
 # statements whose value it builds (shape-inputs.ts). Both builds are M's tree, the same engine.

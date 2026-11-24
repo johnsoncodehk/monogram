@@ -1,5 +1,5 @@
 // The v2 expression-subset scoreboard: each ShapeSpec v2 fixture, evaluated by the reference
-// interpreter (src/shape2-eval.ts) on the interpreter CST, against its reference parser through
+// interpreter (src/shape/shape2-eval.ts) on the interpreter CST, against its reference parser through
 // the oracle harness (test/shape-oracle.ts), statement by statement:
 //
 //   estree  test/fixtures/shape-v2-estree-expr.ts on javascript.ts, against acorn
@@ -23,13 +23,13 @@
 //     more divergent ones); `--write` re-records it.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
 import { scratchDir } from './scratch.ts';
-import { createParser, type CstLeaf, type CstNode } from '../src/interpreter.ts';
-import type { Grammar } from '../src/types.ts';
-import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape2-eval.ts';
-import { nodeKeysOf } from '../src/shape2-schema.ts';
+import { createParser, type CstLeaf, type CstNode } from '../src/interpreter/interpreter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
+import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape/shape2-eval.ts';
+import { nodeKeysOf } from '../src/shape/shape2-schema.ts';
 import { compareTrees, conformanceFiles, nestValue, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
 
 export const REALJS_LIST = '/home/linuxuser/.cache/monogram-agents/scratch/fix-grammar-queue-2/realjs-files.txt';
@@ -174,7 +174,7 @@ export function runShape(shape: OracleShape, corpus: string, paths: string[], sa
   return VIEWS.map((v) => boards[v]);
 }
 
-/** The EMITTED shape-building parser (TypeScript target, emit option `shape`, src/shape-plan.ts)
+/** The EMITTED shape-building parser (TypeScript target, emit option `shape`, src/shape/shape-plan.ts)
  * against the evaluator, in three views: the EXPRESSION of every expression statement (nested ones
  * too), every expression STATEMENT itself (nested ones too), and the whole FILE (parse()'s root).
  * The value the parser built for a unit's node (observeBuilt: the last one built for that node's
@@ -186,7 +186,7 @@ export const BUILT_VIEWS = ['expression', 'statement', 'file'] as const;
 export type BuiltBoard = {
   shape: string; corpus: string; view: (typeof BUILT_VIEWS)[number]; files: number; filesRejected: number; units: number; outOfShape: number; unsupported: number;
   notBuilt: number; compared: number; identical: number; reasons: Record<string, number>; samples: string[];
-  // Re-parses on demand (src/shape-plan.ts Restart), and Pratt invocations with more than one: the
+  // Re-parses on demand (src/shape/shape-plan.ts Restart), and Pratt invocations with more than one: the
   // bound is one per invocation in a valid program (a led's left is re-parsed at most once).
   restarts: number; restartsOverBound: number;
 };

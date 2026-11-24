@@ -9,7 +9,7 @@
  *
  * Keys are the IR rule names: one per grammar rule.
  */
-import type { ShapeSpec, CustomShape, StreamType } from '../../src/shape-schema.ts';
+import type { ShapeSpec, CustomShape, StreamType } from '../../src/shape/v1/shape-schema.ts';
 
 const custom = (fn: string, reason: string, extra?: { types?: StreamType[]; opMap?: Record<string, string> }): CustomShape => ({ kind: 'custom', fn, reason, ...extra });
 

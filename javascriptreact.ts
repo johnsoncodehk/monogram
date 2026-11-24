@@ -36,7 +36,7 @@
 
 import { token, rule, defineGrammar, sameLine, sep, opt, many, alt, seq, plus, star, noneOf, oneOf, range, altPattern, optPattern, notFollowedBy } from './src/api.ts';
 import javascript, { Ident, Number_, String_ } from './javascript.ts';
-import type { Grammar, RuleDecl, TokenDecl, RuleExpr, ElementRegion } from './src/types.ts';
+import type { Grammar, RuleDecl, TokenDecl, RuleExpr, ElementRegion } from './src/grammar/types.ts';
 
 // The element region's own tokens (see ELEMENTS below): each exists only inside an element.
 // `/>` ends a self-closing tag, `</` opens a close tag in the children, and a children text run

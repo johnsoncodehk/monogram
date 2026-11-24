@@ -15,7 +15,7 @@
 //  Run: node test/html-lexer-spike.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { token, rule, defineGrammar, seq, plus, oneOf, range, anyChar, star, noneOf } from '../src/api.ts';
-import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/interpreter/lexer.ts';
 
 // A minimal markup grammar: just enough tokens + a stub rule (so the `< > / =`
 // punctuation literals are collected) + the declarative markup config. The lexer

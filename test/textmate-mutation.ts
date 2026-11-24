@@ -24,9 +24,9 @@
 //
 //  Run:  node test/textmate-mutation.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import { generateTmLanguage } from '../src/gen-textmate.ts';
-import { createParser } from '../src/interpreter.ts';
-import type { Grammar } from '../src/types.ts';
+import { generateTmLanguage } from '../src/editor/gen-textmate.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type Bucket } from './generative-detect.ts';
 import {

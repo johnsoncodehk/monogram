@@ -1,5 +1,5 @@
 // ShapeSpec v2: a subset of ESTree (as acorn 8 produces it) from javascript.ts, in the core
-// calculus only (src/shape2-schema.ts): the expressions below, the root, and the statements
+// calculus only (src/shape/shape2-schema.ts): the expressions below, the root, and the statements
 // (blocks, variable statements with identifier bindings, `if`, loops, `return`, `throw`, `break`,
 // `continue`, labelled, `try`, `with`, `debugger`, empty), functions, arrows and their parameters,
 // binding patterns, object / array literals, spread, templates and assignment patterns, classes,
@@ -9,8 +9,8 @@
 import {
   absent, and, armOf, branch, c, child, cook, dropLastIf, fold, get, iff, inh, list, map, match, node, not, orElse, present, record,
   spread, syn, text, thread, v, wrapIf, type ShapeSpec, type Term,
-} from '../../src/shape2-schema.ts';
-import { defineShape } from '../../src/shape2-eval.ts';
+} from '../../src/shape/shape2-schema.ts';
+import { defineShape } from '../../src/shape/shape2-eval.ts';
 import javascript from '../../javascript.ts';
 
 /** An Identifier node from a named leaf (a property name, `new` / `target`). */
@@ -38,7 +38,7 @@ const binaryType = match(text('op'), Object.fromEntries([...ASSIGN.map((o) => [o
 
 // The directive prologue (ECMA-262 11.2.1; acorn's `directive`): the leading run of statements
 // of a Program or a function body that are a lone, unparenthesised string literal. Threaded
-// state `prologue` (src/shape2-schema.ts): true entering the first statement of a Program, and
+// state `prologue` (src/shape/shape2-schema.ts): true entering the first statement of a Program, and
 // of a Block that is a function body (inherited `functionBody`: the grammar has one Block rule
 // for both ECMAScript's Block and FunctionBody, so the parent arm tells them apart); stays true
 // while each statement is a directive candidate (synthesized `directive`).

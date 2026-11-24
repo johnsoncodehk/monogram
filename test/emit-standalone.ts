@@ -21,12 +21,12 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { createParser } from '../src/interpreter.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import { goldenStream, streamOf } from './golden-lexer.ts';
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { scratchDir } from './scratch.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -138,7 +138,7 @@ for (const c of CASES) {
 // target-js is exempt from these four options: it is retiring (replaced by this target) and its
 // emission still has 159 such diagnostics (112 unreachable statements after a matcher's
 // exhaustive return, 41 unused locals, 6 all-unused declarations); the exemption ends when
-// src/target-js.ts is deleted.
+// src/targets/target-js.ts is deleted.
 {
   const UNUSED = ['--noUnusedLocals', '--noUnusedParameters', '--allowUnusedLabels', 'false', '--allowUnreachableCode', 'false'];
   const PORTABLE: [string, string][] = [['typescript', '../typescript.ts'], ['javascript', '../javascript.ts'], ['typescriptreact', '../typescriptreact.ts'], ['javascriptreact', '../javascriptreact.ts']];

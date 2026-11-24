@@ -1,6 +1,6 @@
 // tokenize: the Monarch rule subset gen-monarch emits, run as Monaco's lexer runs it (see
 // test/monarch-dialect.ts's header). Shared by test/monarch-dialect.ts's rows and its --agreement mode.
-import type { MonarchLanguage, MonarchAction } from '../src/gen-monarch.ts';
+import type { MonarchLanguage, MonarchAction } from '../src/editor/gen-monarch.ts';
 
 export interface Tok { start: number; text: string; token: string }
 

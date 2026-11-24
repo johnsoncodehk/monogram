@@ -11,8 +11,8 @@
 // Targets: `jsTarget` (the optimized SoA parser, target-js.ts) and the portable
 // `tsTarget`/`goTarget`/`rustTarget` (parser-ir.ts + target-*.ts), each registered by its
 // own module through `defineParserTarget` (define-parser-target.ts) with the Lowering of the shared algorithms.
-export { emitParser, type EmitOptions, type Target } from './target.ts';
-export { jsTarget } from './target-js.ts';
-export { tsTarget } from './target-ts.ts';
-export { goTarget } from './target-go.ts';
-export { rustTarget } from './target-rust.ts';
+export { emitParser, type EmitOptions, type Target } from './targets/target.ts';
+export { jsTarget } from './targets/target-js.ts';
+export { tsTarget } from './targets/target-ts.ts';
+export { goTarget } from './targets/target-go.ts';
+export { rustTarget } from './targets/target-rust.ts';

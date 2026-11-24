@@ -67,7 +67,7 @@ reference was reached ([`test/template-holes.ts`](../test/template-holes.ts)).
 ## Element regions
 
 A token-stream grammar can contain markup elements whose children are text (JSX) or code. The
-grammar declares the region as data, `elements` (`ElementRegion` in [`src/types.ts`](../src/types.ts)).
+grammar declares the region as data, `elements` (`ElementRegion` in [`src/grammar/types.ts`](../src/grammar/types.ts)).
 The design, its frame encoding, its relex rules and what is planned are in
 [`docs/REGIONS.md`](REGIONS.md). [`javascriptreact.ts`](../javascriptreact.ts) declares JSX's in `withJsx`:
 
@@ -83,7 +83,7 @@ elements: {
 ```
 
 How code enters an element is derived from the grammar (`tagOpenOnlyOpensTags` in
-[`src/grammar-analysis.ts`](../src/grammar-analysis.ts)). When the grammar uses `tagOpen` only to
+[`src/grammar/grammar-analysis.ts`](../src/grammar/grammar-analysis.ts)). When the grammar uses `tagOpen` only to
 open tags (every `<` begins an element arm, no operator or other token begins with it), every
 `tagOpen` in code opens an element. JSX's `<` is also a comparison, so there a `tagOpen` opens an
 element only where a regex literal could start (the `regexContext` decision).
@@ -187,7 +187,7 @@ right(prefix('!', '~', '+', '-', 'typeof', 'void', 'delete', when('~syncFn', 'aw
 ```
 
 A condition is a conjunction of `+p` / `~p` over the parameters of
-[`src/grammar-utils.ts`](../src/grammar-utils.ts) `CTX_PARAMS` (`await`, `yield`, `syncFn`); with
+[`src/grammar/grammar-utils.ts`](../src/grammar/grammar-utils.ts) `CTX_PARAMS` (`await`, `yield`, `syncFn`); with
 no items, `when(cond)` is a zero-width test. tree-sitter, TextMate and Monarch erase the
 condition: they render the items everywhere.
 
@@ -254,7 +254,7 @@ A context may instead be computed ON DEMAND (`when: 'demand'`), for a language w
 is rare (ECMAScript's `=` meets an array or object literal a few times in thousands): the normal
 parse computes nothing, and an array or object literal on the left of the `assignTargetOps` operator is
 parsed again by its accumulating twin, from its first token to the operator (the shared
-`reparseFrom`, `src/reparse-family.ts`). Its leaves must be exactly the arms the shallow check
+`reparseFrom`, `src/ir/reparse-family.ts`). Its leaves must be exactly the arms the shallow check
 takes (the generator names any arm that breaks this); it must be the grammar's only context, no
 `assignTarget(...)` marker may read it, and a `last` arm must be a container. A nested container is
 parsed again by its own twin, so each token is parsed at most once more per enclosing container.

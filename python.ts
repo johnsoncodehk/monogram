@@ -23,7 +23,7 @@ import {
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, never, notFollowedBy,
   type Element,
 } from './src/api.ts';
-import type { IndentConfig, TokenPattern } from './src/types.ts';
+import type { IndentConfig, TokenPattern } from './src/grammar/types.ts';
 
 // ── Structural tokens: emitted by the lexer's indent mode, never matched by a pattern ──
 const Indent = token(never(), {});

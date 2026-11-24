@@ -10,7 +10,7 @@
 //   2. TypeScript-only syntax the JS grammar has no production for: it must reject all of them.
 //
 // JavaScript as a whole is measured against test262 (test/test262.ts, the specification's suite).
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import ts from 'tsc-oracle';
 import { isInputError } from './input-error.ts';
 

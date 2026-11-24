@@ -13,7 +13,7 @@
 //       verdict (it recovers from anything); the rule is the WHATWG syntax itself — §13.1.2.2:
 //       an end tag's name is the name of the element it ends — which the tree-construction
 //       stage reports as a parse error for every input listed.
-//    4. ENGINE PARITY — the emitted parser (src/target-js.ts) is held to all of the above:
+//    4. ENGINE PARITY — the emitted parser (src/targets/target-js.ts) is held to all of the above:
 //       the same verdict as the interpreter on every input here, and a byte-identical CST on
 //       every accepted one. (target-js-verify.ts pins that parity for TypeScript only; the
 //       markup element arm — optional end tags, the end tag's name — is exercised here.)
@@ -22,9 +22,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createParser } from '../src/interpreter.ts';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parseFragment } from 'parse5';
 import { scratchDir } from './scratch.ts';

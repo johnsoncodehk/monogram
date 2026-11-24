@@ -182,7 +182,7 @@ ratio). Time per parse and instructions per parse, monogram ÷ oxc (below 1: mon
 | `typescript.d.ts` (npm `typescript` 5.9.3) | 0.812 (0.809-0.821) | 0.789 | 1.005 | 1.022 |
 | 2 MB synthetic file | 0.746 (0.712-0.762) | 0.889 | 0.919 | 0.921 |
 | non-ASCII-heavy file | 0.689 (0.668-0.696) | 0.848 | 0.875 | 0.909 |
-| [`src/gen-textmate.ts`](../src/gen-textmate.ts) at `2632c2c` | 0.768 (0.760-0.772) | 0.980 | 0.910 | 0.929 |
+| [`src/editor/gen-textmate.ts`](../src/editor/gen-textmate.ts) at `2632c2c` | 0.768 (0.760-0.772) | 0.980 | 0.910 | 0.929 |
 | [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.645 (0.633-0.662) | 0.481 | 0.717 | 0.780 |
 | dense `;` (1 MB of empty statements) | not timed | not timed | 0.966 | 0.968 |
 | dense `a+a+…` (1 MB) | not timed | not timed | 0.805 | 0.806 |
@@ -235,7 +235,7 @@ monogram ÷ oxc (below 1: monogram takes less):
 | `typescript.d.ts` (npm `typescript` 5.9.3) | 0.941 (0.915-0.982) | 0.839 | 1.13 |
 | 2 MB synthetic file | 0.916 (0.876-0.953) | 1.032 | 1.10 |
 | non-ASCII-heavy file | 0.733 (0.716-0.745) | 0.953 | 1.05 |
-| [`src/gen-textmate.ts`](../src/gen-textmate.ts) at `2632c2c` | 0.882 (0.873-0.904) | 1.048 | 1.04 |
+| [`src/editor/gen-textmate.ts`](../src/editor/gen-textmate.ts) at `2632c2c` | 0.882 (0.873-0.904) | 1.048 | 1.04 |
 | [`typescript.ts`](../typescript.ts) at `2632c2c` | 0.723 (0.700-0.741) | 0.549 | 0.91 |
 | dense `;` (1 MB of empty statements) | not timed | not timed | 1.34 |
 | dense `a+a+…` (1 MB) | not timed | not timed | 0.99 |
@@ -266,7 +266,7 @@ Time per parse, monogram ÷ oxc:
 | `typescript.d.ts` | 1.143 / 1.127 | 1.023 / 1.018 |
 | 2 MB synthetic file | 1.150 / 1.117 | 1.159 / 1.159 |
 | non-ASCII-heavy file | 1.435 / 1.402 | 1.360 / 1.356 |
-| `src/gen-textmate.ts` | 0.995 / 1.024 | 1.144 / 1.141 |
+| `src/editor/gen-textmate.ts` | 0.995 / 1.024 | 1.144 / 1.141 |
 | `typescript.ts` | 0.906 / 0.992 | 0.718 / 0.714 |
 
 There monogram executed 26% to 69% more instructions per parse than oxc (1.42 times on
@@ -305,7 +305,7 @@ like-for-like comparison with oxc (typed structs in arenas) is the Rust printer'
 
 ### Rust: the first typed build (2026-11-24, measure-profile run 45308730793)
 
-The typed Rust AST build (src/rust-shape.ts: one struct per node kind in its arena) against the CST
+The typed Rust AST build (src/targets/rust-shape.ts: one struct per node kind in its arena) against the CST
 build of the same tree, Callgrind instructions of one parse (run.sh phase `shape`, M only), on
 checker.cov.ts (checker.ts's 4,648 outermost expression statements the shape builds: 381 KB, 12% of
 the file) under the tsc expression shape's synthesized subset (test/fixtures/shape-tsc-synthesized.ts;

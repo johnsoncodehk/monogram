@@ -1,4 +1,4 @@
-// tag-open-entry.ts — `tagOpenOnlyOpensTags` (src/grammar-analysis.ts): whether a grammar uses its
+// tag-open-entry.ts — `tagOpenOnlyOpensTags` (src/grammar/grammar-analysis.ts): whether a grammar uses its
 // element region's `tagOpen` only to open tags, the derived fact that decides how the lexer
 // enters an element region from code (docs/REGIONS.md, "Entry from code").
 //   true  → every `tagOpen` in code opens an element;
@@ -8,9 +8,9 @@
 // what the lexer does with the answer, on a toy where it is observable (a regex token makes
 // `prevIsValue` say "value" after an identifier).
 import { token, rule, defineGrammar, seq, oneOf, range, star, plus, many, opt, sep, left, op, not, noneOf } from '../src/api.ts';
-import { tagOpenOnlyOpensTags } from '../src/grammar-analysis.ts';
-import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
-import type { Grammar, ElementRegion } from '../src/types.ts';
+import { tagOpenOnlyOpensTags } from '../src/grammar/grammar-analysis.ts';
+import { compileTokenizer, lexSpecOf } from '../src/interpreter/lexer.ts';
+import type { Grammar, ElementRegion } from '../src/grammar/types.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
 import javascriptreact from '../javascriptreact.ts';
