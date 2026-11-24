@@ -200,6 +200,8 @@ export function withJsx(base: CstGrammar, opts: { name: string; scopeName: strin
   // names natively. Pure DATA merge — gen-tm only looks them up, so the engine stays agnostic.
   return {
     ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens,
+    // A JSX element is a target to the shallow check, so a leaf of the base's demand pattern.
+    ...(base.targets ? { targets: Object.fromEntries(Object.entries(base.targets).map(([k, c]) => [k, { ...c, leaves: [...c.leaves, 'jSXElement'] }])) } : {}),
     // `>` closes a JSX tag (`<a>>b</a>`), so `>`-led operators are composed from single `>` tokens.
     composeGt: true,
     elements: ELEMENTS(hasTypes),

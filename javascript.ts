@@ -26,7 +26,7 @@
 
 import {
   token, rule, defineGrammar,
-  left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
+  left, right, none, noUnaryLhs, lhsTarget, targetOps, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, tsRelax, arm, field,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx,
@@ -372,7 +372,7 @@ export const ecmaPrec = [
   // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. The logical assignments are three more
   // AssignmentExpression arms (13.15 `LeftHandSideExpression &&= AssignmentExpression`, `||=`, `??=`):
   // one level, so each operator's right operand is a full AssignmentExpression (`c ||= a = b`).
-  right(lhsTarget('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&=')),
+  right(targetOps('pattern', '='), lhsTarget('+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&=')),
   left('??'),
   left('||'),
   left('&&'),
@@ -408,6 +408,19 @@ const DecoratorExpr = rule($ => [
 ]);
 
 // ── Expressions ──
+
+// The ECMAScript assignment pattern (13.15.5), as a declared target context computed ON DEMAND:
+// an array or object literal on the left of `=` is parsed again as a pattern whose elements are
+// targets; an element may carry an initializer (`[a = 1]`), a rest element is the last one. Every
+// other arm the shallow check takes as a target is a leaf: its AssignmentTargetType is an early
+// error, a consumer's.
+export const JS_TARGET_ARMS = ['true_', 'false_', 'null_', 'this_', 'super_', 'ident', 'number', 'string', 'template', 'regex',
+  'newDotTarget', 'construct', 'paren', 'import_', 'privateField', 'hexNumber', 'octalNumber', 'binaryNumber', 'bigInt',
+  'function_', 'generator', 'asyncFunction', 'asyncGenerator', 'namedClass', 'anonymousClass',
+  'led_paren', 'led_dot', 'led_optChain', 'led_bracket', 'led_template'];
+export const patternTarget = (leaves: string[], containers: Record<string, string>) =>
+  ({ leaves, containers: { array: 'all', object: 'all', spread: 'all', '=': 'left', ...containers }, last: ['spread'], when: 'demand' as const });
+
 
 const Prop = rule($ => {
   // ( … ) { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
@@ -999,6 +1012,7 @@ export default defineGrammar({
 
   prec: ecmaPrec,
   ledPrec: jsLedPrecs,
+  targets: { pattern: patternTarget([...JS_TARGET_ARMS, 'legacyNumber', 'newNamedClass', 'newAnonymousClass', 'shorthand'], { init: 'value' }) },
 
   // Every keyword the grammar lets be a name is also a name in the tree-sitter grammar (`get` as a
   // property key, `of` as a binding): the name readings cost about 3 MB of parser.c in all.

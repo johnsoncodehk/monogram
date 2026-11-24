@@ -3185,7 +3185,7 @@ export const withReservedRules = (ar: ArenaIdPlan): ArenaIdPlan => ({ ...ar, rul
 export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
   // Declared target contexts are not in the recovery encoding yet (the interpreter would ignore
   // their checks and accept what the parser rejects): refused by name.
-  if (ir.targets) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (CstGrammar.targets), which total parsing does not encode yet`);
+  if (ir.targets && !ir.targets.demand) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (CstGrammar.targets), which total parsing does not encode yet`);
   const data: number[] = [];
   const cappedSeq = hasCappedSeq(ir);   // REC_N_SEQ entries carry their cap (recovery-family riNudOf)
   const unaryNud = hasUnaryNud(ir);     // REC_N_BRACKET / REC_N_SEQ entries carry their form (likewise)

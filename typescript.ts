@@ -37,7 +37,7 @@ import {
   Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
   Ident, HexNumber, OctalNumber, BinaryNumber, BigInt_,
   Number_, String_, Template, Regex_, Decorator, PrivateField,
-  notReserved, notReservedExpr, bindingIdentifier, bindingName, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
+  notReserved, notReservedExpr, bindingIdentifier, bindingName, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, JS_TARGET_ARMS, patternTarget, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
   memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier, bracketIndex,
 } from './javascript.ts';
@@ -1163,6 +1163,7 @@ export default defineGrammar({
 
   // The ECMAScript operator-precedence ladder is shared, owned by javascript.ts.
   prec: ecmaPrec,
+  targets: { pattern: patternTarget([...JS_TARGET_ARMS, 'new_', 'new_2', 'led_lt', 'led_lt2', 'led_bang', 'member'], {}) },
   // TS adds the type-rhs LEDs at the relational level (mirrors tsc: `as`/`satisfies`
   // participate in the binary-operator chain at relational precedence).
   ledPrec: [...jsLedPrecs, { connector: 'as', sameAs: '<' }, { connector: 'satisfies', sameAs: '<' }],
