@@ -26,9 +26,15 @@ export function grammarLiterals(grammar: CstGrammar): string[] {
 
 /** `perInput` mutants of each input the lexer accepts (an input it refuses gives none). */
 export function mutationCorpus(grammar: CstGrammar, tokenize: (s: string) => { offset: number; text: string }[], inputs: string[], perInput: number, seed: number): string[] {
+  return mutationEdits(grammar, tokenize, inputs, perInput, seed).map((m) => m.src);
+}
+/** A mutant and its edit: the input it came from, whose text [at, at + del) became the `ins`
+ *  characters of the mutant at `at` (the inserted or replacing literal; a deletion inserts none). */
+export type Mutant = { src: string; orig: string; at: number; del: number; ins: number };
+export function mutationEdits(grammar: CstGrammar, tokenize: (s: string) => { offset: number; text: string }[], inputs: string[], perInput: number, seed: number): Mutant[] {
   const lits = grammarLiterals(grammar);
   const R = rng(seed);
-  const out: string[] = [];
+  const out: Mutant[] = [];
   for (const src of inputs) {
     let toks: { offset: number; text: string }[];
     try { toks = tokenize(src); } catch { continue; }
@@ -36,7 +42,9 @@ export function mutationCorpus(grammar: CstGrammar, tokenize: (s: string) => { o
     for (let k = 0; k < perInput; k++) {
       const t = toks[Math.floor(R() * toks.length)]!, op = Math.floor(R() * 3), lit = lits[Math.floor(R() * lits.length)]!;
       const a = t.offset, b = t.offset + t.text.length;
-      out.push(op === 0 ? src.slice(0, a) + src.slice(b) : op === 1 ? `${src.slice(0, a)}${lit} ${src.slice(a)}` : src.slice(0, a) + lit + src.slice(b));
+      out.push(op === 0 ? { src: src.slice(0, a) + src.slice(b), orig: src, at: a, del: b - a, ins: 0 }
+        : op === 1 ? { src: `${src.slice(0, a)}${lit} ${src.slice(a)}`, orig: src, at: a, del: 0, ins: lit.length }
+        : { src: src.slice(0, a) + lit + src.slice(b), orig: src, at: a, del: b - a, ins: lit.length });
     }
   }
   return out;
