@@ -66,10 +66,10 @@ export async function agreement(): Promise<number> {
   const walk = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(join(d, e.name)) : e.name.endsWith('.js') ? [join(d, e.name)] : []);
   walk(join(TEST262, 'test/language')).sort().forEach((f, i) => { if ((i + 1) % 20 === 0) js.push({ name: f, code: readFileSync(f, 'utf8') }); });
   const ts = inRepoCorpus().filter(f => !f.name.includes('#'));
-  const out: Record<string, { files: number; chars: number; agree: number; classes: Record<string, number> }> = {};
+  const out: Record<string, { files: number; chars: number; agree: number; classes: Record<string, number>; refusals: Record<string, string[]> }> = {};
   for (const [lang, files, what] of [['typescript', ts, `the pinned in-repo sources (${REPO_CORPUS_AT.slice(0, 7)})`], ['javascript', js, `every 20th test262 test/language file`]] as const) {
     const t0 = performance.now();
-    const r = await compare(lang, files);
+    const r = { ...await compare(lang, files), refusals: await refusalsOf(lang) };
     out[lang] = r;
     console.log(`${lang}: ${what}: ${files.length} files, ${r.chars} characters, agree ${r.agree.toFixed(2)}% (${Math.round(performance.now() - t0)} ms)`);
   }
@@ -89,11 +89,29 @@ export async function agreement(): Promise<number> {
       else if (n < w) fell++;
       console.log(`  ${mark.padEnd(19)} ${String(n).padStart(6)} (record ${String(w).padStart(6)})  ${k.padEnd(30)} wrong: ${who.padEnd(10)} ${why}`);
     }
+    // the constructs a highlighter declines (src/define-highlighter.ts): recorded like a class
+    for (const [hl, now] of Object.entries(out[lang].refusals)) {
+      const was: string[] = old[lang]?.refusals?.[hl] ?? [];
+      // one-sided, as the classes: a new refusal fails, a refusal that went away passes
+      const added = now.filter(r => !was.includes(r)), gone = was.filter(r => !now.includes(r));
+      if (added.length) bad++;
+      if (gone.length) fell++;
+      console.log(`  ${(added.length ? '✗ NEW REFUSAL' : gone.length ? 'fell' : ' ').padEnd(19)} ${hl} refuses ${now.length ? now.join('; ') : 'nothing'}`);
+    }
   }
   if (write) { writeFileSync(RECORD, JSON.stringify(out, null, 1) + '\n'); console.log(`wrote ${RECORD}`); return 0; }
   if (fell) console.log(`fell: ${fell} class(es) below the record: re-record when convenient: node test/monarch-dialect.ts --agreement --write`);
   if (bad) console.error(`✗ ${bad} class(es) rose or appeared, or an agreement fell; if intended: node test/monarch-dialect.ts --agreement --write`);
   return bad ? 1 : 0;
+}
+
+// Each registered highlighter's refusals for the grammar (`<construct>: <reason>`).
+async function refusalsOf(lang: string): Promise<Record<string, string[]>> {
+  const { registeredHighlighters, highlighterInput } = await import('../src/define-highlighter.ts');
+  await import('../src/highlighters.ts');
+  const grammar = (await import(join(ROOT, `${lang}.ts`))).default;
+  const input = highlighterInput(grammar, lang);
+  return Object.fromEntries(registeredHighlighters().map(h => [h.name, h.refusals(input).map(r => `${r.construct}: ${r.reason}`)]));
 }
 
 async function compare(lang: string, files: { name: string; code: string }[]) {

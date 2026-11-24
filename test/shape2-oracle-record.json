@@ -74,25 +74,25 @@
  "tsc conformance/expressions built": {
   "corpus": "conformance/expressions",
   "view": "expression statement",
-  "units": 2177,
-  "compared": 1932,
-  "identical": 1932,
+  "units": 2180,
+  "compared": 1935,
+  "identical": 1935,
   "outOfSubset": 14
  },
  "tsc conformance/expressions built statement": {
   "corpus": "conformance/expressions",
   "view": "top-level statement",
-  "units": 2177,
-  "compared": 1932,
-  "identical": 1932,
+  "units": 2180,
+  "compared": 1935,
+  "identical": 1935,
   "outOfSubset": 14
  },
  "tsc conformance/expressions built file": {
   "corpus": "conformance/expressions",
   "view": "file",
-  "units": 350,
-  "compared": 0,
-  "identical": 0,
+  "units": 351,
+  "compared": 1,
+  "identical": 1,
   "outOfSubset": 13
  }
 }
