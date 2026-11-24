@@ -34,7 +34,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import type { Grammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
 import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/token-pattern.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { findEntryRule } from '../src/grammar-analysis.ts';
 
 // Max emissions in one derivation. A deep tree of 2-rep quantifiers grows the list multiplicatively;

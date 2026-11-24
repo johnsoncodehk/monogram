@@ -11,7 +11,7 @@
 //   node test/ts-ast-verify.ts <file.ts> [...]  # real files
 import { existsSync, readFileSync } from 'node:fs';
 import type ts from 'typescript';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { lowerProgram, Unlowered, type Ast } from './ts-ast-lowering.ts';
 import { objTree } from './obj-tree.ts';
 import { compareTrees, structureView, type NTree, type Producer } from './shape-oracle.ts';

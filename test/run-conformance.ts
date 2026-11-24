@@ -1,4 +1,4 @@
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { readdir } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { join } from 'path';

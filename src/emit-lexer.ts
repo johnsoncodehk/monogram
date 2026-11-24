@@ -1,6 +1,6 @@
 // The lexer generator — the ONE implementation of the grammar's lexical semantics. Every
 // consumer runs code this file emits: the emitted parser module embeds it (TypeScript, with
-// windowed re-lexing for incremental edits), and the interpreter (gen-parser.ts) compiles a
+// windowed re-lexing for incremental edits), and the interpreter (interpreter.ts) compiles a
 // standalone JavaScript tokenizer from it (compileTokenizer). Nothing dispatches over grammar
 // data at runtime: matcher lists, first-char filters and punct-literal groups are baked into
 // one `switch (charCode)` whose cases hold exactly the candidate regexes (declaration order)

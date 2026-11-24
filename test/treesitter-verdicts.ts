@@ -18,7 +18,7 @@
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { collectLiterals } from '../src/grammar-utils.ts';
 import { JSX_CASES } from './curated-corpora.ts';
 import { cases as tsxIssueCases } from './tsx-issue-cases.ts';

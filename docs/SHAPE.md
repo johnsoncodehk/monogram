@@ -85,7 +85,7 @@ term's order (an absent one left out). The keys default to `kind`, `start`, `end
 its own with `node: { kind, start, end }` (ESTree: `node: { kind: 'type' }`, so the value IS an
 ESTree node), and a node term with a field of one of those names is a load error.
 
-(`parse` is the interpreter's: `createParser(grammar).parse(src)` from `src/gen-parser.ts`. The
+(`parse` is the interpreter's: `createParser(grammar).parse(src)` from `src/interpreter.ts`. The
 parenthesised `1 + y` passes through: the Add node spans `1 + y`, not its parentheses.)
 
 What is checked, and where:

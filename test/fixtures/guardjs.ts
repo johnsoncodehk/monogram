@@ -1,5 +1,5 @@
 // The portable parsers try a longest-match candidate only where its Guard admits the lookahead,
-// and reach the candidates a token admits through a Dispatch (emit-portable.ts). Each shape below
+// and reach the candidates a token admits through a Dispatch (parser-ir.ts). Each shape below
 // fails if one of them is applied where it does not hold:
 //   • tie across Dispatch sections: `go;` is matched by `[Name, ';']` (keyed on the Ident kind)
 //     and by `['go', ';']` (keyed on the literal, a section tried first); they tie and the

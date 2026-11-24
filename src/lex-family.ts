@@ -21,7 +21,7 @@
 //
 // Offsets are in the target's native string units; the family only does arithmetic on them.
 
-import { type ElementPlan, type LexTok, type ParserIR, buildLexDispatchPlan, buildLexIdPlan, elementTokens, kidOf, lexTokFirstBytes, lidOf, punctFirstBytes } from './emit-portable.ts';
+import { type ElementPlan, type LexTok, type ParserIR, buildLexDispatchPlan, buildLexIdPlan, elementTokens, kidOf, lexTokFirstBytes, lidOf, punctFirstBytes } from './parser-ir.ts';
 import { tokenPatternLiteralRuns } from './token-pattern.ts';
 import type { TokenCharClassItem, TokenPattern } from './types.ts';
 import { relexMode } from './relex-family.ts';

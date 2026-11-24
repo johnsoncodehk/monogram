@@ -1,7 +1,7 @@
 // Gate: NOTHING A GUARD REFUSES ON A REAL INPUT COULD HAVE CHANGED THE PARSE. The portable
 // parsers decide some choices without trying them: a longest-match candidate whose Guard refuses
 // the buffered token (its FIRST set, its lead tests, the refusal by the complement of its FIRST:
-// emit-portable.ts Guard), a candidate its Dispatch never reaches for that token, an ordered or
+// parser-ir.ts Guard), a candidate its Dispatch never reaches for that token, an ordered or
 // predictive branch outside its FIRST set, and a star / opt / sep body outside its body guard
 // (Step.guard). Each is sound only if the thing refused could not have changed the parse there:
 // test/guard-lead.ts proves lead tests equal the steps they took over, test/guard-refutation.ts
@@ -13,7 +13,7 @@
 //     past the winner, or at the winner's end while declared before it (it would have won);
 //   • an ordered or predictive branch: it matches before the branch that won (or none won);
 //   • a star / opt / sep body: it matches non-empty (the loop would have gone on);
-//   • a COMMITTED choice (emit-portable.ts Commit): at a key the commit switch decides, every
+//   • a COMMITTED choice (parser-ir.ts Commit): at a key the commit switch decides, every
 //     candidate other than the committed one (all of them, where it fails or the key fails the
 //     list) is attempted from the list's start: none may have won.
 // It also checks every MARK THE PLAN ELIDES (Step.clean: a frame over a body that fails clean takes
@@ -30,7 +30,7 @@
 // The check runs on the IR, not on a target: guards are IR data, and each target renders a subset
 // of them (Rust leaves body guards out of Pratt arms), so one check bounds all three. Its engine is
 // an interpreter of the ParserIR that follows the portable engine step for step (the rule, Pratt
-// and step shells of emit-portable.ts, as test-scale code); so that it cannot drift from what the
+// and step shells of parser-ir.ts, as test-scale code); so that it cannot drift from what the
 // targets run, every input's result is compared with the TS target's `parse` of the same text:
 // accept / reject and, when accepted, the whole tree.
 // Inside an attempt made for a check, further refusals are not checked (each check costs about
@@ -39,7 +39,7 @@
 //   node test/guard-refused.ts          [--strict-empty]   (also: GUARD_REFUSED_FILES=<n> to widen the corpus sample)
 import { readdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { portableIR, buildLexIdPlan } from '../src/emit-portable.ts';
+import { portableIR, buildLexIdPlan } from '../src/parser-ir.ts';
 import { engine, canon, type Tok, type Mutation } from './ir-engine.ts';
 import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';

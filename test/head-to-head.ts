@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/emit-parser.ts';
+import { jsTarget } from '../src/target-js.ts';
 import { writeFileSync } from 'node:fs';
 import ts from 'typescript';
 import { scratchDir } from './scratch.ts';

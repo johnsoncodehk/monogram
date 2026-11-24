@@ -14,7 +14,7 @@
 //  verbatim — see the comments inline; the original prose is in generative.ts's header.
 // ─────────────────────────────────────────────────────────────────────────────
 import { normScope } from './scope-roles.ts';
-import type { CstNode, CstChild } from '../src/gen-parser.ts';
+import type { CstNode, CstChild } from '../src/interpreter.ts';
 import type { Grammar, TokenPattern } from '../src/types.ts';
 import { commentSpec, type GenOptions, type GenInput } from './grammar-gen.ts';
 

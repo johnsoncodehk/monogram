@@ -1,20 +1,20 @@
-// Correctness gate for the EMITTED parser (src/emit-parser.ts) against the RUNTIME
-// INTERPRETER (src/gen-parser.ts createParser) — the oracle.
+// Correctness gate for the EMITTED parser (src/target-js.ts) against the RUNTIME
+// INTERPRETER (src/interpreter.ts createParser) — the oracle.
 //
 // For each input it runs BOTH parsers and compares (a) accept/reject (throw vs not)
 // and (b) the produced CST, JSON-stringified, byte-for-byte. The HARD gate is the
 // in-repo corpus (test/emit-corpus.ts: curated TS snippets + the repo's own .ts
 // sources), so the check is CORPUS-FREE and runs in `npm run check` everywhere — the
-// mechanism that forces a gen-parser change to propagate to emit-parser (issue #45).
+// mechanism that forces a interpreter change to propagate to target-js (issue #45).
 // When the optional /tmp/ts-repo corpus is present it is ALSO swept for breadth.
 //
 //   node test/emit-parser-verify.ts            # in-repo corpus (+ /tmp/ts-repo if present)
 //   node test/emit-parser-verify.ts all        # also sweep EVERY external file (no stride)
 //   node test/emit-parser-verify.ts <N>        # external sweep stride N (default ~400 files)
 import { objectify } from './emitted-obj.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/emit-parser.ts';
+import { jsTarget } from '../src/target-js.ts';
 import { inRepoCorpus, externalTsFiles } from './emit-corpus.ts';
 import { readFileSync, writeFileSync } from 'fs';
 import { scratchDir } from './scratch.ts';

@@ -19,10 +19,10 @@
 //   node test/cst-text-invariant.ts
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
 import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/emit-parser.ts';
+import { jsTarget } from '../src/target-js.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import type { Grammar } from '../src/types.ts';

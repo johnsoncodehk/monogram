@@ -1,7 +1,7 @@
 // Gate: A GUARD'S LEAD TESTS ARE THE TESTS IT TOOK OVER. Every portable target runs a longest-match
 // candidate's leading one-token tests (`ahead` / `aheadCtx` steps) as its Guard's `lead` tests, on
 // the token it has buffered at the candidate's start, before the candidate's frame, and runs only
-// the steps after them inside the frame (emit-portable.ts Guard, leadOf). That is the same parse
+// the steps after them inside the frame (parser-ir.ts Guard, leadOf). That is the same parse
 // only if (1) the steps taken over are exactly the candidate's first `skip` steps, (2) each is a
 // zero-width test of the token at the candidate's start alone — an `ahead` or `aheadCtx` step, not a
 // shared step's call, not a `ctx` / `suppress` / `look` / `sameLine` step, nothing that consumes —
@@ -14,7 +14,7 @@
 //
 //   node test/guard-lead.ts
 import { readdirSync } from 'node:fs';
-import { portableIR, buildLexIdPlan, tokenSetBits, ctxWordLids, guardedSteps, type ParserIR, type Guard, type Step } from '../src/emit-portable.ts';
+import { portableIR, buildLexIdPlan, tokenSetBits, ctxWordLids, guardedSteps, type ParserIR, type Guard, type Step } from '../src/parser-ir.ts';
 import type { Grammar } from '../src/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;

@@ -14,7 +14,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/emit-parser.ts';
+import { jsTarget } from '../src/target-js.ts';
 import type { Grammar } from '../src/types.ts';
 import { objectify, type TreeView } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';

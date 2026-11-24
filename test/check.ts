@@ -79,7 +79,7 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'lexer-reservation', args: ['test/lexer-reservation.ts'] },
   { group: 'emit-parity', name: 'alloc-work', args: ['test/alloc-work.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'builder-reuse', args: ['test/builder-reuse.ts'] },
-  { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'], reads: ['src/emit.ts', 'src/emit-parser.ts'] },
+  { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'], reads: ['src/emit.ts', 'src/target-js.ts'] },
   { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'shape-rust', args: ['test/shape-rust.ts'], tier: 'ci' },
   // the typed Rust shape-building parser ≡ the evaluator (needs rustc: on the dev box through rustlink)

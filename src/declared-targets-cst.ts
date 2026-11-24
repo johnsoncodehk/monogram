@@ -1,4 +1,4 @@
-// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.targets) in the interpreter (gen-parser.ts): the
+// DECLARED ASSIGNMENT-TARGET CONTEXTS (Grammar.targets) in the interpreter (interpreter.ts): the
 // predicate as a WALK over the CST, the reference the portable engine's synthesized form
 // (declared-targets.ts) is held to by the parity gates. A node passes context `ctx` iff its arm is
 // one of the context's leaves, or one of its containers whose children at the named field (every
@@ -9,7 +9,7 @@
 // which rule references produced each child node (a memoized node may be produced by several).
 import { isZeroWidthMarker } from './grammar-utils.ts';
 import type { Grammar, RuleDecl, RuleExpr } from './types.ts';
-import type { CstNode, CstChild } from './gen-parser.ts';
+import type { CstNode, CstChild } from './interpreter.ts';
 import { nameRule } from './grammar-names.ts';
 
 type Role = { leaf: Set<number>; field: Map<number, string>; last: Set<number> };

@@ -12,7 +12,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import type { Adapter, AgreeResult, CorpusItem } from './src-coverage.ts';
 
 export interface TsFamilyCase { file: string; code: string }

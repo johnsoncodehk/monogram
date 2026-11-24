@@ -13,7 +13,7 @@ src/highlighters.ts), and `src/cli.ts` writes what every registered back end ren
 
 ## How it differs from a parser target
 
-A parser target (`defineParserTarget`, src/define-target.ts, docs/TARGETS.md) prints one PARSER:
+A parser target (`defineParserTarget`, src/define-parser-target.ts, docs/TARGETS.md) prints one PARSER:
 it is handed the shared algorithm families already printed in its language and adds its own
 spelling, so every target runs the same algorithm. A highlighter has no parser to print. Its
 engine sees only text, line by line, and has its own means of keeping context: lookbehind and

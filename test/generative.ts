@@ -35,7 +35,7 @@ import { join } from 'node:path';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import { parseFragment } from 'parse5';
-import { createParser, type CstNode } from '../src/gen-parser.ts';
+import { createParser, type CstNode } from '../src/interpreter.ts';
 import { scratchDir } from './scratch.ts';
 import type { Grammar } from '../src/types.ts';
 import { generateInputs, type GenInput } from './grammar-gen.ts';

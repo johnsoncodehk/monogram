@@ -7,20 +7,20 @@
 //      branches and every other node, in memory) emit byte-identical parsers for every target.
 //   3. the deriver: a repeated derived name is suffixed and reported; an author-written name is
 //      never suffixed; two equal written names in one scope are an error.
-//   4. the portable IR carries the names (src/emit-portable.ts, Step NAMES): an rd rule's
+//   4. the portable IR carries the names (src/parser-ir.ts, Step NAMES): an rd rule's
 //      `altNames`, a Pratt rule's `nudNames` / `ledNames` / `ledLeftNames` / `postfixTokNames` /
 //      `opNames`, a step's `field`, an inline alternation's `branchNames`, each the deriver's; with
 //      them dropped, the IR of a named grammar equals the unnamed one's.
 import { createHash } from 'node:crypto';
 import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/emit-parser.ts';
+import { jsTarget } from '../src/target-js.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { generateCstMatch } from '../src/gen-cst-match.ts';
 import { nameReport, nameRule } from '../src/grammar-names.ts';
-import { portableIR, type RdRule, type PrattRule, type Step } from '../src/emit-portable.ts';
+import { portableIR, type RdRule, type PrattRule, type Step } from '../src/parser-ir.ts';
 import type { Grammar, RuleExpr } from '../src/types.ts';
 import { rule, alt, arm, field, defineGrammar, token, many, opt, seq, range, star } from '../src/api.ts';
 import calc from './fixtures/calc.ts';

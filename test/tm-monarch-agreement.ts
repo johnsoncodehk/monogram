@@ -29,7 +29,7 @@ import { scopeToMonarch } from '../src/highlight-roles.ts';
 import type { MonarchLanguage } from '../src/gen-monarch.ts';
 import { tokenize } from './monarch-tokenize.ts';
 import { inRepoCorpus, REPO_CORPUS_AT } from './emit-corpus.ts';
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 type CstNode = { offset: number; end: number; tokenType?: string; rule?: string; children?: CstNode[] };
 
@@ -118,7 +118,7 @@ async function refusalsOf(lang: string): Promise<Record<string, string[]>> {
   return Object.fromEntries(registeredHighlighters().map(h => [h.name, h.refusals(input).map(r => `${r.construct}: ${r.reason}`)]));
 }
 
-// Per character of `src`: whether the interpreter (src/gen-parser.ts) reads it as a token whose
+// Per character of `src`: whether the interpreter (src/interpreter.ts) reads it as a token whose
 // node is a `@type` rule's (a type name, not a member name inside a type); null when the file
 // does not parse.
 const parserOf = new Map<string, { parse(src: string): unknown }>();

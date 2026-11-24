@@ -5,7 +5,7 @@
 //      quoted-scalar continuation rules (so `KEY="line1\nline2"` parses)
 //
 // Run with: node test/env-spec-regressions.ts
-import { createParser } from '../src/gen-parser.ts';
+import { createParser } from '../src/interpreter.ts';
 import { alt, defineGrammar, many, opt, rule, token, seq, star, altPattern, oneOf, noneOf, anyChar, never, range, plus, followedBy, notPrecededBy } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';

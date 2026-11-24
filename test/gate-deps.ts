@@ -184,7 +184,7 @@ export function gateDeps(script: string, reads: string[] = []): Set<string> {
 // Each emit target's module: what it reaches is that target's code. src/target.ts (the core) imports
 // none of them, so a gate of one target reaches one of them (src/emit.ts, which re-exports every
 // target, reaches all four: a gate that imports it depends on every target).
-export const TARGET_ROOTS: Record<string, string> = { js: 'src/emit-parser.ts', ts: 'src/target-ts.ts', go: 'src/target-go.ts', rust: 'src/target-rust.ts' };
+export const TARGET_ROOTS: Record<string, string> = { js: 'src/target-js.ts', ts: 'src/target-ts.ts', go: 'src/target-go.ts', rust: 'src/target-rust.ts' };
 const ROOT_TARGET = new Map(Object.entries(TARGET_ROOTS).map(([t, f]) => [f, t]));
 const closure = (from: string[], stop: (f: string) => boolean = () => false): Set<string> => {
   const seen = new Set<string>();
