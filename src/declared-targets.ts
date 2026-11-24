@@ -20,7 +20,9 @@
 // An rd rule computes its form only when it is in the TARGET CLOSURE: the rules a container calls
 // at a named child or a target step reads, and the unit arms' rules of those, transitively; a
 // Pratt rule always computes one. A grammar that declares no context gets none of this: the plan
-// is absent and every printer prints what it printed before.
+// is absent and every printer prints what it printed before. A context declared `when: 'demand'`
+// is planned by planDemand (below): this plan, made on a copy of the rules, becomes its twins, and
+// the real rules keep the forms they have without contexts.
 //
 // EVERY READER AND WRITER OF THE FORM'S LOW BITS (FORM_LOW), the one list to extend when a new
 // mechanism writes FORM_TARGET / FORM_NOT_TARGET / FORM_UNARY or tests them: with contexts

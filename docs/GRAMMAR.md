@@ -206,11 +206,23 @@ passes when its child passes. Two markers read a context:
 
 A grammar declares at most three contexts. The portable engine computes the check as part of the
 form every Pratt call already returns, so a grammar without `targets` emits the same parser as
-before. The interpreter checks the same thing by walking its tree. Fixtures:
+before.
+
+A context may instead be computed ON DEMAND (`when: 'demand'`), for a language where the question
+is rare (ECMAScript's `=` meets an array or object literal a few times in thousands): the normal
+parse computes nothing, and an array or object literal on the left of the `targetOps` operator is
+parsed again by its accumulating twin, from its first token to the operator (the shared
+`reparseFrom`, `src/reparse-family.ts`). Its leaves must be exactly the arms the shallow check
+takes (the generator names any arm that breaks this); it must be the grammar's only context, no
+`target(...)` marker may read it, and a `last` arm must be a container. A nested container is
+parsed again by its own twin, so each token is parsed at most once more per enclosing container.
+Fixture: [`test/fixtures/patterndemand.ts`](../test/fixtures/patterndemand.ts) (the same rows as
+its eager twin). The retiring jsTarget keeps the shallow check for such a grammar. The interpreter checks the same thing by walking its tree. Fixtures:
 [`test/fixtures/patterncalc.ts`](../test/fixtures/patterncalc.ts) (an ECMAScript-style pattern)
 and [`test/fixtures/startargets.ts`](../test/fixtures/startargets.ts) (Python's star, single and
 del targets). Three things refuse a grammar that declares contexts, by name: total parsing (`{
-recovery: true }`), the typed-AST shape forms and the retiring jsTarget emitter.
+recovery: true }`), the typed-AST shape forms and the retiring jsTarget emitter (which takes an
+on-demand context as the shallow check, below; the Rust typed-AST form likewise, for now).
 
 ## No nullable rule except the entry
 
