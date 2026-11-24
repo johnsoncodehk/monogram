@@ -200,8 +200,8 @@ typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asyncgener
 typescript | TypeScript src | rejects | unclassified | src/lib/es2018.asynciterable.d.ts
 typescript | TypeScript src | rejects | unclassified | src/lib/es5.d.ts
 typescript | TypeScript src | rejects | unclassified | src/services/codefixes/generateAccessors.ts
-typescript | TypeScript src | spans | other | files 37
-typescript | TypeScript src | spans | totals | span-equal 655 of 692, interpreter spans missing 3, extra tree-sitter spans 299
+typescript | TypeScript src | spans | other | files 9
+typescript | TypeScript src | spans | totals | span-equal 683 of 692, interpreter spans missing 3, extra tree-sitter spans 46
 typescript | contextual keywords | rejects | unclassified | "abstract: for (;;) continue abstract;"
 typescript | contextual keywords | rejects | unclassified | "abstract: while (1) break abstract;"
 typescript | contextual keywords | rejects | unclassified | "accessor: for (;;) continue accessor;"
@@ -394,6 +394,7 @@ typescript | lookaheads | rejects | unclassified | "export let = 1;"
 typescript | lookaheads | rejects | unclassified | "export let;"
 typescript | new arguments | brackets | new-in-new-target-arguments | "new new C()();"
 typescript | operands | accepts | unclassified | "x as T < b > c;"
+typescript | operands | brackets | type-continuation-across-line-break | "x as T\n[0];"
 typescript | operator pairs | accepts | assignment-target-not-checked | "!a = c;"
 typescript | operator pairs | accepts | assignment-target-not-checked | "++a = c;"
 typescript | operator pairs | accepts | assignment-target-not-checked | "+a = c;"
@@ -623,6 +624,7 @@ typescriptreact | lookaheads | rejects | unclassified | "export let = 1;"
 typescriptreact | lookaheads | rejects | unclassified | "export let;"
 typescriptreact | new arguments | brackets | new-in-new-target-arguments | "new new C()();"
 typescriptreact | operands | accepts | unclassified | "x as T < b > c;"
+typescriptreact | operands | brackets | type-continuation-across-line-break | "x as T\n[0];"
 typescriptreact | reserved words | accepts | unclassified | "import { if } from \"m\";"
 typescriptreact | reserved words | accepts | unclassified | "x = { if };"
 typescriptreact | reserved words | rejects | unclassified | "class C { static() {} }"
