@@ -2,9 +2,9 @@
  "typescript": {
   "files": 42,
   "chars": 1595141,
-  "agree": 98.66,
+  "agree": 98.68,
   "classes": {
-   "type -> name": 2981,
+   "type -> name": 2919,
    "text -> string": 6,
    "type -> string": 3,
    "type -> punct": 3,
@@ -12,7 +12,7 @@
    "keyword -> punct": 78,
    "name -> keyword": 26,
    "type -> keyword": 1,
-   "name -> type  (the parser: a type)": 33,
+   "name -> type  (the parser: a type)": 35,
    "name -> punct": 12,
    "regexp -> punct": 2
   },
