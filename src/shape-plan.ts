@@ -434,11 +434,11 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
     if (!view || !names) throw new Error(`planShape: the IR's rule ${r.name} is not in the shape's grammar (plan a shape against the grammar it was defined on)`);
     const named = (e: RuleExpr) => names.childOf.has(e);
     const marked = new Map<RuleExpr, number>();   // quantifier body / sep element -> marker tag
+    const strided = new Set<RuleExpr>();
     const tagsByKey = new Map<string, Numbering>();
     const sitesByKey = new Map<string, ArmSites>();
     for (const { key, arm } of armKeys(r)) {
       const id = arms.length;
-      const fnStart = fns.length;
       arms.push({ id, rule: r.name, key, arm });
       ids.set(`${r.name}|${key}`, id);
       variantBit.push(-1); variantDefault.push(false); tops.push(null); topDefault.push(false);
@@ -455,6 +455,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       const eqs = armEqs(shape, r.name, arm);
       const sites: ArmSites = { eqs, childOf: childNames(info), threads: new Map() };
       sitesByKey.set(key, sites);
+      const wants: Wants = { all: false, tags: new Set() };
       const sa = spineAttr.get(r.name);
       if (sa !== undefined) {
         let rs = restarts.find((x) => x.rule === r.name);
@@ -474,7 +475,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
           if (left === undefined || left.t === 'const') rs.bin = { c: left === undefined ? dflt : (left as { value: Scalar }).value };
           else {
             const fnName = `leq${id}`;
-            fns.push({ name: fnName, doc: `${r.name}.${arm}: the left's ${sa} (its operator just pushed)`, params: ARM_PARAMS, ret: [VAL as never], body: new ArmCompiler(shape, info, num, positional(r, key, info), 0, marked, cooks, cx, eqs, null, readStats, new Set()).compile(left as Term), method: true, reads: true });
+            fns.push({ name: fnName, doc: `${r.name}.${arm}: the left's ${sa} (its operator just pushed)`, params: ARM_PARAMS, ret: [VAL as never], body: new ArmCompiler(shape, info, num, positional(r, key, info), 0, marked, cooks, cx, eqs, null, readStats, new Set(), undefined, wants, strided).compile(left as Term), method: true, reads: true });
             rs.bin = { fn: fnName };
           }
         }
@@ -487,7 +488,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       const at = info.form ? null : slotPositions(info.items ?? [], ir.gtComps, (e) => top !== null && top.filter((s) => s.src === e).length === 1);
       const usedRecs = new Set<number>();
       const ownSyn = new Set(synDecls.flatMap(([, d], k) => (d.rules[r.name]?.[arm] !== undefined ? [k] : [])));
-      const compiler = () => new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks, cx, eqs, at, readStats, ownSyn, usedRecs);
+      const compiler = () => new ArmCompiler(shape, info, num, positional(r, key, info), key.startsWith('led') ? 1 : 0, marked, cooks, cx, eqs, at, readStats, ownSyn, usedRecs, wants, strided);
       // The arm's synthesized attributes and threads (a reason it cannot is the arm's reason too).
       let attrWhy: string | undefined;
       for (const [k, [attr, d]] of synDecls.entries()) {
@@ -546,9 +547,10 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
         }
       }
       fns.push({ name: `construct${id}`, doc: where, params: ARM_PARAMS, ret: [VAL as never], body, method: true, reads: true });
-      sites.readsTag = tagsRead(fns.slice(fnStart));
+      sites.readsTag = wants.all ? () => true : (t) => wants.tags.has(t);
       if (usedRecs.size) { const ks = [...usedRecs].sort((a, b) => a - b); recs[id] = ks; sites.recs = new Map(ks.map((k) => [at!.recs[k]!, k])); }
     }
+    for (const e of strided) if (marked.has(e)) throw new Error(`planShape: ${r.name}: a list read by stride is marked by a later plan`);
     newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds, tagStats));
   }
   for (const k of cx.synSlotRead) syn[k]!.slotRead = true;
@@ -642,24 +644,29 @@ function armSteps(r: RuleIR, key: string): Step[] | null {
   if (!o || !('index' in o)) return null;
   return o.kind === 'bracket' ? r.nudBrackets[o.index]!.steps : o.kind === 'seq' ? r.nudSeqs[o.index]! : o.kind === 'capped' ? r.nudCapped[o.index]!.steps : null;
 }
-/** The slot tags an arm's functions read (slotFind ranges, a list's tag; namedEnd reads every
- * named one): only those steps write a tag (Step.tag), the rest of the arm's slots keep -1. */
-function tagsRead(fs: Fn[]): (t: number) => boolean {
-  const ranges: [number, number][] = [];
-  let all = false;
-  const walk = (x: unknown): void => {
-    if (x === null || typeof x !== 'object') return;
-    if (Array.isArray(x)) { x.forEach(walk); return; }
-    const e = x as Expr;
-    if (e.k === 'call' && (e.fn === 'slotFind' || e.fn === 'slotFindLast' || e.fn === 'slotAt')) {
-      const [a, b] = e.fn === 'slotAt' ? e.args.slice(3) : e.args.slice(2);
-      if (a?.k === 'int' && b?.k === 'int') ranges.push([a.v, b.v]); else all = true;
-    } else if (e.k === 'call' && e.fn === 'namedEnd') all = true;
-    else if (e.k === 'bin' && e.op === 'eq' && e.a.k === 'call' && e.a.fn === 'slotTag') { if (e.b.k === 'int') ranges.push([e.b.v, e.b.v]); else all = true; }
-    for (const y of Object.values(x)) walk(y);
-  };
-  fs.forEach((f) => walk(f.body));
-  return all ? () => true : (t) => ranges.some(([a, b]) => t >= a && t <= b);
+/** The slot tags an arm's plans read (ArmCompiler.want; namedEnd reads every named one): only
+ * those steps write a tag (Step.tag), the rest of the arm's slots keep -1. */
+type Wants = { all: boolean; tags: Set<number> };
+/** The tags of the leaves an item's first (last: `last`) slot can belong to, and whether it can
+ * leave no slot: a read by tag of an alternation's first (last) slot needs no other of its tags. */
+function edgeTags(num: Numbering, e: RuleExpr, last: boolean): { tags: number[]; nullable: boolean } {
+  const t = num.tagOf.get(e);
+  if (t !== undefined) return { tags: [t], nullable: e.type === 'literal' };   // a composed literal (ParserIR.gtComps) may leave none
+  switch (e.type) {
+    case 'group': return edgeTags(num, e.body, last);
+    case 'quantifier': { const b = edgeTags(num, e.body, last); return { tags: b.tags, nullable: e.kind !== '+' || b.nullable }; }
+    case 'sep': return { tags: edgeTags(num, e.element, last).tags, nullable: true };
+    case 'seq': {
+      const tags: number[] = [];
+      for (const x of last ? [...e.items].reverse() : e.items) { const y = edgeTags(num, x, last); tags.push(...y.tags); if (!y.nullable) return { tags, nullable: false }; }
+      return { tags, nullable: true };
+    }
+    case 'alt': {
+      const ys = e.items.map((x) => edgeTags(num, x, last));
+      return { tags: ys.flatMap((y) => y.tags), nullable: ys.length === 0 || ys.some((y) => y.nullable) };
+    }
+    default: return { tags: [], nullable: true };
+  }
 }
 function childNames(info: ScopeInfo): Map<RuleExpr, string> {
   const out = new Map<RuleExpr, string>();
@@ -779,9 +786,19 @@ class ArmCompiler {
   // The records (Positions.recs) this arm's plans read; recOk: this plan runs at the accept site
   // (the records are the ones just published), not later (a reader-applied top) or earlier (a thread).
   private usedRecs: Set<number>; private recOk = false;
-  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>, cx: AttrCx, eqs: Eqs, at: Positions | null, reads: ReadStats, ownSyn: Set<number>, usedRecs: Set<number> = new Set()) {
+  // The slot tags this arm's plans read (Wants): only those steps write a tag (Step.tag).
+  private wants: Wants;
+  // The list items read by stride (a list with no marker): none may be marked by a later plan.
+  private strided: Set<RuleExpr>;
+  constructor(shape: Shape, info: ArmInfo, num: Numbering, pos: Map<RuleExpr, number>, lo0: number, marked: Map<RuleExpr, number>, cooks: Set<CookFn>, cx: AttrCx, eqs: Eqs, at: Positions | null, reads: ReadStats, ownSyn: Set<number>, usedRecs: Set<number> = new Set(), wants: Wants = { all: false, tags: new Set() }, strided: Set<RuleExpr> = new Set()) {
     this.shape = shape; this.info = info; this.num = num; this.pos = pos; this.lo0 = lo0; this.marked = marked; this.cooks = cooks; this.cx = cx; this.eqs = eqs;
-    this.at = at; this.reads = reads; this.ownSyn = ownSyn; this.usedRecs = usedRecs;
+    this.at = at; this.reads = reads; this.ownSyn = ownSyn; this.usedRecs = usedRecs; this.wants = wants; this.strided = strided;
+  }
+  /** A read of the slot(s) of `slot` by tag: a node's own tag; an alternation's first (last) slot,
+   * the tags its branches can begin (end) with (edgeTags): its other slots need no tag. */
+  private want(slot: Slot, edge: 'first' | 'last'): void {
+    if (slot.kind !== 'branch') { const t = this.num.tagOf.get(slot.node); if (t !== undefined) this.wants.tags.add(t); return; }
+    for (const t of edgeTags(this.num, slot.node, edge === 'last').tags) this.wants.tags.add(t);
   }
   private tmp(): string { return `t${this.n++}`; }
 
@@ -973,6 +990,7 @@ class ArmCompiler {
     const f = this.fixedAt(r);
     if (f && f.sure) { this.reads.fixed++; return { idx: this.bindInt(f.idx, out), sure: true }; }
     const [t0, t1] = this.range(r.slot);
+    this.want(r.slot, 'first');
     if (f) { this.reads.checked++; return { idx: this.bindInt(call('slotAt', f.idx, v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out), sure: false }; }
     this.reads.scan++;
     const w = this.bounds(r.scope, r.slot.node);
@@ -1042,6 +1060,7 @@ class ArmCompiler {
       const end = slot.quants.slice(scope.base.length).some(isListQ) ? null : this.lastOf(slot, v(idx));
       if (end) { this.reads.fixed++; return call('srcText', call('slotOff', v(idx)), call('slotEnd', end)); }
       this.reads.scan++;
+      this.want(slot, 'last');
       const last = this.bindInt(call('slotFindLast', v(idx), this.bounds(scope, slot.node).hi, int(t0), int(t1)), out);
       return call('srcText', call('slotOff', v(idx)), call('slotEnd', v(last)));
     }
@@ -1058,14 +1077,48 @@ class ArmCompiler {
     if (f && f.sure && w !== null && w >= 1) { this.reads.fixed++; return edge === 'start' ? call('slotOff', f.idx) : call('slotEnd', w === 1 ? f.idx : bin('add', f.idx, int(w - 1))); }
     const [t0, t1] = this.range(r.slot);
     // One item at a known position that may be absent: the check of that slot (the scan's result).
+    this.want(r.slot, edge === 'start' ? 'first' : 'last');
     if (f && r.slot.kind !== 'branch') { this.reads.checked++; return call(edge === 'start' ? 'slotOff' : 'slotEnd', v(this.bindInt(call('slotAt', f.idx, v(r.scope.lo), v(r.scope.hi), int(t0), int(t1)), out))); }
     this.reads.scan++;
     const sw = this.bounds(r.scope, r.slot.node);
     const i = this.bindInt(call(edge === 'start' ? 'slotFind' : 'slotFindLast', sw.lo, sw.hi, int(t0), int(t1)), out);
     return call(edge === 'start' ? 'slotOff' : 'slotEnd', v(i));
   }
+  /** The slots between one item of a list and the next, where the list is the whole extent read
+   * (its own item of the arm's sequence, a record or a fixed position on either side) and holds
+   * nothing else: a one-slot item repeated (1) or separated by a one-slot delimiter (2); else null
+   * (the items are told by their tag). An unmarked list only: a marked one has a marker before
+   * each item (ShapePlan: a list read by stride whose repetition another plan marks later fails). */
+  private stride(r: { slot: Slot; rest: RuleExpr[]; scope: CScope }): { start: Expr; step: number } | null {
+    if (r.rest.length !== 1 || !this.recOk || r.scope.origin !== 'b' || !this.at) return null;
+    const q = r.rest[0]!;
+    const el = q.type === 'sep' ? q.element : q.type === 'quantifier' ? q.body : null;
+    if (el !== r.slot.node || this.at.width(el) !== 1 || this.at.top.get(el) !== q || this.marked.has(el)) return null;
+    const p = this.at.pos.get(q);
+    if (!p || p.lo === null || !p.conds.every((c) => r.scope.taken.has(c)) || (this.at.after.get(q) === undefined && p.hi !== 0)) return null;
+    this.strided.add(el);
+    const o = p.rec === null ? v('b') : this.rec(p.rec);
+    return { start: p.lo === 0 ? o : bin('add', o, int(p.lo)), step: q.type === 'sep' ? 2 : 1 };
+  }
+  /** The end of an iteration's last named slot: where the body's last named leaf is there in
+   * every iteration at a fixed offset, that slot's end; else namedEnd (which reads every named tag). */
+  private namedEndOf(it: CScope, item: RuleExpr): Expr {
+    const leaves: RuleExpr[] = [];
+    const walk = (e: RuleExpr): void => {
+      if (this.num.tagOf.has(e)) { leaves.push(e); return; }
+      if (e.type === 'group' || e.type === 'quantifier') walk(e.body);
+      else if (e.type === 'sep') walk(e.element);
+      else if (e.type === 'seq' || e.type === 'alt') e.items.forEach(walk);
+    };
+    walk(item);
+    const last = leaves.filter((e) => (this.num.tagOf.get(e)! & 1) === 0).pop();
+    const p = last && this.at?.pos.get(last);
+    if (p && p.lo !== null && p.rec === null && p.conds.length === 0) { this.reads.fixed++; return call('slotEnd', p.lo === 0 ? v(it.origin) : bin('add', v(it.origin), int(p.lo))); }
+    this.wants.all = true;
+    return call('namedEnd', v(it.lo), v(it.hi));
+  }
   /** The iterations of the repetition holding `over`: a loop over its markers. */
-  private iterations(s: CScope, over: string, out: Stmt[], each: (it: CScope, body: Stmt[]) => void): void {
+  private iterations(s: CScope, over: string, out: Stmt[], each: (it: CScope, body: Stmt[], item: RuleExpr) => void): void {
     const r = this.resolve(s, over);
     const at = r.rest.map(isListQ).lastIndexOf(true);
     // Optionals around the repetition are fine: absent, it has no iteration (no marker).
@@ -1091,7 +1144,7 @@ class ArmCompiler {
     ];
     const lo = this.tmp();
     loop.push({ k: 'let', name: lo, ty: 'idx', init: bin('add', v(m), int(1)) });
-    each({ info: r.scope.info, base: [...r.scope.base, ...r.rest.slice(0, at + 1)], lo, hi: ih, outer: s, vars: new Map(), arm: false, origin: lo, hiOk: false, taken: new Set() }, loop);
+    each({ info: r.scope.info, base: [...r.scope.base, ...r.rest.slice(0, at + 1)], lo, hi: ih, outer: s, vars: new Map(), arm: false, origin: lo, hiOk: false, taken: new Set() }, loop, body);
     loop.push({ k: 'set', name: m, e: v(nx) });
     out.push({ k: 'while', c: bin('ge', v(m), int(0)), body: loop });
   }
@@ -1154,11 +1207,15 @@ class ArmCompiler {
           out.push({ k: 'let', name: l, ty: VALS as never, init: { k: 'newList', ty: VALS as never } });
           const lw = this.bounds(r.scope, r.slot.node);
           const lh = lw.hi.k === 'var' ? lw.hi : v(this.bindInt(lw.hi, out, 'idx'));
-          out.push({ k: 'let', name: i, ty: 'idx', init: lw.lo });
+          const stride = this.stride(r);
+          if (stride === null) this.want(r.slot, 'first');
+          out.push({ k: 'let', name: i, ty: 'idx', init: stride?.start ?? lw.lo });
           const item = this.childVal(v(i), r.slot, out);
           out.push({ k: 'while', c: bin('lt', v(i), lh), body: [
-            { k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: this.need(item, r.slot) }] },
-            { k: 'set', name: i, e: bin('add', v(i), int(1)) },
+            ...(stride === null
+              ? [{ k: 'if', c: bin('eq', call('slotTag', v(i)), int(t0)), then: [{ k: 'push', list: l, e: this.need(item, r.slot) }] } as Stmt]
+              : [{ k: 'push', list: l, e: this.need(item, r.slot) } as Stmt]),
+            { k: 'set', name: i, e: bin('add', v(i), int(stride?.step ?? 1)) },
           ] });
           return { k: 'vList', e: v(l) };
         }
@@ -1266,11 +1323,11 @@ class ArmCompiler {
           out.push({ k: 'let', name: acc.start, ty: 'int', init: call('valStart', v(init), v('off')) });
           out.push({ k: 'let', name: acc.end, ty: 'int', init: call('valEnd', v(init), v('end')) });
         }
-        this.iterations(s, t.over, out, (it, body) => {
+        this.iterations(s, t.over, out, (it, body, item) => {
           it.vars.set(t.acc, acc);
           const nv = this.val(t.body, it, body);
           this.reads.list++;
-          const fe = this.bindInt(call('namedEnd', v(it.lo), v(it.hi)), body);
+          const fe = this.bindInt(this.namedEndOf(it, item), body);
           body.push({ k: 'set', name: init, e: nv });
           body.push({ k: 'if', c: bin('gt', v(fe), v(acc.end)), then: [{ k: 'set', name: acc.end, e: v(fe) }] });
         });
@@ -1351,6 +1408,9 @@ class ArmCompiler {
       this.reads.scan++;
       first = this.bindInt(call('slotFind', from, bw.hi, int(u0), int(u1)), out);
     }
+    const items = (slot.node as Extract<RuleExpr, { type: 'alt' }>).items;
+    // The branch is told by its first slot: only the tags a branch can begin with are read.
+    rs.forEach((_, b) => { if (b !== empty[0]) for (const t of edgeTags(this.num, items[b]!, false).tags) this.wants.tags.add(t); });
     rs.forEach(([t0, t1], b) => {
       if (b === empty[0]) return;
       if (f || first !== null) this.reads.checked++; else this.reads.scan++;
