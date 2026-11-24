@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -808,6 +808,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     ahead: (set, is) => `ahead(${set}, ${is})`,
     aheadCtx: (set, is) => (is ? `(ahead(${set}, true) || ctxWord())` : `(ahead(${set}, false) && !ctxWord())`),
     sameLine: () => `${lift(ids, 'const t = peek(); return t !== null && !t.nl;')}()`,
+    when: (mask, val) => `((_ctx & ${mask}) === ${val})`,
     inPlace: (_kind, stmts) => `${lift(ids, stmts)}()`,
     ret: (cond) => `return ${cond};`,
     suppress: (set, cond) => `_suppressNext = ${set}; const _r = (${cond}); _suppressNext = 0; return _r;`,
@@ -997,6 +998,14 @@ ${headUse}  for (;;) {
  *  indexed by lid, and the prefix tables (emit-portable prattOpTables) keyed by the operator's lid:
  *  an object literal with integer keys, which V8 keeps as indexed elements (no hashing). The
  *  typed-AST printers read the same tables. */
+/** The prefix operator's operand binding power at the buffered token t (undefined: no prefix
+ *  operator): a gated operator (`await`, PrattRule.prefix's `when`) is one only where the context
+ *  word passes its test, so the test runs only when t is that operator. */
+function preLookupTs(r: PrattRule, ids: LexIdPlan): string {
+  const gated = prattOpTables(r, ids).pre.filter((p) => p.when !== undefined);
+  const off = gated.map((p) => `(t.lid === ${p.lid} && (_ctx & ${p.when!.mask}) !== ${p.when!.val})`).join(' || ');
+  return gated.length ? `(${off} ? undefined : ${r.name}_PRE[t.lid])` : `${r.name}_PRE[t.lid]`;
+}
 function tsPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
   const rec = <T extends { lid: number }>(xs: T[], v: (x: T) => string | number) => `{ ${xs.map((x) => `${x.lid}: ${v(x)}`).join(', ')} }`;
@@ -1053,7 +1062,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     nudSeq: (i, cond, tail, cap) => candTs(d, i, 'w', cond, won(i, 'finR', fm(i), tail, capTs(cap))),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
-    nudPrefix: (i) => `  { const pbp = ${r.name}_PRE[t.lid];
+    nudPrefix: (i) => `  { const pbp = ${preLookupTs(r, ids)};
     if (pbp !== undefined) {
       const c = _n;
       leafSlotW('$operator', t);
@@ -1069,7 +1078,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     // one slot at b), form, tail and capped flag; failing, no node and the frame's empty state.
     commitLeaf: (i, conds) => commitTs(conds, `{ const b = _n; leafSlotW(tok_kind(t), t); pos++; ${finPTs(r.name, `nud${i}`, 'b')}; _form = ${fm(i)}; _tail = false; return true; }`, NUD_FAIL_TS, true),
     commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitTs(conds, `{ const s = pos, b = _n; if (${cond}${nullable ? ' && pos > s' : ''}) { ${finRTs(r.name, `nud${i}`, 'b', 's')};${cap === 'tail' ? '' : ` _capped = ${capTs(cap)};`} _form = ${fm(i)}; _tail = ${tail}; return true; }${undo ? ' back(s); _n = b;' : ''} }`, NUD_FAIL_TS),
-    commitPrefix: (i, conds) => commitTs(conds, `{ const pbp = ${r.name}_PRE[t.lid];
+    commitPrefix: (i, conds) => commitTs(conds, `{ const pbp = ${preLookupTs(r, ids)};
     if (pbp !== undefined) {
       const save = pos, b = _n;
       leafSlotW('$operator', t);
@@ -1767,7 +1776,7 @@ ${reuseFns}`;
 
 type ShapeStepKind =
   | 'lit' | 'tok' | 'rule' | 'ruleBp' | 'star' | 'opt' | 'sep'
-  | 'altlit' | 'alt' | 'look' | 'ahead' | 'aheadCtx' | 'seq' | 'sameLine' | 'suppress' | 'ctx';
+  | 'altlit' | 'alt' | 'look' | 'ahead' | 'aheadCtx' | 'seq' | 'sameLine' | 'when' | 'suppress' | 'ctx';
 type ShapePrattKind =
   | 'atom' | 'group' | 'prefix' | 'binary' | 'postfix' | 'postfixTok'
   | 'led' | 'nudSeq' | 'nudCapped' | 'template';
@@ -1775,7 +1784,7 @@ type ShapeUnsupported = { rule: string; construct: string };
 
 const SHAPE_STEP_KINDS: readonly ShapeStepKind[] = [
   'lit', 'tok', 'rule', 'ruleBp', 'star', 'opt', 'sep',
-  'altlit', 'alt', 'look', 'ahead', 'aheadCtx', 'seq', 'sameLine', 'suppress', 'ctx',
+  'altlit', 'alt', 'look', 'ahead', 'aheadCtx', 'seq', 'sameLine', 'when', 'suppress', 'ctx',
 ];
 const SHAPE_PRATT_KINDS: readonly ShapePrattKind[] = [
   'atom', 'group', 'prefix', 'binary', 'postfix', 'postfixTok',
@@ -1979,6 +1988,7 @@ function emitAstRdAltSteps(
       case 'ahead':
       case 'aheadCtx':
       case 'target':
+      case 'when':
       case 'sameLine': return false;
     }
   };
@@ -2014,6 +2024,8 @@ function emitAstRdAltSteps(
         return `(${emitSteps(s.steps, sink)})`;
       case 'sameLine':
         return `(() => { const t = peek(); return t !== null && !t.nl; })()`;
+      case 'when':
+        return `((_ctx & ${s.mask}) === ${s.val})`;
       case 'ahead':
         return `ahead(${s.set}, ${s.is})`;
       case 'aheadCtx':
@@ -2571,7 +2583,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     ctx.pratt.prefix += Math.max(1, r.prefix.length);
     if (prefixSlot.kind === 'node') {
       const prefixNode = prefixSlot as NodeShape;
-      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+      prefixCode = `  const pbp = ${preLookupTs(r, ids)};
   if (pbp !== undefined) {
     const save = pos;
     const opText = _src.slice(t.off, t.end);
@@ -2587,7 +2599,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     return ${emitAstNodeCtor(prefixNode, spans, nodeFieldsFromSk(prefixNode), 'spOff', 'end')} as ${retType};
   }`;
     } else if (prefixSlot.kind === 'custom') {
-      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+      prefixCode = `  const pbp = ${preLookupTs(r, ids)};
   if (pbp !== undefined) {
     const save = pos;
     const opText = _src.slice(t.off, t.end);
@@ -2600,7 +2612,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     return ${customFinish((prefixSlot as CustomShape).fn, '[argument]', 'save', '[]', undefined, 'opText')} as ${retType};
   }`;
     } else if (prefixSlot.kind === 'inline') {
-      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+      prefixCode = `  const pbp = ${preLookupTs(r, ids)};
   if (pbp !== undefined) {
     const save = pos;
     pos++;
@@ -2612,7 +2624,7 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
     return argument;
   }`;
     } else {
-      prefixCode = `  const pbp = ${r.name}_PRE[t.lid];
+      prefixCode = `  const pbp = ${preLookupTs(r, ids)};
   if (pbp !== undefined) {
     const save = pos;
     const opText = _src.slice(t.off, t.end);
@@ -3508,13 +3520,13 @@ function ahead(k: number, is: boolean): boolean {
 // Whether the next token is a word the context in force reserves (ParserIR.ctxWords): with the
 // \`ahead\` test of the guard's own set, an \`aheadCtx\` test. Outside every context it reads nothing.
 function ctxWord(): boolean {
-  if (_ctx === 0) return false;
+  if ((_ctx & ${CTX_WORD_BITS}) === 0) return false;
   const t = peek();
   return t !== null && inCtxWords(t);
 }
 // Whether t is a word the context in force reserves (a guard's lead test reads the buffered token).
 function inCtxWords(t: Tok): boolean {
-  return _ctx !== 0 && (false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')});
+  return (_ctx & ${CTX_WORD_BITS}) !== 0 && (false${ctxWordLids(ir, ids).map((w) => ` || ((_ctx & ${w.bit}) !== 0 && t.lid === ${w.lid})`).join('')});
 }
 // Whether the token after the current one is in set k (a longest-match candidate's SECOND guard).
 function secondIn(k: number): boolean {
@@ -3639,6 +3651,7 @@ function enComp(l: number): boolean { return _matchComp(l); }
 function enTok(k: number): boolean { return matchTokW(k); }
 function enAhead(set: number, is: boolean): boolean { return ahead(set, is); }
 function enCtxWord(): boolean { return ctxWord(); }
+function enWhen(mask: number, val: number): boolean { return (_ctx & mask) === val; }
 function enSecondIn(set: number): boolean { return secondIn(set); }
 function enLook(id: number): boolean {
   ${disp('id', nc.look, (i) => `look${i}`, (f) => `${f}()`)}

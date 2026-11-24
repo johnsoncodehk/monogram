@@ -58,13 +58,14 @@ function show(ir: ParserIR, s: Step, d = 0): string {
     case 'ahead': case 'aheadCtx': return `${s.is ? '&' : '!'}{${setText(ir.tokenSets[s.set]!)}}`;
     case 'seq': return `(${sub(s.steps)})`;
     case 'sameLine': return 'sameLine';
+    case 'when': return `when(${s.mask}:${s.val})`;
     case 'target': return `target(${s.ctx})`;
     case 'suppress': case 'ctx': return sub(s.steps);
   }
 }
 
 // ── the plan's facts, read per step ──
-const zeroWidth = (s: Step) => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'target' || s.t === 'look';
+const zeroWidth = (s: Step) => s.t === 'ahead' || s.t === 'aheadCtx' || s.t === 'sameLine' || s.t === 'when' || s.t === 'target' || s.t === 'look';
 const neverFails = (s: Step): boolean => s.t === 'star' || s.t === 'opt' || s.t === 'sep' || ((s.t === 'seq' || s.t === 'suppress' || s.t === 'ctx') && s.steps.every(neverFails));
 // Why a body that is not clean can fail after it consumed: where it consumes first.
 function dirtyAfter(ir: ParserIR, steps: Step[]): string {

@@ -13,7 +13,7 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -54,7 +54,7 @@ const guardCond = (g: Guard, t: string, keyed: boolean, recv = 'self'): string[]
     ...(g.pairs ?? []).map((x) => `${recv}.pair_in(${x.when.id}, &${t}, ${x.second.id})`)];
 // A guard's lead test (emit-portable.ts LeadTest) on the buffered token t.
 const leadRs = (l: LeadTest, t: string, recv: string): string => {
-  const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
+  const inS = l.ctx ? `(in_token_set(${l.set}, &${t}) || (${recv}.ctx & ${CTX_WORD_BITS} != 0 && in_ctx_words(${recv}.ctx, &${t})))` : `in_token_set(${l.set}, &${t})`;
   return l.is ? inS : `!${inS}`;
 };
 // `if <conds> <body>` as one statement (just the body when there is no condition).
@@ -1240,6 +1240,7 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     ahead: (set, is) => `${recv}.ahead(${set}, ${is})`,
     aheadCtx: (set, is) => (is ? `(${recv}.ahead(${set}, true) || ${recv}.ctx_word())` : `(${recv}.ahead(${set}, false) && !${recv}.ctx_word())`),
     sameLine: () => `matches!(${recv}.peek(), Some(t) if !t.nl)`,
+    when: (mask, val) => `(${recv}.ctx & ${mask} == ${val})`,
     inPlace: (kind, stmts) => (kind === 'alt' ? `(|p: &mut Parser<'a, B>| -> bool { ${stmts} })(${recv})` : stmts),
     ret: (cond) => cond,
     suppress: (set, cond) => `{ ${recv}.suppress_next = ${set}; let _r = (${cond}); ${recv}.suppress_next = 0; _r }`,
@@ -1572,7 +1573,10 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const D = ir.targets?.demand, dem = demandLids(r, ids, D);
   const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : dem.length ? `(if tgt && (${dem.map((l) => `op_lid == ${l}`).join(' || ')}) { ${1 | D!.assigned} } else { 1 })` : '1';
   const tgtDem = dem.length ? `(${lf('form')} != 0 || (form & ${D!.defer}) != 0 && !self.demand_${r.name}(op_lid as isize, form as isize, p0, self.pos as isize))` : tgtFail;
-  const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
+  // A gated prefix operator (`await`, PrattRule.prefix's `when`) is one only where the context word
+  // passes: a guard on its own arm, so no other operator's lookup reads the word.
+  const preArms = ops.pre.map((p) => `${p.lid}${p.when ? ` if ctx & ${p.when.mask} == ${p.when.val}` : ''} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
+  const preGated = ops.pre.some((p) => p.when !== undefined);
   // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops
   // what the arm built. A sequence arm's frame is the `cand!` macro (candRs).
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
@@ -1601,7 +1605,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     nudSeq: (i, cond, tail, cap) => candRs(d, i, cond, aid(r.name, `nud${i}`, rid), `${markRs(d, i)} bf = ${fm(i)}; bt = ${tail}; bc = ${capRs(cap)};`),
     // An operand that parses but is not the target the operator requires fails the whole Pratt
     // call, whatever another arm matched.
-    nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+    nudPrefix: (i) => `        if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid${preGated ? ', self.ctx' : ''}) {
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
                 Some(_) if ptgt && ${lf('self.form')} != 0 => { self.back(save); ${lost} self.capped = false; return None; }
@@ -1616,7 +1620,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     commitLeaf: (i, conds) => commitRs(conds, `{ let save = self.pos; let sb = self.scratch.len(); self.push_leaf(t.kid as u16, self.pos as u32, t.off, t.end); self.pos += 1; let n = ${finRs(aid(r.name, `nud${i}`, rid), 'sb, t.off as usize, save')}; self.form = ${fm(i)}; self.tail = false; return Some(n); }`, NUD_FAIL_RS, true),
     // A 'tail' cap leaves the flag as the trailing operand set it.
     commitSeq: (i, conds, cond, tail, cap, undo, nullable) => commitRs(conds, commitBodyRs(aid(r.name, `nud${i}`, rid), cond, undo, nullable, cap === 'tail' ? `{ self.form = ${fm(i)}; self.tail = ${tail}; }` : fm(i) === '0' ? `nud ${tail} ${capRs(cap)}` : `{ self.form = ${fm(i)}; self.tail = ${tail}; self.capped = ${capRs(cap)}; }`), NUD_FAIL_RS),
-    commitPrefix: (i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid) {
+    commitPrefix: (i, conds) => commitRs(conds, `if let Some((pbp, ptgt, pform)) = Self::${r.name}_pre(t.lid${preGated ? ', self.ctx' : ''}) {
             let save = self.pos; let sb = self.scratch.len(); let ck = self.b.checkpoint();
             self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1;
             match self.${r.name}_bp(pbp) {
@@ -1687,7 +1691,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
     }
     /// The operator row per lid (emit-portable prattOpRow: binary lbp / rbp / flags, postfix lbp / target, composite lead, led index).
     const ${r.name}_ROW: [u32; ${row.size}] = [${row.rows.join(', ')}];
-    fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
+    fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
 `,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
     bpOpen: () => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
@@ -2624,7 +2628,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     #[inline(always)]
     #[allow(dead_code)]
     /// Whether the next token is a word the context in force reserves; outside every context it reads nothing.
-    fn ctx_word(&mut self) -> bool { self.ctx != 0 && match self.peek() { Some(t) => in_ctx_words(self.ctx, &t), None => false } }
+    fn ctx_word(&mut self) -> bool { self.ctx & ${CTX_WORD_BITS} != 0 && match self.peek() { Some(t) => in_ctx_words(self.ctx, &t), None => false } }
     /// Whether the token after the current one is in token set k (a longest-match candidate's SECOND guard).
     #[inline(always)]
     #[allow(dead_code)]
@@ -3148,6 +3152,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       case 'ahead':
       case 'aheadCtx':
       case 'target':
+      case 'when':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
       case 'star': return walkSeq([s.step]) === 'unknown' ? 'unknown' : 'nullable';
@@ -3437,6 +3442,7 @@ function emitRustAstRdAltSteps(
       case 'ahead':
       case 'aheadCtx':
       case 'target':
+      case 'when':
       case 'sameLine': return false;
     }
   };
@@ -3454,6 +3460,7 @@ function emitRustAstRdAltSteps(
       case 'tok':
       case 'altlit': return true;
       case 'sameLine': return true;
+      case 'when': return true;
       case 'target': return true;
       case 'ahead': return true;
       case 'aheadCtx': return true;
@@ -3516,10 +3523,12 @@ function emitRustAstRdAltSteps(
       case 'target': throw new Error('rust typed AST: declared target contexts not printed yet');
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
+      case 'when':
+        return `if ${okVar} && self.ctx & ${s.mask} != ${s.val} { ${okVar} = false; }`;
       case 'ahead':
         return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t)) != ${s.is} { ${okVar} = false; }`;
       case 'aheadCtx':
-        return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t) || (self.ctx != 0 && in_ctx_words(self.ctx, t))) != ${s.is} { ${okVar} = false; }`;
+        return `if ${okVar} && self.toks.get(self.pos).map_or(false, |t| in_token_set(${s.set}, t) || (self.ctx & ${CTX_WORD_BITS} != 0 && in_ctx_words(self.ctx, t))) != ${s.is} { ${okVar} = false; }`;
       case 'look': {
         // Gate on okVar to match TS `&&` short-circuit — otherwise probe still
         // runs after a failed predecessor and can re-enter recursive rules.
@@ -4222,7 +4231,7 @@ function emitRustPrattMethod(
     for (const prefix of rule.prefix) {
       const lid = lidOf(ids, prefix.op);
       if (prefixSlot.kind === 'node') {
-        prefixCode += `if self.peek_lid() == Some(${lid}) {
+        prefixCode += `if self.peek_lid() == Some(${lid})${prefix.when ? ` && self.ctx & ${prefix.when.mask} == ${prefix.when.val}` : ''} {
             let save = self.pos;
             let _off = self.current_off();
             let _op = self.current_span();
@@ -4239,7 +4248,7 @@ function emitRustPrattMethod(
         }\n        `;
       } else if (prefixSlot.kind === 'custom') {
         const psCustom = prefixSlot as CustomShape;
-        prefixCode += `if self.peek_lid() == Some(${lid}) {
+        prefixCode += `if self.peek_lid() == Some(${lid})${prefix.when ? ` && self.ctx & ${prefix.when.mask} == ${prefix.when.val}` : ''} {
             let save = self.pos;
             let _off = self.current_off();
             let _op = self.current_text();
@@ -4253,7 +4262,7 @@ function emitRustPrattMethod(
             return Some(${customCall(psCustom.fn, '&[argument]', '[]', '_off', 'self.last_end(_off)', undefined, '_op', psCustom.folds)});
         }\n        `;
       } else if (prefixSlot.kind === 'inline') {
-        prefixCode += `if self.peek_lid() == Some(${lid}) {
+        prefixCode += `if self.peek_lid() == Some(${lid})${prefix.when ? ` && self.ctx & ${prefix.when.mask} == ${prefix.when.val}` : ''} {
             let save = self.pos;
             self.pos += 1;
             match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
@@ -4263,7 +4272,7 @@ function emitRustPrattMethod(
             }
         }\n        `;
       } else {
-        prefixCode += `if self.peek_lid() == Some(${lid}) {
+        prefixCode += `if self.peek_lid() == Some(${lid})${prefix.when ? ` && self.ctx & ${prefix.when.mask} == ${prefix.when.val}` : ''} {
             let save = self.pos;
             let _op = self.current_span();
             self.pos += 1;
@@ -6006,6 +6015,7 @@ ${decls.join('')}${shared.recoveryFamily(ir, true).split('\n').map((l) => (l ? `
     fn en_tok(&mut self, k: isize) -> bool { self.p.match_tok(k as u16) }
     fn en_ahead(&mut self, set: isize, is: bool) -> bool { self.p.ahead(set as usize, is) }
     fn en_ctx_word(&mut self) -> bool { self.p.ctx_word() }
+    fn en_when(&mut self, mask: isize, val: isize) -> bool { (self.p.ctx as isize) & mask == val }
     fn en_second_in(&mut self, set: isize) -> bool { self.p.second_in(set as usize) }
     fn en_look(&mut self, id: isize) -> bool { ${dLook} }
     fn en_rule(&mut self, r: isize) -> bool { ${dRule} }

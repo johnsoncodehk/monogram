@@ -32,20 +32,36 @@
 // as the green-node rule name (so trees stay byte-identical to the base grammar), and
 // the AST / TM / tree-sitter / cst-match generators skip forks (a fork's structure and
 // scope are its base's).
+//
+// `when` (declared contexts, step 1; kind: transition; end state: one context word in every
+// engine; exit: step 2 deletes this file): a family is a context word (ctxWordOfMode), so a
+// `when` group's condition is a CONSTANT in each family and is evaluated here, once: where it
+// holds the group is its body, where it does not it is NEVER (a match that always fails). A gated
+// operator (PrecOperator.when) is shared by every family's Pratt rule, so the parser evaluates it
+// against the rule's `ctx` (set here on every rule). The portable IR tests the same word at run
+// time (emit-portable.ts); the parity gates hold the two together. When the grammar reads
+// `syncFn` (readsSyncFn) a reset body is its own family ($N): it differs from the top level.
 import type { CstGrammar, RuleDecl, RuleExpr } from './types.ts';
+import { ctxWordOfMode, readsSyncFn, whenTest } from './grammar-utils.ts';
 
-type Family = 'await' | 'yield' | 'asyncgen';
-const SUFFIX: Record<Family, string> = { await: '$A', yield: '$Y', asyncgen: '$AY' };
-const RESERVED: Record<Family, string[]> = { await: ['await'], yield: ['yield'], asyncgen: ['await', 'yield'] };
+type Family = 'await' | 'yield' | 'asyncgen' | 'none';
+const SUFFIX: Record<Family, string> = { await: '$A', yield: '$Y', asyncgen: '$AY', none: '$N' };
+const RESERVED: Record<Family, string[]> = { await: ['await'], yield: ['yield'], asyncgen: ['await', 'yield'], none: [] };
+/** A match that always fails: `not` of the empty sequence. */
+const NEVER: RuleExpr = { type: 'not', body: { type: 'seq', items: [] } };
 
 
 export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   const byName = new Map(grammar.rules.map(r => [r.name, r]));
+  const splitSync = readsSyncFn(grammar);
+  // The family a marker routes into (null: the base family, the top level's).
+  const familyOf = (mode: 'await' | 'yield' | 'asyncgen' | 'reset'): Family | null => (mode === 'reset' ? (splitSync ? 'none' : null) : mode);
+  const wordOf = (fam: Family | null): number => (fam === null ? 0 : ctxWordOfMode(fam === 'none' ? 'reset' : fam, splitSync));
 
   // ── 1. Per-family closure: which rules need an $F clone. A rule S is in closure[F]
   // if it is reachable, via in-family refs, from a subtree marked mode F — where a
   // nested marker of mode M re-roots the walk into family M (or plain, for reset). ──
-  const closure: Record<Family, Set<string>> = { await: new Set(), yield: new Set(), asyncgen: new Set() };
+  const closure: Record<Family, Set<string>> = { await: new Set(), yield: new Set(), asyncgen: new Set(), none: new Set() };
 
   // Walk `expr` collecting the rule refs reachable WITHOUT crossing a ctx marker, and
   // recurse into nested markers under their own family. `intoFamily(name, F)` enrolls a
@@ -59,8 +75,7 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
         if (fam && expr.hole !== undefined) intoFamily(expr.hole, fam);
         return;
       case 'group':
-        if (expr.ctxMode && expr.ctxMode !== 'reset') { walkExpr(expr.body, expr.ctxMode); return; }
-        if (expr.ctxMode === 'reset') { walkExpr(expr.body, null); return; }   // plain family: no clone needed
+        if (expr.ctxMode) { walkExpr(expr.body, familyOf(expr.ctxMode)); return; }   // the base family (null): no clone needed
         walkExpr(expr.body, fam); return;
       case 'seq': case 'alt': expr.items.forEach(i => walkExpr(i, fam)); return;
       case 'quantifier': walkExpr(expr.body, fam); return;
@@ -95,7 +110,11 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
         return expr;
       }
       case 'group': {
-        const inner = expr.ctxMode === 'reset' ? null : (expr.ctxMode ? expr.ctxMode : fam);
+        if (expr.when !== undefined) {
+          const { mask, val } = whenTest(expr.when);
+          if ((wordOf(fam) & mask) !== val) return NEVER;
+        }
+        const inner = expr.ctxMode ? familyOf(expr.ctxMode) : fam;
         const body = rewrite(expr.body, inner);
         // strip the ctxMode marker from the emitted grammar (it has done its routing
         // job); keep `suppress` (no-in context), `capBelow` (assignment-level cap) and `atLevel`
@@ -114,7 +133,7 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
         // the bare-identifier reserved-word guard: inside a context family, also
         // forbid that family's keyword(s), so `await`/`yield` lose their identifier
         // reading (await with no operand then rejects — the prefix op needs one).
-        const body = fam && expr.reservable ? addReserved(rewrite(expr.body, fam), RESERVED[fam]) : rewrite(expr.body, fam);
+        const body = fam && expr.reservable && RESERVED[fam].length ? addReserved(rewrite(expr.body, fam), RESERVED[fam]) : rewrite(expr.body, fam);
         return expr.reservable ? { type: 'not', body, reservable: true } : { type: 'not', body };
       }
       case 'sep': return { type: 'sep', element: rewrite(expr.element, fam), delimiter: expr.delimiter };
@@ -125,21 +144,21 @@ export function withAwaitYield(grammar: CstGrammar): CstGrammar {
   // ── 3. The forked rules (appended AFTER the base rules so every existing rid =
   // rules.indexOf is unchanged and the entry rule stays last). ──
   const forks: RuleDecl[] = [];
-  const families: Family[] = ['await', 'yield', 'asyncgen'];
+  const families: Family[] = ['await', 'yield', 'asyncgen', 'none'];
   for (const fam of families) {
     const suf = SUFFIX[fam];
     for (const name of closure[fam]) {
       const base = byName.get(name)!;
       // rewrite reroutes in-family refs to $F and extends any reservable guard with
       // the family's context keyword (see the 'not' case in rewrite()).
-      forks.push({ name: name + suf, body: rewrite(base.body, fam), flags: [...base.flags], canon: name });
+      forks.push({ name: name + suf, body: rewrite(base.body, fam), flags: [...base.flags], canon: name, ctx: wordOf(fam) });
     }
   }
 
   // ── 4. Rewrite the BASE rules in place: a base rule containing ctx markers must now
   // reference the $F clones at those roots (materialize the routing). Refs OUTSIDE any
   // marker stay plain. ──
-  const baseRewritten: RuleDecl[] = grammar.rules.map(r => ({ ...r, body: rewrite(r.body, null) }));
+  const baseRewritten: RuleDecl[] = grammar.rules.map(r => ({ ...r, body: rewrite(r.body, null), ctx: 0 }));
 
   // Insert the forks BEFORE the last rule, so a grammar that omits `entry` (findEntryRule
   // then reads the last rule) keeps its entry; a declared entry is looked up by name.

@@ -14,6 +14,52 @@ import type { CstGrammar, RuleExpr } from './types.ts';
 export const ZERO_WIDTH_MARKERS: ReadonlySet<RuleExpr['type']> = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
 export const isZeroWidthMarker = (t: RuleExpr['type']): boolean => ZERO_WIDTH_MARKERS.has(t);
 
+/** The grammar's context parameters (docs/GRAMMAR.md "Contexts: `when`"), one bit each of the
+ *  context WORD (bit 1 << index): `await` and `yield` are ECMAScript's [Await] / [Yield].
+ *  `syncFn` is TRANSITIONAL (kind: transition; end state: the declared parameters with goals,
+ *  where the Module goal's entry word sets `await`; exit: the goals step deletes it and the
+ *  `await` operator's gate becomes `when('+await')`): it is set in a body where `await` is the
+ *  operator in no goal (a non-async function, method, arrow, accessor, class element) and clear
+ *  at the top level, which the one entry reads as both goals (Module: the operator, Script: the
+ *  identifier), and in an async body. */
+export const CTX_PARAMS = ['await', 'yield', 'syncFn'] as const;
+export type CtxMode = 'await' | 'yield' | 'asyncgen' | 'reset';
+/** A `when` condition (`'+yield'`, `'~syncFn'`, `'+a ~b'`: a conjunction) as the test
+ *  `(word & mask) === val`. An unknown parameter is an error, not a condition that never holds. */
+export function whenTest(cond: string): { mask: number; val: number } {
+  let mask = 0, val = 0;
+  for (const part of cond.trim().split(/\s+/)) {
+    const i = CTX_PARAMS.indexOf(part.slice(1) as typeof CTX_PARAMS[number]);
+    if ((part[0] !== '+' && part[0] !== '~') || i < 0) throw new Error(`when(${JSON.stringify(cond)}): '${part}' is not +p / ~p over the context parameters ${CTX_PARAMS.join(', ')}`);
+    mask |= 1 << i; if (part[0] === '+') val |= 1 << i;
+  }
+  return { mask, val };
+}
+/** Whether some `when` of the grammar (an item or an operator) reads `syncFn`: only then does a
+ *  reset body differ from the top level (the bit is set there), so a grammar that never reads it
+ *  keeps one context for both. */
+export function readsSyncFn(g: Pick<CstGrammar, 'rules' | 'precs'>): boolean {
+  const bit = 1 << CTX_PARAMS.indexOf('syncFn');
+  const reads = (c: string | undefined): boolean => c !== undefined && (whenTest(c).mask & bit) !== 0;
+  if (g.precs.some((l) => l.operators.some((o) => reads(o.when)))) return true;
+  const walk = (e: RuleExpr): boolean => {
+    if (!e || typeof e !== 'object') return false;
+    switch (e.type) {
+      case 'group': return reads(e.when) || walk(e.body);
+      case 'seq': case 'alt': return e.items.some(walk);
+      case 'quantifier': case 'not': return walk(e.body);
+      case 'sep': return walk(e.element);
+      default: return false;
+    }
+  };
+  return g.rules.some((r) => walk(r.body));
+}
+/** The word a context marker sets (awaitCtx / yieldCtx / asyncGenCtx / resetCtx). */
+export function ctxWordOfMode(mode: CtxMode, splitSync: boolean): number {
+  const sync = splitSync ? 4 : 0;
+  return mode === 'await' ? 1 : mode === 'yield' ? 2 | sync : mode === 'asyncgen' ? 3 : sync;
+}
+
 /** True if `code` is an identifier-start character: a-z, A-Z, `_`, or `$`. */
 export function isIdentStartCode(code: number): boolean {
   return (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code === 95 || code === 36;

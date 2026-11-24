@@ -554,6 +554,9 @@ export interface PrecOperator {
   // operator (Python `a == not b`, `-not x` have no parse). Its own operand and the leds after it
   // are those of an ordinary prefix operator. Read only by the Pratt cores.
   capped?: boolean;
+  // A prefix operator that exists only where this `when` condition holds (api.ts `when` among a
+  // `prefix(...)`'s operators): ECMAScript's `await` operator. Read only by the parsers.
+  when?: string;
 }
 
 export interface PrecLevel {
@@ -616,7 +619,11 @@ type RuleExprNode =
   // as a shared rule of this name and renders each reference as `$.<name>` — sharing its
   // states instead of inlining (and duplicating) them at every use site (issue #46).
   // Visibility follows tree-sitter's `_`-prefix convention.
-  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; tsRelaxed?: RuleExpr; tsRuleName?: string; capBelow?: string; atLevel?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
+  // `when`: a condition over the context word (grammar-utils.ts CTX_PARAMS, whenTest): the body
+  // exists only where it holds (`when('+yield', ...)`; an empty body is a zero-width test). The
+  // parsers read it (the fork evaluates it per family, the portable IR tests the word); every
+  // other consumer (tree-sitter, TextMate, Monarch, shapes) sees a transparent group: erased.
+  | { type: 'group'; body: RuleExpr; suppress?: string[]; ctxMode?: 'await' | 'yield' | 'asyncgen' | 'reset'; when?: string; tsRelaxed?: RuleExpr; tsRuleName?: string; capBelow?: string; atLevel?: string }   // suppress: LED connectors disabled while parsing body (e.g. no-`in`)
   // Zero-width negative lookahead: matches (consuming nothing) iff `body` does
   // NOT match at the current position. Used to express disambiguations the
   // longest-match parser can't reach by structure alone (e.g. a `<…>` type-arg
@@ -682,6 +689,9 @@ export interface RuleDecl {
   // parser keeps the distinct `name` for its memo/adoption rule identity, but reports
   // `canon` as the node's rule name so trees stay byte-identical to the base grammar.
   canon?: string;
+  // Set by the await-yield-fork transform on every rule: the context word of the rule's family
+  // (grammar-utils.ts CTX_PARAMS), against which a parser evaluates a gated operator's `when`.
+  ctx?: number;
   // Display name for `expected …` diagnostics only (see api.ts RuleOptions.label).
   label?: string;
 }
