@@ -27,6 +27,8 @@ type Node = { rule?: string; tokenType?: string; children?: Node[]; offset: numb
 export type ContractRow = {
   missing: number; errors: number; fallbacks: number; errSpans: number[]; errShare: number[]; attempts: number; steps: number; strictSteps: number;
   p10: 'missing-only' | 'with-error' | 'unchecked'; p10ok: boolean;
+  // A mutant's (`damage`; absent: its original is unknown).
+  errTokens?: number; stable?: boolean;
 };
 const at = (src: string) => JSON.stringify(src.length > 90 ? src.slice(0, 90) + '…' : src);
 
@@ -89,6 +91,36 @@ export function checkContract(src: string, toks: Tok[], root: Node | null, error
   };
 }
 
+/** A mutant's DAMAGE and STABILITY (test/mutation-corpus.ts Mutant: the edit at [at, at + ins) of
+ *  the mutant, whose original text parsed to `orig`): `errTokens`, the tokens inside `$error`
+ *  nodes (every one, not only the root's); `stable`, whether the tree outside the damaged region
+ *  is the original's. The damaged region is the edit's span widened to cover every `$missing` and
+ *  `$error` node; the top-level entries (the root's children) wholly before it, and those wholly
+ *  after it (offsets shifted by the edit), are the original's, in order, node kinds and leaves
+ *  alike. */
+export function damage(root: Node, orig: Node, toks: Tok[], at: number, ins: number, delta: number): { errTokens: number; stable: boolean } {
+  let lo = at, hi = at + ins;
+  const errs: Node[] = [];
+  const walk = (x: Node): void => {
+    if (x.rule === '$missing' || x.rule === '$error') { lo = Math.min(lo, x.offset); hi = Math.max(hi, x.end); if (x.rule === '$error') errs.push(x); }
+    (x.children ?? []).forEach(walk);
+  };
+  walk(root);
+  const errTokens = toks.filter((t) => errs.some((e) => e.offset <= t.off && t.end <= e.end)).length;
+  const shape = (x: Node, d: number): string => `${x.rule ?? x.tokenType}@${x.offset - d}-${x.end - d}${x.children ? `(${x.children.map((y) => shape(y, d)).join(',')})` : ''}`;
+  // An entry extends to the next one (the last: to the end), so the punctuation a CST keeps no leaf
+  // of (a statement's ';', a class body's braces) is its own; a zero-width node at the region's
+  // edge is inside it.
+  const side = (n: Node, d: number, keep: (x: Node, ext: number) => boolean) => {
+    const ks = n.children ?? [];
+    return ks.filter((x, i) => keep(x, ks[i + 1]?.offset ?? Infinity)).map((x) => shape(x, d)).join(';');
+  };
+  const before = (l: number) => (x: Node, ext: number) => ext < l || (ext === l && x.offset < l);
+  const after = (h: number) => (x: Node) => x.offset > h || (x.offset === h && x.end > h);
+  const stable = side(root, 0, before(lo)) === side(orig, 0, before(lo)) && side(root, delta, after(hi)) === side(orig, 0, after(hi - delta));
+  return { errTokens, stable };
+}
+
 const q = (xs: number[], p: number): number => { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]!; };
 const mpm = (xs: number[], f = (x: number) => String(x)) => `median ${f(q(xs, 0.5))}, p90 ${f(q(xs, 0.9))}, max ${f(q(xs, 1))}`;
 /** The measurements over the rejected inputs (the coordinator's (a)-(c)). */
@@ -97,11 +129,13 @@ export function summarize(label: string, rows: (ContractRow | null)[]): string {
   const fb = rs.filter((r) => r.fallbacks > 0).length;
   const spans = rs.flatMap((r) => r.errSpans), shares = rs.flatMap((r) => r.errShare);
   const pct = (a: number, b: number) => `${(100 * a / Math.max(1, b)).toFixed(1)}%`;
+  const dm = rs.filter((r) => r.stable !== undefined);
   const mo = rs.filter((r) => r.p10 === 'missing-only'), we = rs.filter((r) => r.p10 === 'with-error'), un = rs.filter((r) => r.p10 === 'unchecked');
   return [
     `${label}: ${rs.length} rejected inputs recovered; repairs: $missing ${rs.reduce((s, r) => s + r.missing, 0)}, $error ${rs.reduce((s, r) => s + r.errors, 0)} (of them the fallback's ${spans.length})`,
     `  the fallback on ${fb} (${pct(fb, rs.length)}); its $error spans in tokens ${mpm(spans)}; as a share of the input's tokens ${mpm(shares, (x) => pct(x, 1))}`,
     `  attempts per input ${mpm(rs.map((r) => r.attempts))}; recovered / strict interpreted steps ${mpm(rs.map((r) => r.steps / Math.max(1, r.strictSteps)), (x) => x.toFixed(2))}`,
+    `  damage: more than N tokens inside \$error nodes on ${[1, 3, 5].map((k) => `${pct(dm.filter((r) => r.errTokens! > k).length, dm.length)} (N = ${k})`).join(', ')}; stable outside the damaged region on ${pct(dm.filter((r) => r.stable).length, dm.length)} (of ${dm.length} with their original)`,
     `  P10 checkable on ${mo.length + we.length} (${pct(mo.length + we.length, rs.length)}): $missing only ${mo.length} (holds ${mo.filter((r) => r.p10ok).length}), with $error ${we.length} (holds ${we.filter((r) => r.p10ok).length}); unchecked ${un.length}`,
   ].join('\n');
 }
