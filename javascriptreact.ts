@@ -98,26 +98,26 @@ const ELEMENTS = (hasTypes: boolean): ElementRegion => ({
 // base grammar the names resolve to the base's real `Expr`/`Type`. Run through
 // defineGrammar purely to serialize; only the JSX entries are kept.
 function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDecl[] } {
-  const Expr = rule($ => [Ident]); // stub → supplies the name "Expr"
-  const Type = rule($ => [Ident]); // stub → supplies the name "Type"
+  const Expr = rule(() => [Ident]); // stub → supplies the name "Expr"
+  const Type = rule(() => [Ident]); // stub → supplies the name "Type"
   // A dotted / namespaced / hyphenated tag or attribute name: `Foo`, `Foo.Bar`,
   // `svg:rect`, `data-id` (the lexer splits `data-id` into `Ident '-' Ident`).
   const nameTail = many(alt(['.', Ident], [':', Ident], [sameLine, '-', Ident]));
   const typeArgs = hasTypes ? [opt('<', sep(Type, ','), '>')] : [];
 
-  const JSXTagName = rule($ => [[Ident, nameTail]]);
-  const JSXAttrValue = rule($ => [JSXString, ['{', Expr, '}']]);
-  const JSXAttr = rule($ => [
+  const JSXTagName = rule(() => [[Ident, nameTail]]);
+  const JSXAttrValue = rule(() => [JSXString, ['{', Expr, '}']]);
+  const JSXAttr = rule(() => [
     ['{', '...', Expr, '}'],                       // spread attribute {...expr}
     [Ident, nameTail, opt('=', JSXAttrValue)],     // name (= value)?
   ]);
-  const JSXContainer = rule($ => [['{', opt('...'), opt(Expr), '}']]);
-  const JSXChild = rule($ => [
+  const JSXContainer = rule(() => [['{', opt('...'), opt(Expr), '}']]);
+  const JSXChild = rule(() => [
     JSXElement,
     JSXContainer,
     JSXText,                                       // a text run (the element region's text token)
   ]);
-  const JSXElement = rule($ => [
+  const JSXElement = rule(() => [
     ['<', JSXTagName, ...typeArgs, many(JSXAttr), JSXSelfClose],
     ['<', JSXTagName, ...typeArgs, many(JSXAttr), '>', many(JSXChild), JSXClose, opt(JSXTagName), '>'],
     ['<', '>', many(JSXChild), JSXClose, '>'],      // fragment

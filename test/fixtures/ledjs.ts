@@ -29,8 +29,8 @@ const Expr = rule(($) => [
   [$, 'in', $],                 // relational chain-rhs
   [$, 'instanceof', $],
 ]);
-const Stmt = rule(($) => [[Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [[Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'ledjs',

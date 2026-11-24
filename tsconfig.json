@@ -8,6 +8,10 @@
     "incremental": true,
     "tsBuildInfoFile": "node_modules/.cache/tsc.tsbuildinfo",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "types": ["node"]

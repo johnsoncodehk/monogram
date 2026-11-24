@@ -18,15 +18,15 @@ const Str = token(seq('"', star(noneOf('"', '\n')), '"'), { scope: 'string.quote
 const jsPrec = [left('+', '-'), left('*', '/')];
 
 // key = a NON-literal inline alternation (Ident | Str | Number).
-const KeyVal = rule(($) => [[alt(Ident, Str, Number_), ':', Expr]]);
+const KeyVal = rule(() => [[alt(Ident, Str, Number_), ':', Expr]]);
 const Expr = rule(($) => [
   Number_, Str, Ident,
   ['(', $, ')'],
   ['{', opt(sep(KeyVal, ',')), '}'],   // object literal
   [$, op, $],
 ]);
-const Stmt = rule(($) => [[Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [[Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'altjs',

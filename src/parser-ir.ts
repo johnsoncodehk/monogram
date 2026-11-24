@@ -27,7 +27,7 @@ import { planAssignTargets, type ArmForm } from './assign-targets.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
 import { CTX_WORDS, CTX_WORD_BITS, collectLiterals, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest, type CtxMode } from './grammar-utils.ts';
-import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
+import { tokenPatternCharLoop } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
 import { scannedTokens, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { info, oneChar } from './lex-match-plan.ts';
@@ -1272,7 +1272,6 @@ function buildIR(grammar: Grammar, facts: PortableFacts): ParserIR {
       case 'suppress': case 'ctx': return seqFirst(s.steps);
       case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'when': case 'assignTarget': case 'star': case 'opt': case 'sep': return null;   // zero-width / nullable leading → unpredictable
     }
-    return null;
   };
   for (let changed = true, guard = 0; changed && guard <= rules.length + 2; guard++) {
     changed = false;

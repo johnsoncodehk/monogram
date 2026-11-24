@@ -35,10 +35,6 @@ const WIDE_RECORD = new URL('./portable-wide-record.txt', import.meta.url).pathn
 const WIDE_WRITE = process.argv.includes('--write');
 const WIDE_CAUSES: Record<string, string> = {
 };
-// The cause of one disagreement, from what the file is ('unknown' when no class explains it).
-function wideCause(grammar: string, file: string, src: string): string {
-  return 'unknown';
-}
 type WideLine = { grammar: string; file: string; targets: string[]; cause: string };
 const wideKey = (l: { grammar: string; file: string }) => `${l.grammar}\t${l.file}`;
 const wideText = (l: WideLine) => `${l.grammar}\t${l.file}\t${l.targets.join(',')}\t${l.cause}`;
@@ -65,7 +61,6 @@ function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) =>
   wideGrammars.add(c.grammar);
   wideTargets = runners.map((r) => r.label);
   for (const { name, files } of corpora) {
-    const t0 = Date.now();
     const ms = new Map<string, number>(runners.map((r) => [r.label, 0]));
     const off = new Map<string, number>(runners.map((r) => [r.label, 0]));
     let oracleMs = 0, accepted = 0;
@@ -107,7 +102,7 @@ function wideClass(c: Case, runners: Runner[], oracle: { parse: (src: string) =>
       chunk.forEach((f, j) => {
         if (!disagree[j]!.length) return;
         const file = wideName(f);
-        wideSeen.push({ grammar: c.grammar, file, targets: disagree[j]!, cause: wideCause(c.grammar, file, srcs[j]!) });
+        wideSeen.push({ grammar: c.grammar, file, targets: disagree[j]!, cause: 'unknown' });
       });
     }
     console.log(`  ${c.grammar}: wide corpus ${name}: ${files.length} files (${accepted} accepted by the interpreter, ${(oracleMs / 1000).toFixed(1)}s)`);

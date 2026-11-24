@@ -101,22 +101,22 @@ function checkRuleExprClosure(): void {
   const B = token('b');
   // Every combinator/marker appears here at least once.
   const Leaf = rule(() => [['lit']]);                                 // literal
-  const Refs = rule(($: any) => [[A, B, Leaf]]);                       // ref (token + rule)
+  const Refs = rule(() => [[A, B, Leaf]]);                       // ref (token + rule)
   const Quant = rule(() => [[opt('x'), many('y'), many1('z')]]);       // quantifier ?,*,+
   const Alt = rule(() => [alt(['p'], ['q', 'r'])]);                    // alt + seq
-  const Sep = rule(($: any) => [[sep(A, ','), ';']]);                       // sep
-  const Group = rule(($: any) => [[                                    // group (4 flavours)
+  const Sep = rule(() => [[sep(A, ','), ';']]);                       // sep
+  const Group = rule(() => [[                                    // group (4 flavours)
     exclude('in', A),                                                  //   group.suppress
     awaitCtx(A), yieldCtx(A), asyncGenCtx(A), resetCtx(A),             //   group.ctxMode
     treeSitterRelax(A, B),                                                     //   group.treeSitterRelaxed
     capExpr('||', A),                                                  //   group.capBelow
   ]]);
-  const Nots = rule(($: any) => [[not(A), reservableNot(['kw']), B]]);    // not (+ reservable)
-  const Markers = rule(($: any) => [[                                  // zero-width markers
+  const Nots = rule(() => [[not(A), reservableNot(['kw']), B]]);    // not (+ reservable)
+  const Markers = rule(() => [[                                  // zero-width markers
     sameLine, noCommentBefore, noMultilineFlowBefore, notLeftLeaf('void', 'null'), A,
   ]]);
   const Pratt = rule(($: any) => [[$, op, $], [prefix, $], [$, postfix]]); // op/prefix/postfix
-  const Entry = rule(($: any) => [[many(alt(Leaf, Refs, Quant, Alt, Sep, Group, Nots, Markers, Pratt))]]);
+  const Entry = rule(() => [[many(alt(Leaf, Refs, Quant, Alt, Sep, Group, Nots, Markers, Pratt))]]);
 
   let threw = false; let g: Grammar;
   try {
@@ -341,7 +341,7 @@ export function contentObligations(grammar: Grammar, opts = GEN_OPTS): LeafOblig
   const out: LeafObligations[] = [];
   for (const inp of generateInputs(grammar, opts)) {
     let cst; try { cst = parse(inp.text); } catch { continue; }   // only entry-rule (full-document) inputs
-    const leaves = leafRoles(grammar, cst, inp.text, roleOf)
+    const leaves = leafRoles(cst, inp.text, roleOf)
       .filter(lf => [...lf.expected].some(b => CONTENT_OBLIGATION.has(b)))   // bears a content/keyword obligation
       .map(lf => ({ text: lf.text, start: lf.start, end: lf.end, want: [...lf.expected].join('|') }));
     out.push({ text: inp.text, leaves });
@@ -480,9 +480,9 @@ async function regionKeywordProbe(): Promise<void> {
   // `kwsep` is the regression guard for the getTypeParamElementKeywords `sep` recursion: before
   // that one-line completion it read as plain meta.type content (the latent silent drop).
   const TypeParam = rule(() => [[opt('kwa'), Ident, opt('extends', sep('kwsep', '&'))]]);
-  const TypeArgs = rule(($: any) => [['<', sep(TypeParam, ','), '>']]);
-  const Decl = rule(($: any) => [['fn', Ident, opt(TypeArgs), '(', ')', '{', '}']]);
-  const Call = rule(($: any) => [[Ident, '<', sep(Ident, ','), '>', '(', ')']]);
+  const TypeArgs = rule(() => [['<', sep(TypeParam, ','), '>']]);
+  const Decl = rule(() => [['fn', Ident, opt(TypeArgs), '(', ')', '{', '}']]);
+  const Call = rule(() => [[Ident, '<', sep(Ident, ','), '>', '(', ')']]);
   const Expr = rule(() => [Ident, Call]);
   const Stmt = rule(() => [Decl, Expr]);
   const Prog = rule(() => [[many(Stmt)]]);
@@ -574,7 +574,7 @@ function checkShapeRobustness(): void {
     {
       name: 'call', key: 'function-call', observable: keyObs('function-call'), factorings: [
         { label: 'inline', build: () => { const A = rule(() => [[Id]]); const E = rule((s: any) => [[A, '(', sep(s, ','), ')'], [A]]); const P = rule(() => [[many(E)]]); return { name: 'c1', scopeName: 'source.c1', tokens: { Id }, rules: { A, E, P }, entry: P }; } },
-        { label: 'args-rule', build: () => { const A = rule(() => [[Id]]); const CA = rule((s: any) => [['(', sep(s, ','), ')']]); const C = rule((s: any) => [[A, CA], [A]]); const E = rule((s: any) => [[C]]); const P = rule(() => [[many(E)]]); return { name: 'c2', scopeName: 'source.c2', tokens: { Id }, rules: { A, CA, C, E, P }, entry: P }; } },
+        { label: 'args-rule', build: () => { const A = rule(() => [[Id]]); const CA = rule((s: any) => [['(', sep(s, ','), ')']]); const C = rule(() => [[A, CA], [A]]); const E = rule(() => [[C]]); const P = rule(() => [[many(E)]]); return { name: 'c2', scopeName: 'source.c2', tokens: { Id }, rules: { A, CA, C, E, P }, entry: P }; } },
       ],
     },
     {
@@ -639,14 +639,14 @@ function checkShapeRobustness(): void {
       factorings: [
         { label: "canonical", build: () => { const E = rule((s) => [[Id, '=>', s], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'ba1', scopeName: 'source.ba1', tokens: { Id }, rules: { E, P }, entry: P }; } },
         { label: "opt-tail", build: () => { const E = rule((s) => [[Id, opt('=>', s)]]); const P = rule(() => [[many(E)]]); return { name: 'ba2', scopeName: 'source.ba2', tokens: { Id }, rules: { E, P }, entry: P }; } },
-        { label: "via-ref", build: () => { const Ar = rule((s) => [[Id, '=>', s]]); const E = rule((s) => [Ar, [Id]]); const P = rule(() => [[many(E)]]); return { name: 'ba3', scopeName: 'source.ba3', tokens: { Id }, rules: { Ar, E, P }, entry: P }; } },
+        { label: "via-ref", build: () => { const Ar = rule((s) => [[Id, '=>', s]]); const E = rule(() => [Ar, [Id]]); const P = rule(() => [[many(E)]]); return { name: 'ba3', scopeName: 'source.ba3', tokens: { Id }, rules: { Ar, E, P }, entry: P }; } },
       ],
     },
     {
       name: "property-access", observable: (tm => !!tm.repository['property-access'] && JSON.stringify(tm.repository['property-access']).includes('entity.other.property')),
       factorings: [
-        { label: "canonical", build: () => { const E = rule((s) => [[Id, many('.', Id)], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pa1', scopeName: 'source.pa1', tokens: { Id }, rules: { E, P }, entry: P }; } },
-        { label: "opt-tail", build: () => { const E = rule((s) => [[Id, opt('.', Id)]]); const P = rule(() => [[many(E)]]); return { name: 'pa2', scopeName: 'source.pa2', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: "canonical", build: () => { const E = rule(() => [[Id, many('.', Id)], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pa1', scopeName: 'source.pa1', tokens: { Id }, rules: { E, P }, entry: P }; } },
+        { label: "opt-tail", build: () => { const E = rule(() => [[Id, opt('.', Id)]]); const P = rule(() => [[many(E)]]); return { name: 'pa2', scopeName: 'source.pa2', tokens: { Id }, rules: { E, P }, entry: P }; } },
         { label: "via-ref", build: () => { const Acc = rule(() => [['.', Id]]); const E = rule(() => [[Id, many(Acc)], [Id]]); const P = rule(() => [[many(E)]]); return { name: 'pa3', scopeName: 'source.pa3', tokens: { Id }, rules: { Acc, E, P }, entry: P }; } },
       ],
     },
@@ -860,7 +860,6 @@ async function main(): Promise<void> {
     check(`coverage cross-check(${cfg.name}): every content/keyword obligation leaf is painted`, cov.painted === cov.den,
       cov.uncovered.map(u => `"${u.text}"(${u.want})`).slice(0, 8).join(' '));
     rows.push(ledgerRow(cfg.name, g, r, tc, ld, cov));
-    const pct = cov.den ? (100 * cov.painted / cov.den).toFixed(2) : '—';
     console.log(`  ${cfg.name.padEnd(17)} repo ${String(r.repoKeys).padStart(3)} · dead ${r.dead.length} · tokens ${tc.total - tc.skip - tc.orphans.length}/${tc.total - tc.skip} · keyword-literals ${ld.obl - ld.gaps.length}/${ld.obl} · leaf-xcheck ${cov.painted}/${cov.den}`);
     if (cov.uncovered.length) for (const u of cov.uncovered.slice(0, 6)) console.log(`      UNCOVERED "${u.text}" want ${u.want} ctx …${u.ctx}…`);
   }

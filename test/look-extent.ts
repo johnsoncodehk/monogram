@@ -238,7 +238,7 @@ const finalText = (s: Session) => {
 };
 
 // Edits at token boundaries: the first changed token is the one an entry's extent is compared with.
-function editsAt(src: string, toks: Tok[], k: number): Batch[] {
+function editsAt(toks: Tok[], k: number): Batch[] {
   const t = toks[k]!, s = t.offset, e = s + t.text.length;
   return [
     [[s, e, '']],                      // token deleted
@@ -319,7 +319,7 @@ for (const g of GRAMMARS) {
     for (const e of want.split(';').map((x) => x.split(',').map(Number))) for (const k of [e[1]! - 1, e[1]!, e[2]!, e[2]! - 1]) if (k >= 0 && k < toks.length) ks.add(k);
     const picks = [...ks].sort((a, b) => a - b).filter((_, i, a) => a.length <= 6 || i % Math.ceil(a.length / 6) === 0);
     picks.forEach((k, i) => {
-      const es = editsAt(src, toks, k);
+      const es = editsAt(toks, k);
       sessions.push({ init: src, batches: [es[i % es.length]!] });
     });
     // Two batches: an edit near the end, then one near the start of the edited text.
@@ -329,7 +329,7 @@ for (const g of GRAMMARS) {
 
   const want = sessions.map((s) => oracleOf(finalText(s)));
   const runners: Runner[] = [];
-  const tsFresh = sessions.map((s, i) => (s.batches.length ? null : [guard(() => probe.__fresh(s.init)), guard(() => probe.__freshW(s.init))]));
+  const tsFresh = sessions.map((s) => (s.batches.length ? null : [guard(() => probe.__fresh(s.init)), guard(() => probe.__freshW(s.init))]));
   const tsEdit = sessions.map((s) => (s.batches.length ? [guard(() => probe.__edit(s, false)), guard(() => probe.__edit(s, true))] : null));
   runners.push({ label: 'ts', extOnly: false, out: (i) => (tsFresh[i] ?? tsEdit[i])![0]! });
   runners.push({ label: 'ts/builder', extOnly: true, out: (i) => (tsFresh[i] ?? tsEdit[i])![1]! });

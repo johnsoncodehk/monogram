@@ -15,7 +15,7 @@ const Number_ = token(seq(range('0', '9'), star(range('0', '9'))), { scope: 'con
 
 const jsPrec = [right('='), left('||'), left('+', '-'), left('*', '/')];
 
-const Block = rule(($) => [['{', many(Stmt), '}']]);
+const Block = rule(() => [['{', many(Stmt), '}']]);
 const Expr = rule(($) => [
   Number_, Ident,
   ['(', $, ')'],
@@ -24,8 +24,8 @@ const Expr = rule(($) => [
   [$, op, $],
   [$, '(', opt(sep($, ',')), ')'],                                      // call
 ]);
-const Stmt = rule(($) => [Block, [Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [Block, [Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'arrowjs',

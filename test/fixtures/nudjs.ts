@@ -5,7 +5,7 @@
 // consumes nothing. (Arrow functions — group{capBelow,ctxMode} — are deferred.)
 import {
   token, rule, defineGrammar, left, op,
-  seq, oneOf, range, star, sep, opt, many, alt, not, noneOf,
+  seq, oneOf, range, star, sep, opt, many, alt, not,
 } from '../../src/api.ts';
 
 const idStart = oneOf(range('a', 'z'), range('A', 'Z'), '_', '$');
@@ -26,11 +26,11 @@ const Expr = rule(($) => [
   [$, '.', Ident],
   [$, '(', opt(sep($, ',')), ')'],
 ]);
-const ClassMember = rule(($) => [[opt(Decorator), Ident, '(', ')', '{', '}']]);
+const ClassMember = rule(() => [[opt(Decorator), Ident, '(', ')', '{', '}']]);
 
 const jsPrec = [left('+', '-'), left('*', '/')];
-const Stmt = rule(($) => [[Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [[Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'nudjs',

@@ -10,7 +10,7 @@
 // The detectors below moved here from src/gen-textmate.ts unchanged (bbcaf41). Some still return
 // Oniguruma regex source rather than the neutral fact (noted at each); separating the fact from its
 // spelling is owed, construct by construct, together with the readers that would spell it otherwise.
-import type { Grammar, RuleExpr, RuleDecl, TokenDecl } from './types.ts';
+import type { Grammar, RuleExpr, TokenDecl } from './types.ts';
 import { collectLiterals, escapeRegex, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar } from './grammar-analysis.ts';
 import { expandArms } from './region-view.ts';   // small bodies only: getTypeParamElementKeywords, prefixPairKeywords
@@ -791,7 +791,7 @@ export interface RegexLiteralInfo {
  * E.g., 'return' Expr  →  'return' can precede regex
  *        'throw' Expr   →  'throw' can precede regex
  */
-export function detectRegexLiteral(grammar: Grammar, tokenNames: Set<string>): RegexLiteralInfo | null {
+export function detectRegexLiteral(grammar: Grammar): RegexLiteralInfo | null {
   const regexToken = grammar.tokens.find(t => t.flags.includes('regex'));
   if (!regexToken) return null;
 
@@ -2389,7 +2389,7 @@ const FACTS = {
   arrowParamDelims: (g: Grammar) => arrowParamDelims(g),
   commentRepoKeys: (g: Grammar) => commentRepoKeys(g),
   blockCommentMatchers: (g: Grammar) => blockCommentMatchers(g),
-  regexLiteral: (g: Grammar) => detectRegexLiteral(g, highlightFacts(g).tokenNames),
+  regexLiteral: (g: Grammar) => detectRegexLiteral(g),
   calleeToken: (g: Grammar) => findCalleeToken(g),
   explicitKey: (g: Grammar) => detectExplicitKey(g),
   blockSequence: (g: Grammar) => detectBlockSequence(g),

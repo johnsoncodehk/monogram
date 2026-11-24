@@ -16,9 +16,9 @@ const BlockComment = token(seq('/*', star(altPattern(noneOf('*'), seq('*', noneO
 
 const jsPrec = [left('+', '-'), left('*', '/')];
 const Expr = rule(($) => [Number_, Ident, ['(', $, ')'], [$, op, $]]);
-const Ret = rule(($) => [['return', opt(sameLine, Expr), ';']]);   // `return` + a SAME-LINE value
-const Stmt = rule(($) => [Ret, [Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Ret = rule(() => [['return', opt(sameLine, Expr), ';']]);   // `return` + a SAME-LINE value
+const Stmt = rule(() => [Ret, [Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'sljs',

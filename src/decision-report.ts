@@ -289,7 +289,7 @@ function stepSites(ir: ParserIR, r: ParserIR['rules'][number], rf: ParserIR['rul
   const visit = (s: Step, sf: Step, where: string) => {
     const at = where;
     if (s.t === 'alt' && sf.t === 'alt') {
-      const dirty = s.branches.flatMap((b, i) => (s.clean?.[i] ? [] : [i]));
+      const dirty = s.branches.flatMap((_b, i) => (s.clean?.[i] ? [] : [i]));
       out.push({ kind: 'inline choice', where: at, text: show(ir, s), mode: s.predictive ? 'one' : 'attempt', mark: dirty.length > 0, why: dirty.map((i) => `branch ${i}: ${dirtyAfter(ir, s.branches[i]!)}`).join('; ') });
       s.branches.forEach((b, i) => b.forEach((x, k) => visit(x, (sf.branches[i] ?? [])[k] ?? x, at)));
     } else if ((s.t === 'star' || s.t === 'opt' || s.t === 'sep') && s.t === sf.t) {

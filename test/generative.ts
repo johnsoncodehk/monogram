@@ -43,7 +43,7 @@ import { generateInputs, type GenInput } from './grammar-gen.ts';
 // (test/gap-ledger.ts) reuses the EXACT same logic. This driver's gate behaviour is unchanged.
 import {
   type TmTok, type Violation,
-  buildRoleMap, leafRoles, anchoredScopes, collectViolations, isGated, GEN_OPTS,
+  buildRoleMap, leafRoles, anchoredScopes, collectViolations, isGated,
   commentWitnesses, collectCommentViolations,
 } from './generative-detect.ts';
 
@@ -147,7 +147,7 @@ async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; viola
   for (const inp of entryLegal) {
     let cst: CstNode, toks: TmTok[];
     try { cst = parse(inp.text); toks = tmTokenize(tm, inp.text); } catch { continue; }
-    const leaves = leafRoles(grammar, cst, inp.text, roleOf);
+    const leaves = leafRoles(cst, inp.text, roleOf);
     checkedTokens += leaves.length;
     // gate-1 (#24 structural-literal→content) + gate-2 (#23 anchored-marker misfire), via the shared
     // detector — identical logic to before, now reused by the gap ledger. The 200-cap is the running
@@ -319,7 +319,7 @@ async function runHtmlSites(): Promise<{ name: string; ok: boolean; violations: 
   const diverges = (t: vsctm.IGrammar, text: string): boolean => {
     let cst: CstNode, toks: TmTok[];
     try { cst = parse(text); toks = tmTokenize(t, text); } catch { return false; }
-    const leaves = leafRoles(grammar, cst, text, roleOf);
+    const leaves = leafRoles(cst, text, roleOf);
     return collectViolations({ input: text, strategy: 'fuzz', cst, toks, leaves, anchored }).some((v) => v.text === '/');
   };
   const probe = '<aA aA = "a"/>';   // the generator's tight-markup shape

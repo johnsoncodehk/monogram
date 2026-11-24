@@ -520,7 +520,6 @@ export function shapePartial(tag: string, mode: 'start' | 'append', value: unkno
 }
 
 const I = (name: string) => ({ type: 'Identifier', name });
-const L = (value: string | number | boolean | bigint) => ({ type: 'Literal', value });
 
 function firstKid(kids: readonly unknown[]): unknown {
   return kids.length ? kids[0] : undefined;

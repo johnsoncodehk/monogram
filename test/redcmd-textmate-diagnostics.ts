@@ -9,7 +9,6 @@ import { dirname, join } from 'node:path';
 import type * as Onigmo from 'vscode-onigmo';
 
 type JsonRecord = Record<string, unknown>;
-type TextMateRegexKey = 'match' | 'begin' | 'end' | 'while';
 
 type OnigmoBinding = {
   UTF8ToString(ptr: number): string;

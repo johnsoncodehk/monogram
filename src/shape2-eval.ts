@@ -15,7 +15,7 @@ import type { Grammar, RuleDecl, RuleExpr, TemplateDelimiters } from './types.ts
 import { isKeywordLiteral, ZERO_WIDTH_MARKERS } from './grammar-utils.ts';
 import { nameRule, OP_FORM_CHILDREN, type RuleNames } from './grammar-names.ts';
 import { COOK } from './shape-cook.ts';
-import { COOK_FNS, OPERATORS, nodeKeysOf, type CookFn, type TermTag, type InhAttr, type InhEq, type Scalar, type ShapeSpec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
+import { COOK_FNS, OPERATORS, nodeKeysOf, type TermTag, type InhAttr, type InhEq, type Scalar, type ShapeSpec, type Span, type Term, type ThreadEq } from './shape2-schema.ts';
 
 // ── Values ──
 

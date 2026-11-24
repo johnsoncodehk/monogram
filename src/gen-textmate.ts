@@ -11,7 +11,6 @@ import {
   tokenPatternBlockDelimiters,
   tokenPatternIdentifierExtraChars,
   tokenPatternLeadingSource,
-  tokenPatternLiteralText,
   tokenPatternLiteralPrefix,
   tokenPatternPrefixBeforeTrailingLookahead,
   tokenPatternQuoteDelimAndEscape,
@@ -1256,7 +1255,6 @@ function generateAngleBracketPatterns(
  */
 function generateTypeCastPattern(
   langName: string,
-  identRegex: string,
   operandStart: string,
 ): TmPattern {
   const tpBegin = `punctuation.definition.typeparameters.begin.${langName}`;
@@ -2754,7 +2752,7 @@ export function generateTmLanguage(grammar: Grammar): TmGrammar {
     // the flat #comparison fallback so the inner type reaches #type-inner.
     const castTypeRule = facts.angleBracketCast;
     if (castTypeRule) {
-      repository['type-cast'] = generateTypeCastPattern(langName, identPattern, operandStart);
+      repository['type-cast'] = generateTypeCastPattern(langName, operandStart);
       topPatterns.push({ include: '#type-cast' });
     }
     // Add disambiguation layers to top patterns (order matters!)
@@ -4105,7 +4103,7 @@ export function generateTmLanguage(grammar: Grammar): TmGrammar {
     // Remove the boundary chars from every NEGATED class `[^…]` in `s` (positive classes untouched).
     // Handles both bare (`,`,`{`,`}`) and escaped (`\[`,`\]`) forms of a boundary char in the class.
     const stripBoundaryFromNegatedClasses = (s: string): string =>
-      s.replace(/\[\^((?:\\.|[^\]\\])*)\]/g, (whole, inner: string) => {
+      s.replace(/\[\^((?:\\.|[^\]\\])*)\]/g, (_whole, inner: string) => {
         let out = '', i = 0;
         while (i < inner.length) {
           if (inner[i] === '\\') {
@@ -5719,7 +5717,6 @@ export function generateTmLanguage(grammar: Grammar): TmGrammar {
   // Keywords directly followed by a type reference get begin/end scopes
   // so complex types (string[], Promise<T>, { k: V }) are fully highlighted.
   const typeKws = facts.typeKeywords;
-  const typeKwSet = new Set(typeKws);
   if (typeKws.length > 0) {
 
     // Build language-agnostic set of keywords that terminate a type context.

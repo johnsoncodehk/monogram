@@ -236,7 +236,6 @@ const atR = (base: Expr, k: number): Expr => R(k === 0 ? base : add(base, n(k)))
 const isT = (base: Expr, k: number): Expr => eq(at(base, k), n(1));
 const inc = (name: string, k: Expr = n(1)): Stmt => set(name, add(v(name), k));
 const le0 = (name: string): Expr => bin('le', v(name), n(0));
-const b2i = (e: Expr, name: string): Stmt[] => [set(name, n(0)), if_(e, [set(name, n(1))])];
 const method = (name: string, params: [string, Ty0][], ret: Ty0[], body: Stmt[]): Fn => ({ name, doc: '', params: params.map(([pn, ty]) => ({ name: pn, ty })), ret, body, method: true });
 
 // Whether the token at the position is in FIRST signature f ([nLits lid* nKinds kid*]).

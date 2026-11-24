@@ -63,7 +63,7 @@ const TypeofRef = rule($ => [
 // deliberately EXCLUDED — TS's decorator grammar omits it precisely so a computed class
 // member after a decorator (`@dec ["m"]() {}`, `@dec [field] = 1`) is not swallowed as
 // `@dec[...]` (tsc rejects a real `@arr[0]` decorator). `many` so a whole chain is allowed.
-const DecoratorExpr = rule($ => [
+const DecoratorExpr = rule(() => [
   // Not `@new`: `new` is a reserved word, so it names no decorator; `@new …` is the NewExpression arm below.
   [alt([not('@new'), Decorator], ['@', alt([notReservedExpr, Ident], ['(', Expr, many(',', Expr), ')'])]), many(alt(
     ['(', sep(Expr, ','), ')'],                          // call: (args)
@@ -383,7 +383,7 @@ const classExprPrefix = opt(many1(field('decorator', DecoratorExpr)), classExprM
 // [Await] context, and renders the plain repetition of `modifierRun` for the run (treeSitterRelax).
 // The inner alt() is first-match; its branches part at one token (`get`/`set` then a name, `*`,
 // a name then `?`/`!`/`<`/`(`/`:`, or a name alone), so the first that matches is the only one.
-const Prop = rule($ => {
+const Prop = rule(() => {
   const mods = modifierRun(['public', 'private', 'protected', 'static', 'abstract', 'readonly', 'override', 'accessor', 'export', 'declare', 'in', 'out', 'const', 'default'], { treeSitterOmits: ['const'], secondRun: true });
   const asyncMod = modifierWord(['async']);
   const sig = (ctx: (...items: Element[]) => Element) => [opt(field('typeParameters', TypeParams)), '(', sep(ctx(field('parameter', Param)), ','), ')', opt(':', ReturnType), ctx(field('body', fnBodyOrAsi()))];
@@ -612,13 +612,13 @@ const Expr = rule($ => [
 
 // ── Statements ──
 
-const Block = rule($ => [
+const Block = rule(() => [
   ['{', many(Stmt), '}'],
 ]);
 
 // ── Destructuring Patterns ──
 
-const BindingProperty = rule($ => [
+const BindingProperty = rule(() => [
   // `name: elem` — the KEY is a PropertyName, so a reserved word is allowed here
   // (`{ while: y }`); the bound name inside `elem` is guarded by BindingElement.
   arm('identPair', field('key', Ident), ':', field('value', BindingElement)),
@@ -632,16 +632,16 @@ const BindingProperty = rule($ => [
   arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern)), opt(':', field('element', BindingElement)), opt('=', field('value', Expr))),
 ]);
 
-const BindingElement = rule($ => [
+const BindingElement = rule(() => [
   [field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))],  // a | { a }  (optionally = default)
 ]);
 
-const ArrayBindingElement = rule($ => [
+const ArrayBindingElement = rule(() => [
   BindingElement,
   arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern))),    // [...rest] | [...{ a }]
 ]);
 
-const BindingPattern = rule($ => [
+const BindingPattern = rule(() => [
   arm('object', '{', sep(field('property', BindingProperty), ','), '}'),                  // { a, b: c, ...rest }
   // [a, , b, ...rest]: a hole is an absent element. The `[` and each `,` are named: a hole's
   // position is the end of the token before it (tsc's OmittedExpression).
@@ -650,18 +650,18 @@ const BindingPattern = rule($ => [
 
 // ── Bindings & Parameters ──
 
-const Binding = rule($ => [
+const Binding = rule(() => [
   [field('name', alt([...bindingIdentifier, opt(field('exclamation', '!'))], BindingPattern)), opt(':', field('type', Type)), opt('=', field('value', Expr))],
 ]);
 
 // A binding in a for-head (`forBindingArms`) with its type annotation. No definite-assignment
 // `!`: tsc's parser reads a for-head's declarations with parseVariableDeclaration, which takes
 // none (`for (var a!: T;;)` is a parse error), where a variable statement's take one.
-const ForBinding = rule($ => forBindingArms(BindingPattern, Expr, [opt(':', Type)]));
+const ForBinding = rule(() => forBindingArms(BindingPattern, Expr, [opt(':', Type)]));
 
 
 const paramMods = modifierRun(['public', 'private', 'protected', 'readonly', 'override', 'static', 'abstract', 'accessor', 'async', 'export', 'declare', 'in', 'out', 'default'], { param: true });
-const Param = rule($ => {
+const Param = rule(() => {
   const tail = [opt(field('question', '?')), opt(':', field('type', Type)), opt('=', field('value', Expr))];   // ?  : T  = E
   const name = field('name', alt(bindingIdentifier, BindingPattern));
   const body = alt(
@@ -696,10 +696,10 @@ const Param = rule($ => {
   ];
 });
 
-const ForHead = rule($ => forHeadArms(Expr, ForBinding));
-const ForAwaitHead = rule($ => forAwaitHeadArms(Expr, ForBinding));
+const ForHead = rule(() => forHeadArms(Expr, ForBinding));
+const ForAwaitHead = rule(() => forAwaitHeadArms(Expr, ForBinding));
 
-const SwitchCase = rule($ => [
+const SwitchCase = rule(() => [
   ['case', Expr, many(',', Expr), ':'],
   ['default', ':'],
   Stmt,
@@ -710,7 +710,7 @@ const SwitchCase = rule($ => [
 // parseVariableDeclaration: a name or pattern and a type, no `!`; which types are allowed is the
 // checker's). No initializer: the production has none, and tsc's parser takes one and leaves it
 // to the checker (docs/CORRECTNESS.md). No rest, `?`, `this`, decorator or modifier.
-const CatchParameter = rule($ => [
+const CatchParameter = rule(() => [
   [...bindingIdentifier, opt(':', Type)],
   [BindingPattern, opt(':', Type)],
 ]);
@@ -761,7 +761,7 @@ const Stmt = rule($ => [
 
 // ── Type Parameters ──
 
-const TypeParam = rule($ => {
+const TypeParam = rule(() => {
   // TS parses any modifier soup before a type-param name (variance `in`/`out`,
   // `const`, even bogus `public`), then reports invalid ones post-parse. A param
   // can also be NAMED like a modifier — `<in>`, `<out = any>`, and even the
@@ -782,7 +782,7 @@ const TypeParam = rule($ => {
   ];
 });
 
-const TypeParams = rule($ => [
+const TypeParams = rule(() => [
   ['<', sep(TypeParam, ','), '>'],
 ]);
 // (see the arrow arms) an arrow whose `<` is followed by no name and no `const` has no type
@@ -813,7 +813,7 @@ const notTypeMemberStart = [
   many(modifierKindWord), not(modifierKindWord), not('['), opt(literalPropertyName),
   sameLine, not(alt('(', '<', '?', ':', ',', ';', '}')),
 ];
-const TypeMember = rule($ => {
+const TypeMember = rule(() => {
   const sig = [opt(TypeParams), '(', sep(typeFnParam(), ','), ')', opt(":", ReturnType)];  // `<T>( … ): Ret`
   // Every member but a block-bodied accessor ends as tsc's parseTypeMemberSemicolon: a `,`, or
   // as a statement does. So two members on one line need a separator between them.
@@ -841,7 +841,7 @@ const TypeMember = rule($ => {
 // A computed name holds an Expression, a comma list included (tsc's parseComputedPropertyName;
 // `{ [a, b]: 1 }` is a checker error). Where an index signature may stand, a bracket that starts
 // one is no name (`propertyOrMethodName`).
-const MemberName = rule($ => [
+const MemberName = rule(() => [
   Ident,
   PrivateField,
   String_,
@@ -914,7 +914,7 @@ const fieldTail = [opt(sameLine, field('exclamation', '!')), opt(field('question
 // which nothing is needed (a `;` there is an empty class element of its own), or none, and
 // then the member ends as a statement does.
 const memTail = (ctx: (...items: Element[]) => Element) => ['(', sep(ctx(field('parameter', Param)), ','), ')', opt(":", ReturnType), ctx(field('body', fnBodyOrAsi()))];
-const ClassMember = rule($ => [
+const ClassMember = rule(() => [
   arm('empty', ';'),   // tsc's SemicolonClassElement: `class C { ; }` is parse-clean
   arm('staticBlock', many(field('decorator', DecoratorExpr)), many(field('modifier', Modifier)), field('staticKeyword', 'static'), awaitCtx(field('block', Block))),   // static block body is [+Await] (await reserved); decorators/modifiers parse (SEMANTIC errors)
   // decorators PREFIX a member, before any modifier — tsc parse-rejects
@@ -963,7 +963,7 @@ const ClassMember = rule($ => [
   ),
 ]);
 
-const EnumMember = rule($ => [
+const EnumMember = rule(() => [
   [MemberName, opt('=', Expr)],
 ]);
 
@@ -976,7 +976,7 @@ const EnumMember = rule($ => [
 // `{ type as as }` (`type` renamed to `as`).
 const moduleExportName = alt(Ident, String_);
 const typeMod = () => opt(field('typeKeyword', 'type'), not(not(alt([not('as'), moduleExportName], ['as', 'as', moduleExportName], ['as', not(moduleExportName)]))));
-const ImportSpecifier = rule($ => [
+const ImportSpecifier = rule(() => [
   // A module-side name `as` a local name, or a local name alone. The local name is a binding
   // identifier; the name read from the module, before `as`, is an IdentifierName (tsc's
   // parseImportOrExportSpecifier): `{ if as x }`, not `{ if }` / `{ x as if }`.
@@ -991,7 +991,7 @@ const ImportSpecifier = rule($ => [
 // Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
 // string) is valid on BOTH sides and may stand alone (`export { x as "s" }`,
 // `export { "a" as "b" } from "m"`, `export { "a" }` — all tsc parse-clean).
-const ExportSpecifier = rule($ => [
+const ExportSpecifier = rule(() => [
   // `type` modifier disambiguation (tsc's multi-token lookahead). `type` is the modifier
   // when followed by a real name that ISN'T `as` (arm 1), or by `as` that is itself the
   // name — `{ type as }`, no rename target after (arm 2). Otherwise `type` is the name:
@@ -1007,7 +1007,7 @@ const ExportSpecifier = rule($ => [
 // `{ a, b as c }` (NamedImports) and `* as ns` (NamespaceImport), alone or after a default binding.
 const namedImports = () => [field('brace', '{'), sep(field('specifier', ImportSpecifier), ','), field('braceClose', '}')];
 const namespaceImport = () => [field('star', '*'), 'as', notReserved, field('namespace', Ident)];
-const ImportClause = rule($ => [
+const ImportClause = rule(() => [
   // deferred import (TS 5.9): `import defer * as ns from "m"`. `defer` is a phase
   // modifier here, ONLY valid immediately before the namespace `* as`. As a keyword
   // literal it still lexes as an Ident, so `defer` stays an ordinary binding name in
@@ -1028,7 +1028,7 @@ const ImportClause = rule($ => [
 // parses a literal alone there, so `require("x" + y)` / `require("x", "y")` are
 // errors) or, when the first token is not a string, a full comma Expression
 // (`require(x)`, `require(1, 2)` parse; their wrongness is the checker's).
-const ModuleReference = rule($ => [
+const ModuleReference = rule(() => [
   arm('external', field('requireKeyword', 'require'), '(', field('argument', alt(arm('string', field('string', String_)), arm('expression', not(String_), field('expr', Expr), many(',', field('exprRest', Expr))))), field('parenClose', ')')),
   arm('entityName', notReserved, field('first', Ident), many('.', notReserved, field('rest', Ident))),
 ]);
@@ -1153,7 +1153,7 @@ const Decl = rule($ => [
 
 // ── Entry ──
 
-const Program = rule($ => [
+const Program = rule(() => [
   many(alt(Decl, Stmt)),   // Decl first: prefer declaration over IIFE expression-statement
 ]);
 

@@ -26,8 +26,8 @@ const Expr = rule(($) => [
   [$, '.', Ident],
   [$, postfix],          // postfix operator LED
 ]);
-const Stmt = rule(($) => [[Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [[Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'postjs',

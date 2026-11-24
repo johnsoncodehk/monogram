@@ -27,12 +27,12 @@ const Expr = rule(($) => [
   [$, op, $],
 ]);
 
-const Stmt = rule(($) => [
+const Stmt = rule(() => [
   arm('letDeclaration', 'let', field('binding', Ident), '=', field('initializer', Expr), ';'),
   arm('expression', field('expression', Expr), ';'),
 ]);
 
-const Program = rule(($) => [arm('program', field('statements', many(field('statement', Stmt))))]);
+const Program = rule(() => [arm('program', field('statements', many(field('statement', Stmt))))]);
 
 export default defineGrammar({
   name: 'calc',

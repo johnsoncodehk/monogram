@@ -5,7 +5,7 @@ import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-pl
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
 import { identifierClassesOf, uniClassRanges, uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { scopeToCapture, tokenCapture } from './highlight-roles.ts';
-import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
+import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
 // ════════════════════════════════════════════════════════════════════════════
 // gen-tree-sitter — derive a tree-sitter parser package from one Grammar.

@@ -4,8 +4,8 @@
 // index LEDs), and a CST→JSON printer over stdin. It is the reference rendering — its CST
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type AssignTargetsIR } from './parser-ir.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type LexTok, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ShapeInhVal, type AssignTargetsIR } from './parser-ir.ts';
+import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { ArmForm } from './assign-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -32,9 +32,6 @@ const tlen = (text: string): number => unitLen(text, UNITS);
 const firstCond = (f: FirstSig, t: string, ids: LexIdPlan) => f
   ? `(${f.lits.map((l) => `${t}.lid === ${lidOf(ids, l)}`).join(' || ') || 'false'} || ${f.toks.map((k) => `${t}.kid === ${kidOf(ids, k)}`).join(' || ') || 'false'})`
   : 'false';
-/** Non-null FirstSig small enough to pre-filter before a backtracking attempt. */
-const isGuardable = (f: FirstSig, nAlts?: number): f is NonNullable<FirstSig> =>
-  isFirstGuardable(f, nAlts);
 // A longest-match candidate's Guard (parser-ir.ts) over the buffered token t, as conditions;
 // keyed: the candidate is reached through its Dispatch key, which already tested the first token.
 const guardCond = (g: Guard, t: string, keyed: boolean): string[] =>
@@ -51,8 +48,6 @@ const dispatchTsL = (t: string): DispatchLowering => ({
   sw: (by, cases) => `  switch (${t}.${by}) {\n${cases.map((c) => `  case ${c.key}:\n${c.arms.join('\n')}\n  break;`).join('\n')}\n  }`,
   nil: (sw) => `  if (${t} !== null) {\n${sw}\n  }`,
 });
-const dispatchTs = (d: Dispatch, t: string, ids: LexIdPlan, arm: (i: number, keyed: boolean) => string, nilable = false): string =>
-  dispatchWalk(d, ids, arm, dispatchTsL(t), nilable);
 // A Commit's switch (parser-ir.ts commitWalk) over the buffered token t.
 const commitSwTs = (t: string): CommitLowering => ({
   sw: (by, cases, dflt) => `  switch (${t}.${by}) {\n${cases.map((c) => `  ${c.keys.map((k) => `case ${k}:`).join('')}${c.stmt ? `\n${c.stmt}` : ''}${c.ends ? '' : '\n  break;'}`).join('\n')}${dflt ? `\n  default:\n${dflt}` : ''}\n  }`,
@@ -876,7 +871,7 @@ function rdRuleW(r: RdRule, ids: LexIdPlan): string {
 // keeps the child stack's height `b` beside the position and finishes the node (finR); a candidate
 // that wins is moved down to `b` over the best it beat (candTs).
 function tsRules(r: RdRule, ids: LexIdPlan, m: Mode): RuleLowering {
-  const cn = J(r.name), w = m === 'w';
+  const w = m === 'w';
   // A rule of the target closure (RdRule.altForm) returns its winning arm's form in _form.
   const tf = w ? r.altForm : undefined;
   const setForm = (i: number) => (tf && tf[i]!.k !== 'unit' ? ` _form = ${armFormTs(tf[i]!, false)};` : '');
@@ -1026,7 +1021,6 @@ const capTs = (cap: NodeCap): string => (cap === 'arm' ? 'true' : cap === 'tail'
 // A NUD that matched nothing: the state its frame leaves when no arm won (prattRuleW's nudClose).
 const NUD_FAIL_TS = '{ return nudNone(); }';
 function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
-  const cn = J(r.name);
   const d = r.nudDispatch;
   // Each arm's form (assign-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormTs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
@@ -1864,7 +1858,7 @@ function emitShapeTypeDecls(ir: ParserIR, shapeIR: ShapeIR): string {
   const nodes = collectNodeTypes(shapeIR);
   const lines: string[] = ['// ─── Shape AST types (generated) ────────────────────────────────────────────'];
   const leafScalars = new Set<string>();
-  for (const [tt, pol] of Object.entries(shapeIR.leaves) as [string, TokenLeafPolicy][]) {
+  for (const pol of Object.values(shapeIR.leaves) as TokenLeafPolicy[]) {
     if (pol.action === 'leafValue') {
       const ts = pol.fn === 'number' ? 'number' : pol.fn === 'bigint' ? 'bigint' : pol.fn === 'boolean' ? 'boolean' : 'string';
       leafScalars.add(ts);
@@ -2405,10 +2399,6 @@ function emitAstPrattRule(r: PrattRule, sir: ShapeIRRule, ids: LexIdPlan, shapeI
   const tpl = ir.tpl;
   const emptyB = new Map<number, string>();
 
-  const spanObj = (off: string, end: string) =>
-    spans === 'none' ? ''
-      : spans === 'required' ? `, off: ${off}, end: ${end}`
-      : `, ...( ${off} >= 0 ? { off: ${off}, end: ${end} } : {} )`;
   const spanKeep = (off: string, end: string) =>
     spans === 'none' ? '' : `, off: ${off}, end: ${end}`;
 

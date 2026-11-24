@@ -551,7 +551,7 @@ export function planShape(shape: Shape, ir: ParserIR): ShapePlan {
       if (usedRecs.size) { const ks = [...usedRecs].sort((a, b) => a - b); recs[id] = ks; sites.recs = new Map(ks.map((k) => [at!.recs[k]!, k])); }
     }
     for (const e of strided) if (marked.has(e)) throw new Error(`planShape: ${r.name}: a list read by stride is marked by a later plan`);
-    newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, reads, kinds, tagStats));
+    newRules.push(shapeSteps(r, tagsByKey, marked, sitesByKey, cx, tagStats));
   }
   for (const k of cx.synSlotRead) syn[k]!.slotRead = true;
   const needs = dropNeeds(fns, arms, unsupported, cx.needRule);
@@ -700,7 +700,7 @@ function positional(r: RuleIR, key: string, info: ArmInfo): Map<RuleExpr, number
  * repetition body marked, every shared step printed in place; each call of an rd rule that
  * reads inherited attributes sets them (Step.inh), each threaded repetition threads its state
  * (Step.threadInit on the repetition, Step.thread on its marked body). */
-function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>, sites: Map<string, ArmSites>, cx: AttrCx, reads: Map<string, string[]>, kinds: Map<string, string>, tagStats: { sites: number; tagged: number }): RuleIR {
+function shapeSteps(r: RuleIR, tags: Map<string, Numbering>, marked: Map<RuleExpr, number>, sites: Map<string, ArmSites>, cx: AttrCx, tagStats: { sites: number; tagged: number }): RuleIR {
   const clone = (num: Numbering, site: ArmSites | undefined) => {
     const attached = new Set<RuleExpr>();
     const bodyOf = new Map<RuleExpr, { k: number; next: string }>();
@@ -1295,7 +1295,7 @@ class ArmCompiler {
       case 'branch': {
         const o = this.resolve(s, t.name);
         if (o.rest.some(isListQ)) no(`a branch of a repeated alternation (${t.name})`);
-        return this.branchCase(o.slot, o.scope, out, (bn, name, b) => {
+        return this.branchCase(o.slot, o.scope, out, (_bn, name, b) => {
           const c = t.cases[name];
           if (c === undefined) return { k: 'vNeed', e: { k: 'vMissing', where: `${s.info.where}: ${t.name}.${name}`, why: 'unmapped' } };
           const bi = this.shape.grammar.branchScopes.get(o.slot.node)!.indexOf(o.slot.branches!.get(name)!);

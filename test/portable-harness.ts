@@ -31,10 +31,8 @@
 // Go/Rust toolchains are optional: a missing `go`/`rustc` is logged and skipped (the TS
 // rendering, which needs only node, always runs).
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createParser } from '../src/interpreter.ts';
 import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';

@@ -280,7 +280,7 @@ function typedDecls(st: RsShape): string {
   const impls: string[] = [];
   T.kinds.forEach((k, i) => {
     const name = rsTy(k.name);
-    const ps = k.fields.map((f, j) => `f${j}: W`);
+    const ps = k.fields.map((_f, j) => `f${j}: W`);
     const conv = k.fields.map((f, j) => `${rsField(f.name)}: <${rsField_(f.type)}>::from_w(self, f${j})`);
     impls.push(`    #[inline(never)]\n    fn mk${i}(&mut self${k.record ? '' : ', start: u32, end: u32'}${ps.map((p) => `, ${p}`).join('')}) -> W {${k.fields.map((_, j) => ` if f${j} & TAGM == T_MISS { return f${j}; }`).join('')} let n = ${name} {${k.record ? '' : ' start, end,'} ${conv.join(', ')} }; self.a${i}.push(n); w_node(${i}, self.a${i}.len() - 1) }`);
     const body: string[] = [];

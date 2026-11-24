@@ -67,7 +67,6 @@ const TOKEN_KIND: Record<string, string> = {
   '||=': 'BarBarEqualsToken', '??=': 'QuestionQuestionEqualsToken',
   ',': 'CommaToken', 'in': 'InKeyword', 'instanceof': 'InstanceOfKeyword',
 };
-const ASSIGN_OPS = new Set(['=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']);
 
 // ── Expressions ──
 // The Expr rule is a Pratt rule: its CST shapes are positional patterns, one per
@@ -731,7 +730,7 @@ function lowerDecl(n: E): Ast {
       const ty = findRule(c, 'Type');
       return ast('TypeAliasDeclaration', off(n), end(n), [...mods, ast('Identifier', off(name), end(name)), ...(ty !== undefined ? [lowerType(ty)] : [])]);
     }
-    if (t === 'import') return lowerImport(n, c, i, mods);
+    if (t === 'import') return lowerImport(n, c, mods);
     if (t === 'enum') {
       const name = c[i + 1] as E;
       const members = rules(c, 'EnumMember').map(lowerEnumMember);
@@ -761,7 +760,7 @@ function lowerDecl(n: E): Ast {
       if (mods.length) decl = ast('ModuleDeclaration', off(n), end(n), [...mods, ...decl.children]);
       return decl;
     }
-    if (t === 'export') return lowerExport(n, c, i, mods);
+    if (t === 'export') return lowerExport(n, c, mods);
   }
   if (isNode(h) && (ruleNameOf(h) === 'Stmt')) {
     const inner = lowerStmt(h);
@@ -908,7 +907,7 @@ function lowerImportSpecifier(n: E): Ast {
   return ast('ImportSpecifier', off(n), end(n), kids);
 }
 
-function lowerImport(n: E, c: E[], i: number, mods: Ast[]): Ast {
+function lowerImport(n: E, c: E[], mods: Ast[]): Ast {
   // 'import' ImportClause? 'from'? String ';'?  |  'import' String  |  import x = require(…)
   const clause = findRule(c, 'ImportClause');
   const spec = c.find((x) => isLeaf(x) && tokTypeOf(x) === 'String') as E | undefined;
@@ -932,9 +931,8 @@ function lowerImport(n: E, c: E[], i: number, mods: Ast[]): Ast {
   return ast('ImportDeclaration', off(n), end(n), kids);
 }
 
-function lowerExport(n: E, c: E[], i: number, mods: Ast[]): Ast {
+function lowerExport(n: E, c: E[], mods: Ast[]): Ast {
   // 'export' '{' specifiers '}' | 'export' '*' ('as' Ident)? 'from' String
-  const star = findText(c, '*');
   const brace = findText(c, '{');
   const spec = c.find((x) => isLeaf(x) && tokTypeOf(x) === 'String') as E | undefined;
   const kids: Ast[] = [...mods];

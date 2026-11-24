@@ -21,8 +21,8 @@ const Expr = rule(($) => [
   [$, op, $],
   [$, '(', opt($, many(',', $)), ')'],            // call args via star(seq)
 ]);
-const Stmt = rule(($) => [[Expr, ';']]);
-const Program = rule(($) => [many(Stmt)]);
+const Stmt = rule(() => [[Expr, ';']]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'seqjs',

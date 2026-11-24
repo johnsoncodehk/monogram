@@ -44,14 +44,14 @@ const Comment = token(seq('<!--', star(seq(notFollowedBy('-->'), anyChar()), { g
 
 // ── Rules ──
 // An attribute: a name, optionally `= value` (quoted, or an unquoted name/number).
-const Attr = rule($ => [
+const Attr = rule(() => [
   [Name, opt('=', alt(AttrValue, Name, UnquotedValue))],
 ]);
 
 // A child node inside an element. RawText only ever appears as the sole child of a
 // raw-text element (the lexer guarantees this), but listing it here keeps the rule
 // uniform — `many(Node)` over a <script> body is exactly one RawText token.
-const Node = rule($ => [
+const Node = rule(() => [
   Element,
   Comment,
   RawText,
@@ -71,7 +71,7 @@ const Node = rule($ => [
 //      the body as raw-text — matching parse5 (`<script src=… />…</…>` is NOT self-closed).
 // Void comes first so a `<br>` never enters the container branch and swallows its
 // following siblings + a mismatched close tag.
-const Element = rule($ => [
+const Element = rule(() => [
   ['<', VoidName, many(Attr), opt('/'), '>'],
   ['<', Name, many(Attr), '/', '>'],
   ['<', Name, many(Attr), '>', many(Node), '<', '/', Name, '>'],
@@ -82,7 +82,7 @@ const Element = rule($ => [
 // The DOCTYPE is lexed as a comment-shaped token only if declared; for now a
 // leading `<!doctype html>` is matched structurally as an element-ish node is not
 // — kept out of the minimal corpus. Document is LAST → it is the parser entry.
-const Document = rule($ => [
+const Document = rule(() => [
   [many(alt(Element, Comment, Text))],
 ]);
 

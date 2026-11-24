@@ -13,7 +13,7 @@
 //                             shape, the file a user starts from and fills in
 import type { Grammar } from './types.ts';
 import { findEntryRule } from './grammar-analysis.ts';
-import { cardOf, defineShape, type ArmInfo, type Card, type ScopeInfo, type Shape, type Slot, type SlotKind } from './shape2-eval.ts';
+import { cardOf, defineShape, type Card, type ScopeInfo, type Shape, type Slot, type SlotKind } from './shape2-eval.ts';
 import { branch, child, map, node, text, type Term } from './shape2-schema.ts';
 
 export type ChildInfo = { name: string; kind: SlotKind; card: Card; rule?: string };

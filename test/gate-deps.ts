@@ -154,7 +154,7 @@ export function edges(file: string): string[] {
     for (const m of src.matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*) = (['"`])((?:(?!\2)[^\\\n]|\\.)*)\2;?$/gm)) consts.set(m[1]!, m[3]!);
     // and one bound to a scratch directory (outside the repository) makes a path under it no input
     for (const m of src.matchAll(/^(?:export )?const ([A-Za-z_$][\w$]*) = (?:scratchDir|mkdtempSync|tmpdir)\(/gm)) consts.set(m[1]!, '\0');
-    const expand = (lit: string, depth = 0): string => (depth > 3 ? lit : lit.replace(/\$\{([A-Za-z_$][\w$]*)\}/g, (h, name: string) => (consts.has(name) ? expand(consts.get(name)!, depth + 1) : '${}')));
+    const expand = (lit: string, depth = 0): string => (depth > 3 ? lit : lit.replace(/\$\{([A-Za-z_$][\w$]*)\}/g, (_h, name: string) => (consts.has(name) ? expand(consts.get(name)!, depth + 1) : '${}')));
     for (const lit of literals(src)) { const x = expand(lit); if (!x.includes('\0')) e.push(...candidates(x, dir)); }
     // a name every binding of which is a scratch directory (`const dir = scratchDir('nl')`, at any
     // depth): a path joined onto it is outside the repository

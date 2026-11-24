@@ -43,15 +43,15 @@ const Expr = rule(($) => [
   [$, Template],                        // tagged template — a postfix-token LED
 ]);
 
-const Block = rule(($) => [['{', many(Stmt), '}']]);
-const Stmt = rule(($) => [
+const Block = rule(() => [['{', many(Stmt), '}']]);
+const Stmt = rule(() => [
   Block,
   [alt('var', 'let', 'const'), Ident, opt('=', Expr), ';'],
   ['if', '(', Expr, ')', Stmt, opt('else', Stmt)],
   ['return', opt(Expr), ';'],
   [Expr, ';'],
 ]);
-const Program = rule(($) => [many(Stmt)]);
+const Program = rule(() => [many(Stmt)]);
 
 export default defineGrammar({
   name: 'templatejs',

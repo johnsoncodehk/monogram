@@ -252,7 +252,6 @@ else {
 say();
 const modeTable = (mode: 'fresh' | 'reuse') => {
   const k = mode === 'fresh' ? 'parse' : 'parse-reuse';
-  const fm = mode === 'fresh' ? 'warm' : 'reuse';
   const rows: string[][] = [];
   for (const f of files) {
     const cells = [f + (acc[`M.${f}`] === 'REJECT' ? ' (M rejects)' : '')];

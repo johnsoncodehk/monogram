@@ -431,14 +431,14 @@ const jsPrec = ecmaPrecWith(when('~syncFn', 'await'));
 // `@` and an Ident when trivia separates them (`@ a`); the dotted segments are tokens of their own
 // (`@a . b`, `@a.℘`; `@a.` has no parse).
 const decoratorHead = alt(Decorator, ['@', notReservedJsExpr, Ident]);
-const DecoratorExpr = rule($ => [
+const DecoratorExpr = rule(() => [
   ['@', '(', Expr, many(',', Expr), ')'],   // @(expr)
   [decoratorHead, many('.', alt(Ident, PrivateField)), opt('(', sep(Expr, ','), ')')],   // @dec | @a.b.#c | @dec(args)
 ]);
 
 // ── Expressions ──
 
-const Prop = rule($ => {
+const Prop = rule(() => {
   // ( … ) { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
   // MemberName stays outside it (a computed key inherits the enclosing context).
   const propTail = (ctx: (...items: Element[]) => Element) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
@@ -632,13 +632,13 @@ const Expr = rule($ => [
 
 // ── Statements ──
 
-const Block = rule($ => [
+const Block = rule(() => [
   ['{', many(Stmt), '}'],
 ]);
 
 // ── Destructuring Patterns ──
 
-const BindingProperty = rule($ => [
+const BindingProperty = rule(() => [
   // `name: elem` — the KEY is a PropertyName, so a reserved word is allowed here
   // (`{ while: y }`); the bound name inside `elem` is guarded by BindingElement.
   arm('identPair', field('key', Ident), ':', field('value', BindingElement)),
@@ -649,16 +649,16 @@ const BindingProperty = rule($ => [
   arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern))),    // ...rest | ...{ a }
 ]);
 
-const BindingElement = rule($ => [
+const BindingElement = rule(() => [
   [field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))],  // a | { a }  (optionally = default)
 ]);
 
-const ArrayBindingElement = rule($ => [
+const ArrayBindingElement = rule(() => [
   BindingElement,
   arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern))),    // [...rest] | [...{ a }]
 ]);
 
-const BindingPattern = rule($ => [
+const BindingPattern = rule(() => [
   arm('object', '{', sep(field('property', BindingProperty), ','), '}'),                  // { a, b: c, ...rest }
   // [a, , b, ...rest]: a hole is an absent element. The `[` and each `,` are named: a hole's
   // position is the end of the token before it (tsc's OmittedExpression).
@@ -667,17 +667,17 @@ const BindingPattern = rule($ => [
 
 // ── Bindings & Parameters ──
 
-const Binding = rule($ => [
+const Binding = rule(() => [
   [field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))],
 ]);
 
 // A binding in a for-head (`forBindingArms`): Binding with a no-`in` initializer.
-const ForBinding = rule($ => forBindingArms(BindingPattern, Expr));
+const ForBinding = rule(() => forBindingArms(BindingPattern, Expr));
 
 // A parameter (FormalParameter) is a binding element: its name is a BindingIdentifier, so no
 // reserved word names a parameter (`function f(in) {}`, `(class) => 1`), `this` included (a
 // `this` parameter is TypeScript's).
-const Param = rule($ => {
+const Param = rule(() => {
   const body = alt(
     arm('single', field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))),
     arm('rest', field('ellipsis', '...'), field('name', alt(bindingIdentifier, BindingPattern)), opt('=', field('value', Expr))),   // rest (an initializer is a CHECKER error in tsc, not a parse error)
@@ -687,10 +687,10 @@ const Param = rule($ => {
   ];
 });
 
-const ForHead = rule($ => forHeadArms(Expr, ForBinding));
-const ForAwaitHead = rule($ => forAwaitHeadArms(Expr, ForBinding));
+const ForHead = rule(() => forHeadArms(Expr, ForBinding));
+const ForAwaitHead = rule(() => forAwaitHeadArms(Expr, ForBinding));
 
-const SwitchCase = rule($ => [
+const SwitchCase = rule(() => [
   ['case', Expr, many(',', Expr), ':'],
   ['default', ':'],
   Stmt,
@@ -699,7 +699,7 @@ const SwitchCase = rule($ => [
 // A catch clause's parameter (14.15 `CatchParameter : BindingIdentifier | BindingPattern`), not
 // a FormalParameter: no initializer, rest or decorator (`catch (e = 1)`, `catch (...e)`, `catch
 // (@d e)` have no parse).
-const CatchParameter = rule($ => [
+const CatchParameter = rule(() => [
   bindingIdentifier,
   BindingPattern,
 ]);
@@ -750,7 +750,7 @@ const Statement = rule($ => [
 // (`let` / `const`, and `using` / `await using` from explicit resource management) and `Decl`
 // (functions, classes, and the module items). Where both readings start with `let`, the longer
 // is the derivation (`let\nx = 1` declares; `let;` is the identifier).
-const Stmt = rule($ => [
+const Stmt = rule(() => [
   Statement,
   arm('variable', ...variableDeclaration(['let', 'const'], Binding)),
   arm('using', opt(field('awaitKeyword', 'await'), sameLine), field('usingKeyword', 'using'), sameLine, field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()),
@@ -759,7 +759,7 @@ const Stmt = rule($ => [
 
 // ── Declarations ──
 
-const MemberName = rule($ => [
+const MemberName = rule(() => [
   Ident,
   PrivateField,
   String_,
@@ -839,7 +839,7 @@ const memberKinds = [
     arm('field', opt('=', resetCtx(field('value', Expr))), asi()),
   ))),
 ];
-const ClassMember = rule($ => [
+const ClassMember = rule(() => [
   arm('empty', ';'),   // SemicolonClassElement: `class C { ; }`
   arm('staticBlock', 'static', awaitCtx(field('body', Block))),   // ClassStaticBlock: the body is [+Await] (await reserved)
   arm('member', field('form', alt(
@@ -848,7 +848,7 @@ const ClassMember = rule($ => [
   ))),
 ]);
 
-const ImportSpecifier = rule($ => [
+const ImportSpecifier = rule(() => [
   // The spec's two arms: ModuleExportName `as` ImportedBinding | ImportedBinding. The local name
   // is a BindingIdentifier; the name read from the module, before `as`, is an IdentifierName:
   // `import { if as x }`, not `import { if }` / `{ x as if }`.
@@ -862,14 +862,14 @@ const ImportSpecifier = rule($ => [
 // Export specifiers are WIDER than import ones: a ModuleExportName (identifier or
 // string) is valid on BOTH sides and may stand alone (`export { x as "s" }`,
 // `export { "a" as "b" } from "m"`).
-const ExportSpecifier = rule($ => [
+const ExportSpecifier = rule(() => [
   arm('specifier', field('local', alt(Ident, String_)), opt('as', field('exported', alt(Ident, String_)))),
 ]);
 
 // `{ a, b as c }` (NamedImports) and `* as ns` (NameSpaceImport), alone or after a default binding.
 const namedImports = () => [field('brace', '{'), sep(field('specifier', ImportSpecifier), ','), field('braceClose', '}')];
 const namespaceImport = () => [field('star', '*'), 'as', notReserved, field('namespace', Ident)];
-const ImportClause = rule($ => [
+const ImportClause = rule(() => [
   // import defer (Stage 3): `import defer NameSpaceImport FromClause`. `defer` is the phase only
   // before `* as`; elsewhere it is a name (`import defer from "m"`, `import defer, { a } from "m"`).
   arm('deferNamespace', field('deferKeyword', 'defer'), ...namespaceImport()),
@@ -924,7 +924,7 @@ const Decl = rule($ => [
 
 // ── Entry ──
 
-const Program = rule($ => [
+const Program = rule(() => [
   many(alt(Decl, Stmt)),   // Decl first: prefer declaration over IIFE expression-statement
 ]);
 
