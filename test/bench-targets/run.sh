@@ -37,7 +37,7 @@ for kv in "D:$D_SHA" "E:$E_SHA"; do
 done
 
 echo "=== inputs"
-cp "$REPO/node_modules/typescript/lib/typescript.d.ts" "$W/inputs/typescript.d.ts"
+cp "$REPO/node_modules/tsc-oracle/lib/typescript.d.ts" "$W/inputs/typescript.d.ts"
 curl -fsSL "https://raw.githubusercontent.com/microsoft/TypeScript/$TS_REPO_SHA/src/compiler/checker.ts" -o "$W/inputs/checker.ts"
 git show 2632c2c:src/gen-tm.ts > "$W/inputs/gen-tm.ts"
 cp "$REPO/node_modules/acorn/dist/acorn.js" "$W/inputs/acorn.js"

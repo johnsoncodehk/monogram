@@ -9,9 +9,9 @@
 // is empty; Monogram accept iff createParser(dialectGrammar).parse(code) doesn't throw.
 // See ./src-coverage.ts for the coverage harness + metric definitions.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { createParser } from '../src/interpreter.ts';
 import type { Adapter, AgreeResult, CorpusItem } from './src-coverage.ts';
 
@@ -22,7 +22,7 @@ const isMulti = (t: string) => /^\s*\/\/\s*@filename:/im.test(t);
 
 function walk(d: string, exts: string[]): string[] {
   let o: string[] = [];
-  let entries: ReturnType<typeof readdirSync> = [] as any;
+  let entries: Dirent[] = [];
   try { entries = readdirSync(d, { withFileTypes: true }); } catch { return o; }
   for (const e of entries) {
     const f = join(d, e.name);
@@ -99,7 +99,7 @@ export function tsFamilyAdapter(opts: TsFamilyOpts): Adapter {
   return {
     name: opts.name,
     oracle: 'accept/reject (bidirectional)',
-    urlMatch: (url) => url.includes('typescript/lib/typescript.js'),
+    urlMatch: (url) => url.includes('tsc-oracle/lib/typescript.js'),
     loadCorpus: (): CorpusItem[] => opts.corpus.map((c) => ({ code: c.code, origin: strip(c.file) })),
     warmup: () => {
       for (const w of ['const x=1;', 'class C{m(){}}', 'function*g(){yield 1}', 'x=>x', 'a?.b'])

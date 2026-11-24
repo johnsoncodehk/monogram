@@ -7,7 +7,10 @@
     "noEmit": true,
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src", "test", "*.ts"],
+  // Parser INPUT, not a program (free names on purpose).
+  "exclude": ["test/fixtures/shape-built-witnesses.ts"]
 }

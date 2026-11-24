@@ -25,6 +25,8 @@ await Parser.init();
 const lang = await Language.load(WASM);
 const parser = new Parser();
 parser.setLanguage(lang);
+// `parse` returns null only without a language (set above) or when cancelled: say so loudly.
+const parse = (src: string) => { const t = parser.parse(src); if (!t) throw new Error('tree-sitter returned no tree'); return t; };
 
 interface El { tag: string; children: El[] }
 
@@ -105,7 +107,7 @@ const unsupported: [string, string][] = [
 let parsed = 0, treeMatch = 0;
 const errFails: string[] = [], treeFails: string[] = [];
 for (const html of corpus) {
-  const tree = parser.parse(html);
+  const tree = parse(html);
   if (hasError(tree.rootNode)) { errFails.push(html); continue; }
   parsed++;
   const a = JSON.stringify(tsTree(tree.rootNode));
@@ -127,7 +129,7 @@ let rawOk = 0;
 const rawFails: string[] = [];
 const hasRawText = (n: any): boolean => n.type === 'raw_text' || n.namedChildren.some(hasRawText);
 for (const html of rawTextCases) {
-  const tree = parser.parse(html);
+  const tree = parse(html);
   if (!hasError(tree.rootNode) && hasRawText(tree.rootNode)) rawOk++;
   else rawFails.push(`${html} → ${tree.rootNode.toString()}`);
 }

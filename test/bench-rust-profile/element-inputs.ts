@@ -21,7 +21,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { createParser } from '../../src/interpreter.ts';
 
 // The parts oxc (oxc_parser 0.126, test/oxc-parse-bench/Cargo.lock) rejects although tsc's parser

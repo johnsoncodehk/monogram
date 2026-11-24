@@ -60,9 +60,6 @@ jobs:
           done < <(node -p "require('./package.json').scripts.gen.split(' && ').join('\\n')")
           git diff --exit-code -- '*.tmLanguage.json' '*.language-configuration.json' '*.monarch.json' '*.contributes.json' tree-sitter docs/COMPLETENESS.md docs/decisions test/fixtures/decisionsjs.decisions.md
 
-      - name: Typecheck
-        run: npx tsc --noEmit
-
       # Gates that read this corpus say NOT RUN and fail without it.
       - name: Clone the pinned TS corpus
         run: |

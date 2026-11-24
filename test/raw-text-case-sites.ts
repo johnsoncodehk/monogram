@@ -41,6 +41,7 @@ function load(scopeName: string, files: Record<string, string>) {
   return reg.loadGrammar(scopeName);
 }
 const scopeName = grammar.scopeName;
+if (!scopeName) throw new Error('html.ts declares no scopeName');
 const tm = (await load(scopeName, { [scopeName]: 'html.tmLanguage.json' }))!;
 const VSCODE_TM = '/Applications/Visual Studio Code.app/Contents/Resources/app/extensions';
 const officialPath = process.env.MONOGRAM_OFFICIAL_HTML ?? `${VSCODE_TM}/html/syntaxes/html.tmLanguage.json`;

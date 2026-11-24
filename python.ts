@@ -21,6 +21,7 @@ import {
   left, right, op, prefix, cappedPrefix, atLevel, capExpr, arm, assignTarget, exclude,
   opt, many, many1, alt, not,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, never, notFollowedBy,
+  type Element,
 } from './src/api.ts';
 import type { IndentConfig, TokenPattern } from './src/types.ts';
 
@@ -200,7 +201,7 @@ const Arguments = rule(() => [[Args, opt(','), not(not(')'))]]);
 
 // lambda: python.gram's lambda_parameters, the parameter forms without annotations, ended by `:`.
 // parameters: the same with annotations, ended by `)`. One builder serves both (closer, param).
-function paramForms(param: () => unknown[], close: string) {
+function paramForms(param: () => Element[], close: string) {
   const end = alt(',', not(not(close)));
   const noDefault = () => [...param(), end];
   const withDefault = () => [...param(), '=', Expression, end];

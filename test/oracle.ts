@@ -5,7 +5,7 @@
 //  and JavaScript scope-gap adapters — share the
 //  analysis, never duplicate it.
 // ─────────────────────────────────────────────────────────────────────────────
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { R } from './scope-roles.ts';
 import type { RoleName } from './scope-roles.ts';
 

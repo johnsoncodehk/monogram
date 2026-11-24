@@ -26,7 +26,7 @@ function atDefaults(t: Term, empty: Set<string>): Term {
     }
     case 'present': return empty.has(t.name) ? K(false) : t;
     case 'var': return empty.has(t.name) ? { t: 'list', items: [] } : t;
-    case 'list': return { t: 'list', items: t.items.flatMap((x) => (x !== null && typeof x === 'object' && 'spread' in x ? (x.spread.t === 'var' && empty.has(x.spread.name) ? [] : [{ spread: r(x.spread) }]) : [r(x as Term)])) };
+    case 'list': return { t: 'list', items: t.items.flatMap<Term | { spread: Term }>((x) => (x !== null && typeof x === 'object' && 'spread' in x ? (x.spread.t === 'var' && empty.has(x.spread.name) ? [] : [{ spread: r(x.spread) }]) : [r(x as Term)])) };
     case 'not': { const a = r(t.arg); return a.t === 'const' ? K(!a.value) : { t: 'not', arg: a }; }
     case 'and': case 'or': {
       const args = t.args.map(r);

@@ -57,7 +57,7 @@ for (const s of reject) {
 {
   const root = parser.parse('---\n:\n---\na\n')!.rootNode;
   const types: string[] = []; const stack = [root];
-  while (stack.length) { const n = stack.pop(); types.push(n.type); stack.push(...n.children); }
+  for (let n = stack.pop(); n; n = stack.pop()) { types.push(n.type); stack.push(...n.children); }
   check('the NKF9 line-lead `:` is an empty_key_mapping (not folded into a NEWLINE)', types.includes('empty_key_mapping'));
 }
 // Where each empty key lands, document by document. A static `prec.right` on a rule whose repetition

@@ -15,7 +15,7 @@ import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { scratchDir } from './scratch.ts';
 
 const TMP = scratchDir('recovery-conformance');

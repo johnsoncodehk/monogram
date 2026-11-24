@@ -14,7 +14,7 @@
 //  yaml = the `yaml` package accept/reject) and their own corpus, so they keep their files;
 //  `<lang> html|yaml` DELEGATES to them. The per-language entry stays a `<lang>` parameter throughout.
 // ─────────────────────────────────────────────────────────────────────────────
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { run } from './src-coverage.ts';
 import { tsFamilyAdapter, walkCorpus, type TsFamilyCase } from './src-coverage-tsfamily.ts';
 import { JSX_CASES } from './curated-corpora.ts';

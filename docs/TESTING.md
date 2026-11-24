@@ -92,7 +92,13 @@ VERDICT against the language's own parsers on small inputs generated from each g
 continuation tables (`verdictInputs(grammar, lang)`): every operand form as the left operand of every
 continuation and inside every operand slot, in a statement and an assignment, and for TypeScript every
 type form beside every type continuation and in every type slot. The oracles: tsc's parser for
-TypeScript, acorn and tsc's JS mode for JavaScript. It sees what no engine-against-engine gate can:
+TypeScript, acorn and tsc's JS mode for JavaScript (tsc here, and in every oracle-based gate and
+record, is the package `tsc-oracle`, the classic compiler `typescript@5.9.3` pinned exactly; the
+project's `typescript` is 7, the type checker only). OWED: the oracle stays on 5.9.3 because
+TypeScript 7 ships no stable parser API (its package's `.` export is a version file; the API is
+under `unstable/*`); moving needs a stable 7 API giving a source file's syntax tree and parse
+diagnostics, then one re-record of every oracle-based record (verdict scan, test262, conformance).
+It sees what no engine-against-engine gate can:
 a defect every engine shares (all engines derive from one grammar and one set of mechanisms). Each
 disagreement falls in a CLASS with a disposition (engine / grammar / lexer / policy /
 oracle-tolerance / oracle-defect); the record `test/verdict-scan-record.txt` holds each class's count

@@ -34,7 +34,7 @@
 //   audited against every own property tsc 5.9.3 sets on the conformance corpus's nodes.
 // - files tsc reports PARSE errors for are skipped: its tree there is an error-recovery shape,
 //   and recovery policy is out of contract (as in test/ts-ast-verify.ts).
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import type { NTree, NValue, Produced, Producer } from './shape-oracle.ts';
 
 const KIND_NAME: string[] = [];

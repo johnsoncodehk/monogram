@@ -6,7 +6,7 @@
 //   3. TypeScript-only syntax (type annotations, generics) is REJECTED — .jsx is
 //      JavaScript, so a type layer must NOT leak in via the shared JSX module.
 import { createParser } from '../src/interpreter.ts';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 
 const grammar = (await import('../javascriptreact.ts')).default;
 const { parse } = createParser(grammar);

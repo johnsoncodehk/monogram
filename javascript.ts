@@ -31,6 +31,7 @@ import {
   sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, treeSitterRelax, arm, field,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx, when,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
+  type Element, type Alternative,
 } from './src/api.ts';
 
 // Build the four async×generator arms of a `function` form, routing each arm's params
@@ -40,7 +41,7 @@ import {
 // `function` share a line (`async [no LineTerminator here] function`): after a line break
 // `async` is an identifier and `function` begins the next statement. Param/Block
 // resolve at thunk-eval time (defined below), so this is safe to call inside a rule().
-function fnArms(nameParts, body) {
+function fnArms(nameParts: Element[], body: Element) {
   return [
     arm('function_', 'function', ...nameParts, '(', sep(resetCtx(field('parameter', Param)), ','), ')', resetCtx(field('body', body))),
     arm('generator', 'function', field('asterisk', '*'), ...nameParts, '(', sep(yieldCtx(field('parameter', Param)), ','), ')', yieldCtx(field('body', body))),
@@ -222,13 +223,13 @@ export {
 // `@` to the like lookahead of `export default`, and tsc's parseStatement routes `@` to
 // parseDeclaration. Both grammars' expression statement is this one arm; an expression elsewhere
 // (`({}).x`, `f({}.x)`, `x = @dec class {}`) is not restricted.
-export const expressionStatement = (Expr) => [
+export const expressionStatement = (Expr: Element) => [
   not(alt('{', 'function', 'class', '@', Decorator)), not(alt(['async', sameLine, 'function'], ['let', '['])),
   field('first', Expr), many(field('comma', ','), field('rest', Expr)), asi(),
 ];
 // An arrow's body (`ConciseBody : [lookahead ≠ {] ExpressionBody | { FunctionBody }`): after `=>`
 // a `{` begins the function body, never an object literal, so `() => { b() {} }.x` has no parse.
-export const conciseBody = (Block, Expr) => alt(arm('block', Block), arm('expression', not('{'), Expr));
+export const conciseBody = (Block: Element, Expr: Element) => alt(arm('block', Block), arm('expression', not('{'), Expr));
 // `export Declaration` / `export VariableStatement` (16.2.3 ExportDeclaration): what follows
 // `export` is a declaration, never another statement, so `export if (x) {}`, `export x;`,
 // `export ;`, `export let: x;` (a labelled statement), `export let.x = 1;` (an expression) have
@@ -236,13 +237,13 @@ export const conciseBody = (Block, Expr) => alt(arm('block', Block), arm('expres
 // `Decl` (`$`) or one of the declaring productions themselves (`forms`: `var` / `let` / `const`,
 // and in TypeScript `using`, which tsc's parser takes there), never a statement that merely
 // begins with their word.
-export const exportDeclaration = ($, forms) =>
+export const exportDeclaration = ($: Element, forms: Alternative[]) =>
   arm('exportDeclaration', field('exportKeyword', 'export'), field('declaration', alt(arm('decl', field('decl', $)), ...forms)));
 // VariableStatement / LexicalDeclaration (14.3): a VariableDeclarationList / BindingList has one
 // or more declarations and no trailing comma, so `var;`, `const;` and `var a,` have no parse.
 // `kinds` are the words (`var` is a Statement, `let` / `const` a Declaration); `Binding` is the
 // grammar's.
-export const variableDeclaration = (kinds: string[], Binding) =>
+export const variableDeclaration = (kinds: string[], Binding: Element) =>
   [field('kind', alt(...kinds)), field('binding', Binding), many(field('bindingComma', ','), field('bindingRest', Binding)), asi()];
 // A module specifier and its import attributes (16.2.2 `FromClause : from ModuleSpecifier`,
 // `WithClause : with { } | with { WithEntries ,opt }`, `WithEntries : AttributeKey : StringLiteral`,
@@ -301,12 +302,12 @@ export const bindingName = [notReserved, field('name', Ident)];
 // [~Using]). `for (using of of …)` has no parse tree: the `using` declaration is suppressed by the
 // spec's `[lookahead ≠ using of]` and `using` as an identifier then fails, so the guard is that
 // triple; `for (using of ;…)` (a binding named `of`) and `for (await using of of …)` stay valid.
-export const forBindingArms = (BindingPattern, Expr, annotation = []) => [
+export const forBindingArms = (BindingPattern: Element, Expr: Element, annotation: Element[] = []) => [
   [field('name', alt(bindingIdentifier, BindingPattern)), ...annotation, opt('=', exclude('in', field('value', Expr)))],
 ];
 // `tails` are what may follow the first binding of a `var` / `let` / `const` declaration and of a
 // `using` one: both grammars' heads parse it once and then branch.
-const forDeclaration = (ForBinding, tails, usingTails) => alt(
+const forDeclaration = (ForBinding: Element, tails: Alternative[], usingTails: Alternative[]) => alt(
   [field('kind', alt('let', 'const', 'var')), field('binding', ForBinding), field('tail', alt(...tails))],
   [not(['using', 'of', 'of']), field('kind', alt('using', ['await', sameLine, 'using'])), sameLine, not(alt('[', '{')), field('binding', ForBinding), field('tail', alt(...usingTails))],
 );
@@ -319,7 +320,7 @@ const forDeclaration = (ForBinding, tails, usingTails) => alt(
 // - `for ( [lookahead ∉ { let, async of }] LeftHandSideExpression of AssignmentExpression )`: no
 //   comma after `of`; `for (async of => {};;)` is a C-style head;
 // - a declaration before `in` / `of` has one binding.
-export const forHeadArms = (Expr, ForBinding) => {
+export const forHeadArms = (Expr: Element, ForBinding: Element) => {
   const cTail = [';', opt(field('condition', Expr), many(field('conditionComma', ','), field('conditionRest', Expr))), ';', opt(field('increment', Expr), many(field('incrementComma', ','), field('incrementRest', Expr)))];   // `; cond ; update`
   const cStyle = arm('classic', many(field('bindingComma', ','), field('bindingRest', ForBinding)), ...cTail);
   const forIn = arm('in_', 'in', field('right', Expr), many(field('rightComma', ','), field('rightRest', Expr))), forOf = arm('of', 'of', field('right', Expr));
@@ -332,11 +333,11 @@ export const forHeadArms = (Expr, ForBinding) => {
 };
 // The head inside `for await ( … )`: only the `of` forms, and its left side's lookahead is
 // `[lookahead ≠ let]` alone, so `for await (async of x)` is a loop over `x`.
-export const forAwaitHeadArms = (Expr, ForBinding) => [
+export const forAwaitHeadArms = (Expr: Element, ForBinding: Element) => [
   arm('declaration', forDeclaration(ForBinding, [arm('of', 'of', field('right', Expr))], [arm('of', 'of', field('right', Expr))])),
   arm('of', not('let'), exclude('in', field('left', Expr)), 'of', field('right', Expr)),
 ];
-export const forStatement = ($, ForHead, ForAwaitHead) =>
+export const forStatement = ($: Element, ForHead: Element, ForAwaitHead: Element) =>
   ['for', alt(['(', field('head', ForHead), ')'], [field('awaitKeyword', 'await'), '(', field('head', ForAwaitHead), ')']), field('body', $)];
 
 // The guard of the *expression* identifier (IdentifierReference, and an arrow's lone
@@ -359,11 +360,11 @@ const notReservedJsExpr = reservableNot(alt(...reservedWords));
 // A computed member's index (13.3 `MemberExpression : MemberExpression [ Expression ]`, `SuperProperty
 // : super [ Expression ]`, `OptionalChain : ?. [ Expression ]`): an Expression, so a comma list
 // (`a[0, 1]`, `a?.[0, 1]`); each operand is its own AssignmentExpression call.
-export const bracketIndex = (E) => ['[', E, many(field('exprComma', ','), field('exprRest', E)), ']'];
+export const bracketIndex = (E: Element) => ['[', E, many(field('exprComma', ','), field('exprRest', E)), ']'];
 
 // ImportCall's arguments (`( AssignmentExpression ,opt )`, `( AssignmentExpression ,
 // AssignmentExpression ,opt )`): no spread, no empty list.
-const importCallArgs = ($) => ['(', not('...'), field('source', $), opt(',', opt(not('...'), field('options', $), opt(','))), ')'];
+const importCallArgs = ($: Element) => ['(', not('...'), field('source', $), opt(',', opt(not('...'), field('options', $), opt(','))), ')'];
 
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
 
@@ -440,7 +441,7 @@ const DecoratorExpr = rule($ => [
 const Prop = rule($ => {
   // ( … ) { … }, params+body routed to a [Await]/[Yield] family (see memTail); the
   // MemberName stays outside it (a computed key inherits the enclosing context).
-  const propTail = (ctx) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
+  const propTail = (ctx: (...items: Element[]) => Element) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
   return [
     arm('spread', '...', field('argument', Expr)),
     // accessor (get/set) — get/set bodies are plain (reset)
@@ -478,7 +479,7 @@ const Prop = rule($ => {
 // member, optional-chain and tagged-template tails (`extends f().x`, `extends a?.b`). A literal
 // base parses; rejecting it is a checker's job. An arrow, a conditional or a binary operator
 // is no LeftHandSideExpression (`extends a ? b : c {}` has no parse).
-export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs = []) => [
+export const classHeritageArms = ($: Element, Expr: Element, NewTarget: Element, classExpression: Alternative, typeArgs: Alternative[] = []) => [
   NewTarget,
   classExpression,
   [$, '.', alt(Ident, PrivateField)],
@@ -507,7 +508,7 @@ export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs 
 //   expression rule's own `new class …` arms.
 // - SuperProperty (`new super.x()`, `new super[x]`), MetaProperty (`new new.target()`, `new
 //   import.meta.x()`), and the member forms, a private name included (`new X.#f()`).
-export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [], literals = [] }) => [
+export const newTargetArms = ($: Element, Expr: Element, newArgs: Element, { identGuard, Prop, fnExprArms, taggedTemplate = [], literals = [] }: { identGuard: Element; Prop: Element; fnExprArms: Alternative[]; taggedTemplate?: Alternative[]; literals?: Element[] }) => [
   'true', 'false', 'null', 'this',
   arm('ident', identGuard, Ident),
   Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_, ...literals,
@@ -710,7 +711,7 @@ const CatchParameter = rule($ => [
 // declaration a clause takes is a plain FunctionDeclaration: after a label (LabelledItem) and, in
 // an `if` clause, by Annex B (B.3.3; sloppy mode only, and strictness is not tracked here, so it
 // is accepted everywhere); no generator, async function or class (`a: function* g() {}`).
-const clause = ($) => alt(arm('statement', $), fnArms(bindingName, Block)[0]);
+const clause = ($: Element) => alt(arm('statement', $), fnArms(bindingName, Block)[0]);
 const Statement = rule($ => [
   Block,
   // A VariableStatement; `let;` is the expression statement of the identifier `let` (sloppy mode).
@@ -790,10 +791,10 @@ const MemberName = rule($ => [
 // which cannot take a same-line member start either.
 export const memberStart = alt(Ident, PrivateField, String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, '[', '*');
 export const memberAhead = not(not(memberStart));
-export const memberWordRules: Record<string, unknown[]> = { static: [], get: [not('*')], set: [not('*')] };
+export const memberWordRules: Record<string, Element[]> = { static: [], get: [not('*')], set: [not('*')] };
 // `ahead` is the follower test; TypeScript's parameter modifiers pass their own (a parameter may
 // also start with `{` or `...`).
-export const memberWord = (words: string[], rules: Record<string, unknown[]>, ahead: unknown = memberAhead) => {
+export const memberWord = (words: string[], rules: Record<string, Element[]>, ahead: Element = memberAhead) => {
   const sameLineWords = words.filter(w => !(w in rules));
   return alt([
     alt(
@@ -814,7 +815,7 @@ const getSetWord = memberWord(['get', 'set'], memberWordRules);
 // ENCLOSING context, so it must inherit, not reset.
 // A method, accessor or constructor has a body (MethodDefinition), after which nothing is
 // needed: a `;` there is an empty class element of its own. A field ends as a statement does.
-const memTail = (ctx) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
+const memTail = (ctx: (...items: Element[]) => Element) => [field('paren', '('), sep(ctx(field('parameter', Param)), ','), ')', ctx(field('body', Block))];
 // A class element (15.7 ClassElement, with the decorators proposal's DecoratorList and
 // `accessor`): `;`, a static block, or a member's decorators, at most one `static`, and then one
 // production, each word of which is a keyword only where `memberWord` says so. Inner alt() is

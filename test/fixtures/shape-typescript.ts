@@ -558,7 +558,7 @@ function stripAsi(kids: readonly unknown[]): unknown[] {
   return kids.filter((k) => !(Array.isArray(k) && k.length === 0));
 }
 
-function memberExpr(obj: unknown, prop: unknown, computed = false): unknown {
+function memberExpr(obj: unknown, prop: unknown, computed = false) {
   const p = typeof prop === 'string' ? I(prop) : prop;
   return { type: 'MemberExpression', object: obj, property: p, computed, optional: false };
 }

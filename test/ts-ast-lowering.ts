@@ -289,7 +289,7 @@ function lowerPrimaryLeaf(k: E): Ast {
 // A template in child position: the `$template` node of an interpolated template, or the
 // single `Template` token leaf of a no-substitution one.
 const isTemplate = (k: E | undefined): k is E =>
-  ruleIs(k, 'Template') || ruleIs(k, '$template') || (isLeaf(k) && tokTypeOf(k as E) === 'Template');
+  ruleIs(k, 'Template') || ruleIs(k, '$template') || (k !== undefined && isLeaf(k) && tokTypeOf(k) === 'Template');
 const lowerTemplateChild = (k: E): Ast =>
   isLeaf(k) ? ast('NoSubstitutionTemplateLiteral', off(k), end(k)) : lowerTemplate(k);
 

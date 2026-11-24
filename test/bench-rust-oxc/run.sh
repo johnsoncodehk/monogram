@@ -80,9 +80,9 @@ for kv in $VARIANTS; do v=${kv%%:*}; BIN[$v]=$W/mono-$v/target/release/mono-benc
 BIN[C]=$OXC_TARGET/release/oxc-parse-bench
 
 echo "=== inputs"
-cp "$REPO/node_modules/typescript/lib/typescript.d.ts" "$W/inputs/typescript.d.ts"
-cp "$REPO/node_modules/typescript/lib/typescript.js" "$W/inputs/typescript.js"
-echo "typescript npm: $(node -p 'require("./node_modules/typescript/package.json").version')"
+cp "$REPO/node_modules/tsc-oracle/lib/typescript.d.ts" "$W/inputs/typescript.d.ts"
+cp "$REPO/node_modules/tsc-oracle/lib/typescript.js" "$W/inputs/typescript.js"
+echo "typescript npm: $(node -p 'require("./node_modules/tsc-oracle/package.json").version')"
 for f in checker.ts parser.ts; do
   curl -fsSL "https://raw.githubusercontent.com/microsoft/TypeScript/$TS_REPO_SHA/src/compiler/$f" -o "$W/inputs/$f"
 done

@@ -120,6 +120,7 @@ const kebab = (s: string) => s.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
 const at = (c: string) => ({ c, prec: ATOM });
 
 const sexpr: Lowering = {
+  units: 'utf8',  // what the lowering got by omission (text-units.ts reads anything but 'utf16' as utf8)
   ident: kebab,
   num: { int: 'int', lid: 'lid', depth: 'int', pos: 'int', idx: 'int' },
   type: (t) => t,
@@ -138,7 +139,7 @@ const sexpr: Lowering = {
     own: (_cx, r) => r,
     code: (cx, s, i) => cx.atom(form('char-code', s.c, i.c), 'int', 'int'),
     hasAt: (cx, s, i, lit) => cx.atom(form('starts-at?', s.c, i.c, JSON.stringify(lit)), 'bool', 'bool'),
-    inSet: (_cx, set, c) => at(form('in-set?', set, c.c)),
+    inSet: (cx, set, c) => cx.atom(form('in-set?', set, c.c), 'bool', 'bool'),
     runEnd: (cx, set, s, i) => cx.atom(form('run-end', set, s.c, i.c), 'int', 'int'),
     find: (cx, s, i, lit) => cx.atom(form('find', s.c, i.c, JSON.stringify(lit)), 'int', 'int'),
     findAny: (cx, s, i, stops) => cx.atom(form('find-any', s.c, i.c, form('stops', ...stops.map(String))), 'int', 'int'),
@@ -181,7 +182,7 @@ const sexpr: Lowering = {
       shiftMeta: (cx, m, d) => cx.atom(form('shift-meta', m.c, d.c), 'meta', 'meta'),
       metaEq: (cx, a, b) => cx.atom(form('meta=?', a.c, b.c), 'bool', 'bool'),
       splice: (cx, s, a, b, ins) => cx.atom(form('string-splice', s.c, a.c, b.c, ins.c), 'str', 'str'),
-      newList: (cx, ty, cap, estimate) => cx.atom(form('make-list', ...(cap ? ['#:capacity', cap.c] : []), ...(estimate ? ['#:estimate', estimate.c] : [])), ty, ty, { owned: true }),
+      newList: (cx, ty, cap) => cx.atom(form('make-list', ...(cap ? ['#:capacity', cap.c] : [])), ty, ty, { owned: true }),
       falses: (cx, n) => cx.atom(form('make-flags', n.c), 'bools', 'bools', { owned: true }),
       prefix: (cx, l, n, estimate) => cx.atom(form('take', l.c, n.c, '#:estimate', estimate.c), l.ty, l.ty, { owned: true }),
     },
@@ -193,7 +194,6 @@ const sexpr: Lowering = {
       destructure: (_cx, s) => [form(s.declare ? 'define-values' : 'set-values!', form(...s.ids), s.call)],
       lexStep: (_cx, s) => [form('lex-step!', s.text.c, s.pos, ...s.state, s.out, s.err)],
       lexAll: (_cx, s) => [form('lex-all!', s.text.c, s.out, s.err)],
-      shrink: (_cx, l) => [form('shrink!', l)],
     },
   },
   record: {
@@ -239,7 +239,7 @@ const target = defineParserTarget({
 const HEAD: Partial<Record<Stmt['k'], string[]>> = {
   let: ['define'], set: ['set!'], setAt: ['set-nth!'], push: ['push!'], if: ['if', 'when'], while: ['while'], for: ['for'],
   forEach: ['for-each'], break: ['break'], return: ['return'], letCall: ['define-values'], setCall: ['set-values!'],
-  lexStep: ['lex-step!'], lexAll: ['lex-all!'], shrink: ['shrink!'], extend: ['extend!'], setField: ['set-field!'],
+  lexStep: ['lex-step!'], lexAll: ['lex-all!'], extend: ['extend!'], setField: ['set-field!'],
 };
 function census(fns: Fn[]): Map<string, number> {
   const sigs = new Map(fns.map((f) => [f.name, f]));

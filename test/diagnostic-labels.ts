@@ -15,7 +15,7 @@ import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/target-js.ts';
 import { createParser } from '../src/interpreter.ts';
 import { objectify } from './emitted-obj.ts';
-import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../src/api.ts';
+import { token, rule, defineGrammar, many, opt, plus, oneOf, range, type Grammar } from '../src/api.ts';
 import { generateTmLanguage } from '../src/gen-tm.ts';
 import { generateTreeSitter } from '../src/gen-treesitter.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
@@ -50,7 +50,7 @@ check('an unlabelled rule has no label', plain.rules.find(r => r.name === 'Value
 
 // ── 2. The emitted engine renders labels in `expected …` messages ──
 const dir = scratchDir('diagnostic-labels');
-async function load(g: ReturnType<typeof build>, tag: string) {
+async function load(g: Grammar, tag: string) {
   const file = join(dir, `monogram-labels-${tag}-${process.pid}.ts`);
   writeFileSync(file, emitParser(g, jsTarget));
   const em = await import(file + '?v=' + Date.now());

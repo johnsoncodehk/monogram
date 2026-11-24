@@ -41,7 +41,7 @@ const filesUnder = (dir: string, ext: RegExp): string[] => {
   return out;
 };
 const JS_PINNED = [`${NM}/acorn/dist/acorn.mjs`, ...filesUnder(`${NM}/parse5/dist`, /\.js$/)];
-const TS_PINNED = [`${NM}/typescript/lib/typescript.d.ts`, `${NM}/typescript/lib/lib.es5.d.ts`, ...JS_PINNED];
+const TS_PINNED = [`${NM}/tsc-oracle/lib/typescript.d.ts`, `${NM}/tsc-oracle/lib/lib.es5.d.ts`, ...JS_PINNED];
 const PINNED: Record<string, string[]> = { typescript: TS_PINNED, typescriptreact: TS_PINNED, javascript: JS_PINNED, javascriptreact: JS_PINNED };
 
 type Lib = { tokenize(s: string): Array<{ kid: number; lid: number; off: number; end: number; nl: boolean }>; parse(s: string): unknown };
