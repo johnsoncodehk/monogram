@@ -18,7 +18,8 @@ import {
   tokenPatternStringDelimiters,
   tokenPatternToRegex,
 } from './token-pattern.ts';
-import { type ContextualPattern, getScope, quoteScope, classifyToken, detectTypeParamConstraintKeywords, type AngleBracketAmbiguity, type RegexLiteralInfo, highlightFacts } from './highlight-facts.ts';
+import { classifyToken, quoteScope } from './highlight-roles.ts';
+import { type ContextualPattern, getScope, detectTypeParamConstraintKeywords, type AngleBracketAmbiguity, type RegexLiteralInfo, highlightFacts } from './highlight-facts.ts';
 
 interface TmPattern {
   name?: string;
