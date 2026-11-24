@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -170,17 +170,20 @@ const armFormGo = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
 const lowGo = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
 // Declared target contexts' runtime on an engine type (as target-ts.ts targetRuntimeTs): the open
-// container's accumulator `acc`, the enclosing ones' on `accSt`, `accF` the form of the container
+// container's accumulator `acc` (an enclosing one's is in its arm's frame: accRun), `accF` the form of the container
 // arm that just matched; `nudOkF` a committed NUD arm with a form of its own.
-const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? '\n\tacc, accF uint8\n\taccSt []uint8' : '');
+const targetFieldsGo = (ir: ParserIR): string => (ir.targets ? '\n\tacc, accF uint8' : '');
 function targetRuntimeGo(ir: ParserIR, recv: string, node: string): string {
   const t = ir.targets;
   if (!t) return '';
   const ret = node === 'int32' ? 'n' : 'n, true';
   return `
-func (p *${recv}) accIn(init uint8) bool { p.accSt = append(p.accSt, p.acc); p.acc = init; return true }
-func (p *${recv}) accOut(low, last uint8) bool { q := p.acc & ${t.passes}; p.accF = q | low | ((q << 1) & last); p.accNo(); return true }
-func (p *${recv}) accNo() bool { k := len(p.accSt) - 1; p.acc = p.accSt[k]; p.accSt = p.accSt[:k]; return false }
+func (p *${recv}) accSwap(init uint8) uint8 { prev := p.acc; p.acc = init; return prev }
+func (p *${recv}) accEnd(prev uint8, ok bool, low, last uint8) bool {
+\tif ok { q := p.acc & ${t.passes}; p.accF = q | low | ((q << 1) & last) }
+\tp.acc = prev
+\treturn ok
+}
 func (p *${recv}) accK(m uint8) bool { p.acc = (p.acc &^ ((p.acc >> 1) & ${t.passes}) & (p.form | ^m) & ${t.passes}) | (p.form & (m << 1)); return true }
 func (p *${recv}) accS() bool { p.acc &^= (p.acc >> 1) & ${t.passes}; return true }
 func (p *${recv}) nudOkF(n ${node}, form uint8, tail, capped bool) (${node === 'int32' ? 'int32' : 'spanned, bool'}) { p.form = form; p.tail = tail; p.capped = capped; return ${ret} }`;
@@ -200,11 +203,12 @@ function goSteps(ids: LexIdPlan, f: GoForm, recv: string, e: GoEngine, ar?: Aren
     ruleBp: (name, bp) => (f === 'R' ? e.bpFound(name, bp) : f === 'W' ? `p.callRuleW(p.bpW_${name}(${bp}))` : `p.callRule(p.bp_${name}(${bp}))`),
     // Declared target contexts (declared-targets.ts): computed only in the building forms (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator:
-    // `accNo` returns false, so the arm fails as its steps did.
+    // accSwap's result, the enclosing one, is accEnd's argument (Go evaluates the calls of an
+    // expression left to right), so it is kept in the frame, not on a stack.
     acc: (call, mask) => (f === 'R' ? call : `(${call} && p.accK(${mask}))`),
     accSep: () => (f === 'R' ? 'true' : 'p.accS()'),
     target: (mask) => { if (f === 'R') throw new Error('go: a target() step in a recognized body'); return `(p.form & ${mask}) != 0`; },
-    accRun: (cond, af) => (f === 'R' ? cond : `(p.accIn(${af.init}) && ${cond} && p.accOut(${af.low}, ${af.last}) || p.accNo())`),
+    accRun: (cond, af) => (f === 'R' ? cond : `p.accEnd(p.accSwap(${af.init}), ${cond}, ${af.low}, ${af.last})`),
     armForm: armFormGo,
     // A body guard (emit-portable.ts annotateSteps): opt / sep test it before their one attempt,
     // star before each attempt, so a refused attempt takes no mark. A clean body (Step.clean) is
@@ -1416,8 +1420,11 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     postTok,
     tpl: ir.tpl ? postTok(kidOf(ids, ir.tpl.token)) : 0,
     post: r.postForm ?? 1,
-    bin: r.binForm ? `${1 | r.binForm.leaf}${r.binary.some((b) => b.accLeft) ? ' | (form & info.acc)' : ''}` : '1',
-    ctx: r.binForm ? ' || (form & info.ctx) != info.ctx' : '',
+    // The operators a target context reads (emit-portable binLeftOps): a switch behind the table's
+    // test bit (goBinLeft); every other operator tests what it did without contexts and its node's
+    // form is a constant.
+    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(info.tgt, opLid, form)` : ''}` : '1',
+    tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : `${lowGo(ir, 'form')} != 0`,
     lf: (f: string) => lowGo(ir, f),
   };
 }
@@ -1500,7 +1507,7 @@ ${kids.map((k) => `\t\tcase ${k}:
     binary: `${gtOpRead(ids, false)}
 \t\tinfo := bin_${r.name}[opLid]
 \t\tif !info.ok || info.lbp <= minBp { break }
-\t\tif info.tgt && ${T.lf('form')} != 0 || info.noUnary && ${T.lf('form')} == 2${T.ctx} { return -1 }
+\t\tif info.tgt && ${T.tgt} || info.noUnary && ${T.lf('form')} == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
 \t\tp.pos += opN
@@ -1552,10 +1559,30 @@ ${B.nudClose}
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
 function goPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
-  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${b.tgt}, ${b.noUnary}, true${b.ctx !== undefined ? `, ${b.ctx}, ${b.acc ?? 0}` : ''}}`).join(', ');
+  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}, true}`).join(', ');
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
   const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
-  return `var bin_${r.name} = [${ops.size}]bp{${bin}}
+  // The operators a target context reads (emit-portable binLeftOps), behind the table's test bit:
+  // does the left operand fail its context (binFail), the pass bits the node keeps from it (binKeep).
+  const left = binLeftOps(ops), keep = left.filter((o) => o.acc);
+  const fns = left.length === 0 ? '' : `
+func binFail_${r.name}(op uint16, form uint8) bool {
+\tswitch op {${left.map((o) => `
+\tcase ${o.lid}:
+\t\treturn ${o.ctx ? `form&${o.ctx} != ${o.ctx}` : 'false'}`).join('')}
+\t}
+\treturn form&3 != 0
+}${keep.length === 0 ? '' : `
+func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
+\tif tgt {
+\t\tswitch op {${keep.map((o) => `
+\t\tcase ${o.lid}:
+\t\t\treturn form & ${o.acc}`).join('')}
+\t\t}
+\t}
+\treturn 0
+}`}`;
+  return `var bin_${r.name} = [${ops.size}]bp{${bin}}${fns}
 var pre_${r.name} = [${ops.size}]preOp{${pre}}
 var post_${r.name} = [${ops.size}]postOp{${post}}`;
 }
@@ -2113,7 +2140,7 @@ ${kids.map((k) => `\t\tcase ${k}:
     binary: `${gtOpRead(ids, true)}
 \t\tinfo := bin_${r.name}[opLid]
 \t\tif !info.ok || info.lbp <= minBp { break }
-\t\tif info.tgt && ${T.lf('form')} != 0 || info.noUnary && ${T.lf('form')} == 2${T.ctx} { return spanned{}, false }
+\t\tif info.tgt && ${T.tgt} || info.noUnary && ${T.lf('form')} == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
 \t\tp.pos += opN
@@ -3578,7 +3605,7 @@ type Node struct {
 \tRuleId uint16
 \tKidStart, KidCount, Offset, End, TokStart, TokEnd, Ext uint32
 }
-type bp struct{ lbp, rbp int; tgt, noUnary, ok bool${ir.targets ? '; ctx, acc uint8' : ''} }
+type bp struct{ lbp, rbp int; tgt, noUnary, ok bool }
 type preOp struct{ rbp int; tgt bool; form uint8; ok bool }
 type postOp struct{ lbp int; tgt bool; ok bool }
 
