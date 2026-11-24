@@ -199,7 +199,7 @@ javascript | test262 | rejects | unclassified | test/language/white-space/after-
 javascript | test262 | rejects | unclassified | test/language/white-space/after-regular-expression-literal-zwnbsp.js
 javascript | test262 | rejects | unclassified | test/language/white-space/between-nbsp.js
 javascript | test262 | spans | other | files 51
-javascript | test262 | spans | totals | span-equal 22782 of 22833, interpreter spans missing 12, extra tree-sitter spans 78
+javascript | test262 | spans | totals | span-equal 23360 of 23411, interpreter spans missing 12, extra tree-sitter spans 78
 javascriptreact | line breaks | rejects | unclassified | "function f() { return\n/a/ }"
 javascriptreact | lookaheads | accepts | unclassified | "try {}"
 javascriptreact | lookaheads | accepts | unclassified | "x = () => {}.x;"
