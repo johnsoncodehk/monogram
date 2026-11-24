@@ -14,7 +14,7 @@
 import { dropUnreferencedRs } from './rs-unreferenced.ts';
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type LexTok, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type AssignTargetsIR } from '../ir/parser-ir.ts';
 import type { ArmForm } from '../ir/assign-targets.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
+import { prattTail, hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
 import type { Grammar } from '../grammar/types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1709,7 +1709,7 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             if rhs.present { self.scratch.push(rhs.h); }
             left = ${fin};
             if self.capped { self.form = ${binF}; return Some(left); }
-            form = ${binF}; tail_closed = true;
+            form = ${binF};${prattTail(r) === 'none' ? '' : ' tail_closed = true;'}
         }`,
     entry: (bp) => `    fn parse_${r.name}(&mut self) -> Option<Spanned<B::H>> {
         let prev = self.suppress_cur;
@@ -1724,11 +1724,11 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
 ${preArms ? `    fn ${r.name}_pre(op: u16${preGated ? ', ctx: u8' : ''}) -> Option<(i64, bool, u8)> { match op { ${preArms}, _ => None } }
 ` : '' /* no prefix operator: no prefix arm calls it */}`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
-    bpOpen: (_label, nudBp, bp, closesTail) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
+    bpOpen: (_label, nudBp, bp, tail) => `    fn ${r.name}_bp(&mut self${bp ? ', min_bp: i64' : ''}) -> Option<Spanned<B::H>> {${dem.length ? '\n        let p0 = self.pos as isize;' : ''}
         let mut left = self.${r.name}_nud(${nudBp ? 'min_bp' : ''})?;
         let mut form = self.form;
-        if self.capped { return Some(left); }
-        let ${closesTail ? 'mut ' : ''}tail_closed = self.tail;
+        if self.capped { return Some(left); }${tail === 'none' ? '' : `
+        let ${tail === 'reassigned' ? 'mut ' : ''}tail_closed = self.tail;`}
         loop {
             let t = match self.peek() { Some(t) => t, None => break };`,
     bpClose: `        self.capped = false;
