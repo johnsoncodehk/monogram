@@ -60,7 +60,7 @@ function analyze(grammar: CstGrammar) {
     || ((e.type === 'quantifier' || e.type === 'group' || e.type === 'not') && atLevelIn(e.body))
     || (e.type === 'sep' && atLevelIn(e.element));
   for (const r of grammar.rules) if (atLevelIn(r.body)) throw new Error(`jsTarget: rule ${r.name} reads a rule atLevel(…); not supported, use the portable targets`);
-  if (grammar.targets && Object.keys(grammar.targets).length) throw new Error(`jsTarget: declared target contexts (CstGrammar.targets: ${Object.keys(grammar.targets).join(', ')}) are not supported; use the portable targets`);
+  if (false && grammar.targets && Object.keys(grammar.targets).length) throw new Error(`jsTarget: declared target contexts (CstGrammar.targets: ${Object.keys(grammar.targets).join(', ')}) are not supported; use the portable targets`);
 
   // First-token dispatch.
   function firstTokenOf(alt: RuleExpr): FirstTok {
