@@ -98,8 +98,11 @@ interface RuleOptions {
 }
 
 type Element = string | TokenRef | RuleRef | Marker | Combinator;
-type Sequence = Element[];
+// A sequence is read, never written: `as const` tuples (readonly) are sequences too.
+type Sequence = readonly Element[];
 type Alternative = Element | Sequence | ArmNode;
+// `Array.isArray` does not narrow a readonly array: this does.
+const isSequence = (x: Alternative): x is Sequence => Array.isArray(x);
 type RuleBody = (self: RuleRef) => Alternative[];
 
 export class RuleRef {
@@ -290,9 +293,9 @@ class NotNode {
   // `item` can't match. `reservable` flags the bare-identifier reserved-word guard
   // (notReservedExpr) so a parser extends it with the operator words the context word in force
   // reserves (grammar-utils.ts CTX_WORDS).
-  readonly item: Element | Element[];
+  readonly item: Element | Sequence;
   readonly reservable: boolean;
-  constructor(item: Element | Element[], reservable = false) { this.item = item; this.reservable = reservable; }
+  constructor(item: Element | Sequence, reservable = false) { this.item = item; this.reservable = reservable; }
 }
 
 class RelaxNode {
@@ -301,15 +304,15 @@ class RelaxNode {
   // tree-sitter-GLR-hostile and the highlighter can safely over-accept the rare malformed
   // form (see RuleExpr.group.tsRelaxed). Like ctx/exclude it lowers to a transparent group.
   readonly __kind = 'relax' as const;
-  readonly strict: Element[];
-  readonly relaxed: Element[];
+  readonly strict: Sequence;
+  readonly relaxed: Sequence;
   // When set, gen-treesitter emits `relaxed` ONCE as a shared rule of this name and renders
   // every reference as `$.<ruleName>`, instead of inlining `relaxed` at each site. Inlining a
   // relaxed form duplicates its states at every use; a shared rule keeps them in ONE place
   // (the difference is large — see issue #46). Visibility follows tree-sitter's `_`-prefix
   // convention (a leading `_` hides the node).
   readonly ruleName?: string;
-  constructor(strict: Element[], relaxed: Element[], ruleName?: string) { this.strict = strict; this.relaxed = relaxed; this.ruleName = ruleName; }
+  constructor(strict: Sequence, relaxed: Sequence, ruleName?: string) { this.strict = strict; this.relaxed = relaxed; this.ruleName = ruleName; }
 }
 
 class AtLevelNode {
@@ -421,8 +424,8 @@ export function exclude(connectors: string | string[], ...items: Element[]): Exc
 // Parse `strict` (in the parser and all generators) but render `relaxed` for tree-sitter.
 // For a parser-correct constraint that explodes / inflates the tree-sitter GLR table while
 // the highlighter doesn't need it. Each side is a single element or an array (a seq).
-export function tsRelax(strict: Element | Element[], relaxed: Element | Element[], ruleName?: string): RelaxNode {
-  return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed], ruleName);
+export function tsRelax(strict: Element | Sequence, relaxed: Element | Sequence, ruleName?: string): RelaxNode {
+  return new RelaxNode(isSequence(strict) ? strict : [strict], isSequence(relaxed) ? relaxed : [relaxed], ruleName);
 }
 
 // Mark a NUD alternative as a complete assignment-level expression (an ArrowFunction —
@@ -468,12 +471,12 @@ export function when(cond: string, ...items: Element[]): WhenNode { return new W
 
 // Zero-width negative lookahead: `not(x)` matches nothing and succeeds only when
 // `x` would NOT match here.
-export function not(item: Element | Element[]): NotNode {
+export function not(item: Element | Sequence): NotNode {
   return new NotNode(item);
 }
 // The bare-identifier reserved-word guard (notReservedExpr / notReserved): a `not`
 // a parser extends with await/yield inside those contexts (see NotNode).
-export function reservableNot(item: Element | Element[]): NotNode {
+export function reservableNot(item: Element | Sequence): NotNode {
   return new NotNode(item, true);
 }
 
@@ -612,7 +615,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   if (el instanceof RelaxNode) {
     // Transparent group: every consumer reads `body` (strict); only gen-treesitter
     // renders `tsRelaxed`.
-    const build = (items: Element[]): RuleExpr => items.length === 1
+    const build = (items: Sequence): RuleExpr => items.length === 1
       ? toRuleExpr(items[0], names)
       : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
     return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed), tsRuleName: el.ruleName };
@@ -634,7 +637,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   }
   if (el instanceof NotNode) {
     // an array is a seq here like everywhere else in the rule DSL
-    const body = Array.isArray(el.item)
+    const body = isSequence(el.item)
       ? { type: 'seq' as const, items: el.item.map(i => toRuleExpr(i, names)) }
       : toRuleExpr(el.item, names);
     return el.reservable ? { type: 'not', body, reservable: true } : { type: 'not', body };
@@ -655,7 +658,7 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
 // or its one item), or a named arm (what its items lower to, plus `arm`).
 function alternativeExpr(a: Alternative, names: Lowering): RuleExpr {
   if (a instanceof ArmNode) return { ...alternativeExpr(a.items, names), arm: a.name };
-  if (Array.isArray(a)) {
+  if (isSequence(a)) {
     if (a.length === 1) return toRuleExpr(a[0], names);
     return { type: 'seq' as const, items: a.map(el => toRuleExpr(el, names)) };
   }
@@ -684,7 +687,7 @@ interface GrammarConfig<R extends Record<string, RuleRef> = Record<string, RuleR
   // Highlight-only contextual token scopes: token T carries scope S within rule R (T's
   // immediate enclosing rule) — see Grammar.contextualScopes for generator fidelity.
   contextualScopes?: { token: TokenRef; within: RuleRef | RuleRef[]; scope: string }[];
-  entry: RuleRef;
+  entry?: RuleRef;       // omitted: the entry is the last rule (findEntryRule)
   markup?: MarkupConfig;  // opt-in markup-mode tokenization (HTML/Vue)
   elements?: ElementRegion;  // opt-in element regions entered from code (JSX), by token TYPE names like `markup`
   indent?: IndentConfig;  // opt-in indentation-sensitive tokenization (YAML)

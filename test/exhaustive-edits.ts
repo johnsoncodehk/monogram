@@ -21,7 +21,7 @@ const TMP = scratchDir('exhaustive-edits');
 // infix shapes through the seq machinery, idents and numbers collide at edits.
 const Ident = token(plus(oneOf(range('a', 'b'))), { identifier: true });
 const Num = token(plus(oneOf(range('0', '1'))), {});
-const Expr = rule(($: unknown) => [
+const Expr = rule(($) => [
   Ident,
   Num,
   ['(', sep($, ','), ')'],

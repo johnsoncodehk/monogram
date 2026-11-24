@@ -107,7 +107,7 @@ for (const path of paths) {
       case 'sep': return { syms: stepF(s.elem).syms, empty: true };
       case 'alt': return union(s.branches.map(seqF));
       case 'seq': case 'ctx': case 'suppress': return seqF(s.steps);
-      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'when': return { syms: new Set(), empty: true };
+      case 'look': case 'ahead': case 'aheadCtx': case 'sameLine': case 'when': case 'target': return { syms: new Set(), empty: true };
     }
   };
   for (let changed = true; changed;) {

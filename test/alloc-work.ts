@@ -49,10 +49,10 @@ const LINEAR_TOL = 0.01, GEOMETRIC_TOL = 0.5;
 const TOP_SITES = 15;
 
 const nm = (p: string) => readFileSync(new URL('../node_modules/' + p, import.meta.url), 'utf8');
-const TSSERVER = nm('typescript/lib/_tsserver.js');
+const TSSERVER = nm('tsc-oracle/lib/_tsserver.js');
 const INPUTS: Record<string, string> = {
   'acorn.js': nm('acorn/dist/acorn.js'),
-  'lib.es5.d.ts': nm('typescript/lib/lib.es5.d.ts'),
+  'lib.es5.d.ts': nm('tsc-oracle/lib/lib.es5.d.ts'),
   '_tsserver.js': TSSERVER,
   '_tsserver.js ×4': (TSSERVER + '\n').repeat(4),
 };
@@ -415,7 +415,7 @@ say(`Go rows measured with ${goVersion}. Which function an allocation is attribu
 say('commit: a 16 B slice growth in `(*engine).matchLit` under go1.27.4, in `(*engine).finish` under go1.26.11), so the');
 say('rows hold for this toolchain only.');
 say();
-say(`Inputs (locked npm packages): \`acorn@${pkgVersion('acorn')}\` \`dist/acorn.js\`, \`typescript@${pkgVersion('typescript')}\` \`lib/lib.es5.d.ts\` and \`lib/_tsserver.js\` (also repeated 4×: per-token counts must not grow with size).`);
+say(`Inputs (locked npm packages): \`acorn@${pkgVersion('acorn')}\` \`dist/acorn.js\`, \`typescript@${pkgVersion('tsc-oracle')}\` \`lib/lib.es5.d.ts\` and \`lib/_tsserver.js\` (also repeated 4×: per-token counts must not grow with size).`);
 say();
 say('Modes. TS target: `parse(src)` and `parseWith(src, cstBuilder)`: one engine, run with the CST builder; `parse` adds no step of its own.');
 say('JS target: `fresh` = a new `createParser()` per parse, `reuse` = one parser, its document reused. Go: `fresh` = a new');

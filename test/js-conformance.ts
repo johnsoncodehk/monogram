@@ -11,7 +11,7 @@
 //
 // JavaScript as a whole is measured against test262 (test/test262.ts, the specification's suite).
 import { createParser } from '../src/gen-parser.ts';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { isInputError } from './input-error.ts';
 
 const grammar = (await import('../javascript.ts')).default;

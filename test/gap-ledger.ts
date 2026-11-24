@@ -43,7 +43,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { parseAllDocuments } from 'yaml';
 import { parseFragment } from 'parse5';
 import { createParser, type CstNode } from '../src/gen-parser.ts';

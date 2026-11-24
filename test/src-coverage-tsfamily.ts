@@ -11,7 +11,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { createParser } from '../src/gen-parser.ts';
 import type { Adapter, AgreeResult, CorpusItem } from './src-coverage.ts';
 
@@ -99,7 +99,7 @@ export function tsFamilyAdapter(opts: TsFamilyOpts): Adapter {
   return {
     name: opts.name,
     oracle: 'accept/reject (bidirectional)',
-    urlMatch: (url) => url.includes('typescript/lib/typescript.js'),
+    urlMatch: (url) => url.includes('tsc-oracle/lib/typescript.js'),
     loadCorpus: (): CorpusItem[] => opts.corpus.map((c) => ({ code: c.code, origin: strip(c.file) })),
     warmup: () => {
       for (const w of ['const x=1;', 'class C{m(){}}', 'function*g(){yield 1}', 'x=>x', 'a?.b'])

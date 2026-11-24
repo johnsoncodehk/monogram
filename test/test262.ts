@@ -31,7 +31,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as acorn from 'acorn';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { parse as parseYaml } from 'yaml';
 import { createParser } from '../src/gen-parser.ts';
 import { isInputError } from './input-error.ts';

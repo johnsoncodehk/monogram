@@ -18,7 +18,7 @@ import { createRequire } from 'node:module';
 import { emitParser } from '../src/target.ts';
 import { jsTarget } from '../src/emit-parser.ts';
 import { writeFileSync } from 'node:fs';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { scratchDir } from './scratch.ts';
 
 const TMP = scratchDir('head-to-head');

@@ -206,6 +206,8 @@ export function engine(ir: ParserIR, mut: Mutation = null, obs: Observer = {}) {
       case 'when': return (ctx & s.mask) === s.val;
       case 'suppress': { suppressNext = s.set; const ok = all(s.steps, r); suppressNext = 0; return ok; }
       case 'ctx': { const c0 = ctx; ctx = s.ctx; const ok = all(s.steps, r); ctx = c0; return ok; }
+      // Not modelled (no grammar this engine runs declares a target context): say so, not a silent reject.
+      case 'target': throw new Error(`ir-engine: the declared target check (${s.ctx}) is not modelled`);
     }
   }
   const all = (steps: Step[], r: boolean) => { for (const x of steps) if (!step(x, r)) return false; return true; };

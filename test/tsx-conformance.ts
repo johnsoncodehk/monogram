@@ -20,7 +20,7 @@
 //
 //   4. Invalid TSX that must be REJECTED (near misses of the element region).
 import { createParser } from '../src/gen-parser.ts';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 
 const grammar = (await import('../typescriptreact.ts')).default;
 const { parse } = createParser(grammar);

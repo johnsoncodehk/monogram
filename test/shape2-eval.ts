@@ -25,7 +25,7 @@ import { normaliseEstree, parseEstree } from './shape-oracle-estree.ts';
 import { tscOracle } from './shape-oracle-tsc.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
-import tsc from 'typescript';
+import tsc from 'tsc-oracle';
 
 let passed = 0;
 const check = (name: string, fn: () => void): void => {
@@ -420,7 +420,7 @@ check('modules (both fixtures, against acorn and tsc)', () => {
 check('an escaped constructor name is the constructor (both shapes; tsc against its parser\'s kind)', () => {
   const src = String.raw`class C { \u0063onstructor() {} }` + '\n';
   const sf = tsc.createSourceFile('a.ts', src, tsc.ScriptTarget.Latest, true);
-  assert.equal(tsc.SyntaxKind[(sf.statements[0] as import('typescript').ClassDeclaration).members[0].kind], 'Constructor');
+  assert.equal(tsc.SyntaxKind[(sf.statements[0] as import('tsc-oracle').ClassDeclaration).members[0].kind], 'Constructor');
   type V = { kind: string; fields: Record<string, V & V[]> };
   const t = run(typescript, tscExprShape.spec, src) as V;
   assert.equal(t.fields.statements[0].fields.members[0].kind, 'Constructor');

@@ -20,7 +20,7 @@
 // contexts, iterators of `for...of` and destructuring (optimized code usually removes them),
 // numbers boxed as heap doubles. The model is deterministic, so a record of it is exact; the measured
 // `heapUsed` delta beside it says how close it is.
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 
 export type Kind = 'object' | 'array' | 'closure' | 'string' | 'map/set' | 'typed array' | 'other new' | 'array growth' | 'rest array';
 export type SiteInfo = { key: string; kind: string; text: string; fns: Set<string> };

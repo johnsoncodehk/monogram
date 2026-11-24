@@ -26,7 +26,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createParser } from '../src/gen-parser.ts';
 import * as acorn from 'acorn';
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';
 import python from '../python.ts';

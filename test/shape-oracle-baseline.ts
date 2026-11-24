@@ -13,7 +13,7 @@ import { conformanceFiles, formatReport, fromShapeAst, readCorpus, runCorpus, ty
 
 export const REALJS_LIST = '/home/linuxuser/.cache/monogram-agents/scratch/fix-grammar-queue-2/realjs-files.txt';
 export const libFiles = (): string[] => {
-  const dir = new URL('../node_modules/typescript/lib/', import.meta.url).pathname;
+  const dir = new URL('../node_modules/tsc-oracle/lib/', import.meta.url).pathname;
   return readdirSync(dir).filter((f) => /^lib\..*\.d\.ts$/.test(f)).sort().map((f) => dir + f);
 };
 export const realJsFiles = (): string[] => readFileSync(REALJS_LIST, 'utf-8').split('\n').filter(Boolean);

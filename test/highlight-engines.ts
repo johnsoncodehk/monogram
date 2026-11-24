@@ -54,7 +54,7 @@ const TS_FAMILY: Record<string, Family> = {
   type: 'type', 'type.builtin': 'type',
   function: 'value', 'function.method': 'value', 'function.builtin': 'value',
   variable: 'value', 'variable.parameter': 'value', 'variable.builtin': 'value',
-  constructor: 'value', namespace: 'value', constant: 'value',
+  constructor: 'value' as const,  // a key named `constructor` is not contextually typed: say its literal type namespace: 'value', constant: 'value',
   property: 'property',
   keyword: 'keyword', 'constant.builtin': 'keyword', boolean: 'keyword',
   number: 'literal', string: 'literal', 'string.special': 'literal', 'string.regexp': 'literal',

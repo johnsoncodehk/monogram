@@ -69,7 +69,7 @@ type Input = string | { name: string; text: string };
 const tsInputs: Input[] = [
   ...readdirSync(`${ROOT}src`).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}src/${f}`),
   ...readdirSync(ROOT).filter((f) => f.endsWith('.ts')).map((f) => `${ROOT}${f}`),
-  `${NM}/typescript/lib/typescript.d.ts`, `${NM}/typescript/lib/lib.es5.d.ts`,
+  `${NM}/tsc-oracle/lib/typescript.d.ts`, `${NM}/tsc-oracle/lib/lib.es5.d.ts`,
   ...corpus,
 ];
 const jsInputs: Input[] = [

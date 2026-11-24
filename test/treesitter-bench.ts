@@ -17,11 +17,11 @@
 //    cd tree-sitter/typescript && npx tree-sitter generate && npx tree-sitter build --wasm
 //    MONOGRAM_TS_WASM=tree-sitter/typescript/tree-sitter-typescript.wasm node test/treesitter-bench.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { existsSync } from 'node:fs';
 import { oracle } from './oracle.ts';
 import { ROLE_SPEC, roleFamily, acceptableFamilies } from './scope-roles.ts';
-import { loadTreeSitter, treesitterFamilies, loadMonogramTreeSitter, monogramTreesitterFamilies, monogramTreesitterCaptures, familyAt } from './highlight-engines.ts';
+import { loadTreeSitter, treesitterFamilies, loadMonogramTreeSitter, monogramTreesitterFamilies, monogramTreesitterCaptures, familyAt, type Span } from './highlight-engines.ts';
 import { tests as issueTests, multiLineTests as issueMultiLine } from './issue-cases.ts';
 
 const WASM = process.env.MONOGRAM_TS_WASM ?? 'tree-sitter/typescript/tree-sitter-typescript.wasm';
@@ -43,13 +43,13 @@ const corpus = [
 ];
 
 // Grade one engine's token-FAMILY classification against the tsc oracle.
-function score(spansOf: (code: string) => { start: number; end: number; family: string }[]): { correct: number; total: number } {
+function score(spansOf: (code: string) => Span[]): { correct: number; total: number } {
   let correct = 0, total = 0;
   for (const text of corpus) {
     const sf = ts.createSourceFile('c.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
     if (((sf as any).parseDiagnostics?.length ?? 0) > 0) continue; // grade only valid inputs
     let gold; try { gold = oracle(text); } catch { continue; }
-    let spans; try { spans = spansOf(text); } catch { spans = []; }
+    let spans: Span[]; try { spans = spansOf(text); } catch { spans = []; }
     for (const g of gold) {
       if (ROLE_SPEC[g.role].tier === 'lexical' || roleFamily(g.role) === 'punct') continue;
       const ok = acceptableFamilies(g.role);

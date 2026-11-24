@@ -104,7 +104,7 @@ function tmTokenize(grammar: vsctm.IGrammar, text: string): TmTok[] {
 
 // ── the run ──────────────────────────────────────────────────────────────────────────────────────
 async function runLang(cfg: LangCfg): Promise<{ name: string; ok: boolean; violations: number; reason: string }> {
-  if (!existsSync(cfg.tmPath)) { console.log(`  [skip ${cfg.name}: ${cfg.tmPath} not found — run npm run gen]`); return { name: cfg.name, ok: true, violations: 0 }; }
+  if (!existsSync(cfg.tmPath)) { console.log(`  [skip ${cfg.name}: ${cfg.tmPath} not found — run npm run gen]`); return { name: cfg.name, ok: true, violations: 0, reason: '' }; }
   const grammar = (await import(cfg.module)).default as Grammar;
   const { parse } = createParser(grammar);
   const tm = await loadTm(cfg.scopeName, { [cfg.scopeName]: cfg.tmPath, ...(cfg.tmExtra ?? {}) });

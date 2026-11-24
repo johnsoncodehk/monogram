@@ -275,7 +275,7 @@ const marks: Record<string, Term> = {
 };
 /** One object-literal member (the inner alternation `member`), after its modifiers (`async`). */
 const objectMember = (isAsync: boolean): Term => {
-  const modifiers = isAsync ? { modifiers: list(token('AsyncKeyword', 'asyncWord')) } : {};
+  const modifiers: Record<string, Term> = isAsync ? { modifiers: list(token('AsyncKeyword', 'asyncWord')) } : {};
   const sig = { typeParameters: child('typeParameters'), parameters: child('parameter'), type: returnType, body: branch('body', { block: child('block') }) };
   return branch('member', {
     ...(isAsync ? {} : { accessor: node(match(text('kind'), { get: c('GetAccessor'), set: c('SetAccessor') }), { name: child('key'), ...sig }) }),

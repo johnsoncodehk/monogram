@@ -12,7 +12,7 @@
 //  thicker html / yaml specifics (multi-file official loader, fullSpan, differential) live in their
 //  TABLE ENTRY, not a separate file.
 // ─────────────────────────────────────────────────────────────────────────────
-import ts from 'typescript';
+import ts from 'tsc-oracle';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parse as yamlParse, parseAllDocuments } from 'yaml';
