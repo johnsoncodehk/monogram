@@ -6,7 +6,7 @@
 // `f() = x;`, `[a, b] += x;`, `*a += x;`, `del *a;`, `a = f() = x;` have no parse.
 import {
   token, rule, defineGrammar, left, op, target, arm,
-  seq, oneOf, range, star, many, opt, sep,
+  seq, oneOf, range, star, many, opt, sep, alt,
 } from '../../src/api.ts';
 
 const identStart = oneOf(range('a', 'z'), range('A', 'Z'), '_');
