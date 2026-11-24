@@ -657,7 +657,7 @@ const ledOk = (x: Expr): Expr => and(
   not(call('riIn', add(x, n(10)), v('sup'))),
 );
 const finLed = (form: Expr): Stmt[] => [
-  run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('hl', call('enSh')), set('fm', form), set('prog', tru),
+  run('enFinLed', v('r'), v('sb'), v('leftOff'), v('start')), set('leftOff', call('enFinOff')), set('fm', form), set('prog', tru),
 ];
 // The led at record x matched: its node; capped by its trailing operand (capsFromTail), it returns
 // at once, still capped (PrattLowering.ledArm); else the tail closes when the led closes it.
@@ -675,7 +675,6 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
   let_('fm', call('enSt', n(ST_FORM))),
   if_(ne(call('enSt', n(ST_CAPPED)), n(0)), [ret(tru)]),
   let_('tc', call('enSt', n(ST_TAIL))),
-  let_('hl', call('enSh')),
   while_(tru, [
     let_('kid', call('enPeekKid')),
     if_(lt(v('kid'), n(0)), [brk]),
