@@ -261,6 +261,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const atoms: RuleExpr[] = [];
     const continuations: RuleExpr[][] = [];
     const contNotLeftLeaf: (string[] | null)[] = [];
+    const contAlts: RuleExpr[] = [];   // the arm each continuation was peeled from
     for (const alt of alts) {
       const items = alt.type === 'seq' ? alt.items : [alt];
       // A continuation may carry a leading `notLeftLeaf(...)` head-leaf guard before the self `$`.
@@ -269,9 +270,10 @@ export function analyzeGrammar(grammar: CstGrammar) {
       if (items[head]?.type === 'ref' && (items[head] as { name: string }).name === rule.name) {
         continuations.push(items.slice(head + 1));
         contNotLeftLeaf.push(guard ?? null);
+        contAlts.push(alt);
       } else atoms.push(alt);
     }
-    return { atoms, continuations, contNotLeftLeaf };
+    return { atoms, continuations, contNotLeftLeaf, contAlts };
   }
 
   // ── Left recursion = a left-corner cycle ──

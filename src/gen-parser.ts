@@ -428,6 +428,9 @@ export function createParser(grammar: CstGrammar) {
     // parsePratt (operator RHS) inherit it; a nested parseRule (bracketed group,
     // operand of a non-op LED) resets it — matching the spec's [~In] propagation.
     let suppressNext: Set<string> | null = null;
+    // The node before the item the current sequence is matching, for a target check that opens an
+    // opt / alternation branch (matchSeqTargets); undefined at a rule's start.
+    let targetPrev: CstChild | undefined;
     let suppressCur: Set<string> | null = null;
 
     // A reference to the template token, matched at the current position: the token itself (a
@@ -565,7 +568,7 @@ export function createParser(grammar: CstGrammar) {
 
     // Left-recursive rule without Pratt: parse atom then try continuations
     function parseLeftRec(rule: RuleDecl): CstNode | null {
-      const { atoms, continuations } = leftRecClassified.get(rule.name)!;
+      const { atoms, continuations, contAlts } = leftRecClassified.get(rule.name)!;
       const saved = pos;
 
       // Parse atom (longest match)
@@ -585,6 +588,7 @@ export function createParser(grammar: CstGrammar) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           node = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          tw?.built(node, atom);
           bestAtomPos = pos;
           const items = atom.type === 'seq' ? atom.items : [atom];
           tailClosed = selfRefName(items[items.length - 1], rule.name);
@@ -596,7 +600,7 @@ export function createParser(grammar: CstGrammar) {
       // Try continuations repeatedly
       outer: while (true) {
         const contSaved = pos;
-        for (const cont of continuations) {
+        for (const [ci, cont] of continuations.entries()) {
           // notLeftLeaf head-leaf gate: skip this continuation when the LEFT node's outermost (head)
           // leaf text is in its word set (e.g. `void`/`null`/`this` can't be `.`-qualified as a type).
           if (tailClosed && accessTailLeds.has(cont)) continue;
@@ -620,6 +624,7 @@ export function createParser(grammar: CstGrammar) {
               offset: node.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end,
             };
+            tw?.built(node, contAlts[ci]!);
             if (tailClosingLeds.has(cont)) tailClosed = true;
             continue outer;
           }
@@ -937,7 +942,9 @@ export function createParser(grammar: CstGrammar) {
           // match empty) — avoids speculatively parsing+failing rules like
           // DecoratorExpr/TypeParams at every position.
           if (!ruleMightStart(expr.name, peek())) return null;
+          const outerPrev = targetPrev; targetPrev = undefined;   // a rule's body starts with no node before it
           const node = parseRule(expr.name);
+          targetPrev = outerPrev;
           if (node && tw) tw.produced(node, expr);
           return node ? [node] : null;
         }
@@ -962,7 +969,9 @@ export function createParser(grammar: CstGrammar) {
           if (lvl !== null) {
             const r = (expr.body as { name: string }).name;
             if (!ruleMightStart(r, peek())) return null;
+            const outerPrev = targetPrev; targetPrev = undefined;
             const node = parsePratt(ruleByName.get(r)!, lvl);
+            targetPrev = outerPrev;
             return node ? [node] : null;
           }
           // A `suppress`-carrying group disables the listed LED connectors for the
@@ -1026,15 +1035,36 @@ export function createParser(grammar: CstGrammar) {
     function matchSeq(items: RuleExpr[]): CstChild[] | null {
       const saved = pos;
       const children: CstChild[] = [];
+      if (tw) return matchSeqTargets(items, saved, children);
       for (const item of items) {
         // Skip op/prefix/postfix markers in sequence (handled by Pratt)
         if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
-        // A declared target check (CstGrammar.targets): the node just before it passes the context.
+        const result = matchExpr(item);
+        if (result === null) { pos = saved; return null; }
+        children.push(...result);
+      }
+      return children;
+    }
+    // matchSeq in a grammar that declares target contexts (CstGrammar.targets): a target check
+    // reads the last NODE before it, in this sequence or, through an opt / alternation branch /
+    // group, in the one enclosing it (`targetPrev`: what the enclosing sequence had matched when
+    // it entered the item this sequence belongs to). declared-targets.ts admits a target only
+    // where that node is statically one rule's and the portable engine's form register holds it.
+    function matchSeqTargets(items: RuleExpr[], saved: number, children: CstChild[]): CstChild[] | null {
+      const outer = targetPrev;
+      const last = (): CstChild | undefined => {
+        for (let k = children.length - 1; k >= 0; k--) if (!('tokenType' in children[k]!)) return children[k];
+        return outer;
+      };
+      for (const item of items) {
+        if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
         if (item.type === 'target') {
-          if (!tw!.passes(children[children.length - 1], item.ctx, source)) { pos = saved; return null; }
+          if (!tw!.passes(last(), item.ctx, source)) { pos = saved; return null; }
           continue;
         }
+        targetPrev = last();
         const result = matchExpr(item);
+        targetPrev = outer;
         if (result === null) { pos = saved; return null; }
         children.push(...result);
       }

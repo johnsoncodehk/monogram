@@ -3,7 +3,7 @@
 // head is parsed once, as expressions, and checked where its tail is taken: `=` takes STAR targets
 // (a name, an attribute, a subscript, and tuples, lists, parenthesized and starred ones of them),
 // `+=` a SINGLE target (no tuple, list or star), `del` DEL targets (no star). `a + b = x;`,
-// `f() = x;`, `[a, b] += x;`, `*a += x;`, `del *a;` have no parse.
+// `f() = x;`, `[a, b] += x;`, `*a += x;`, `del *a;`, `a = f() = x;` have no parse.
 import {
   token, rule, defineGrammar, left, op, target, arm,
   seq, oneOf, range, star, many, opt, sep,
@@ -35,11 +35,12 @@ const Exprs = rule(() => [
   arm('one', Item),
 ]);
 
+// One arm for the expression statement and both assignments, as python.ts writes it: each target
+// check opens a branch of the tail and reads the head before it (through the `=` of a chain too).
+const Value = rule(($) => [[Exprs, opt('=', target('star'), $)]]);
 const Stmt = rule(() => [
-  arm('assign', Exprs, target('star'), '=', Exprs, ';'),
-  arm('aug', Exprs, target('single'), '+=', Exprs, ';'),
+  arm('simple', Exprs, opt(alt(['=', target('star'), Value], ['+=', target('single'), Exprs])), ';'),
   arm('del', 'del', Exprs, target('del'), ';'),
-  arm('expr', Exprs, ';'),
 ]);
 
 const Program = rule(() => [many(Stmt)]);
@@ -49,7 +50,7 @@ export default defineGrammar({
   scopeName: 'source.startargets',
   tokens: { Ident, Num },
   prec: [left('+')],
-  rules: { Expr, Item, Exprs, Stmt, Program },
+  rules: { Expr, Item, Exprs, Value, Stmt, Program },
   targets: {
     star: { leaves: ['name', 'attr', 'sub'], containers: { paren: 'all', list: 'all', tuple: 'all', starred: 'all' } },
     single: { leaves: ['name', 'attr', 'sub'], containers: { paren: 'all' } },
