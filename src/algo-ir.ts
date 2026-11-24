@@ -691,6 +691,8 @@ class Printer implements Cx {
       if (isList(pt)) return this.list(r);
       if (fn.params[i].ref) {
         if (a.k !== 'var') throw new Error(`algo-ir: ${e.fn} takes ${fn.params[i].name} by reference: pass a variable`);
+        // A parameter passed by reference is passed on as the reference it is.
+        if (this.cur?.params.some((p) => p.name === a.name && p.ref === true)) return r.c;
         return this.recL().refArg(r);
       }
       return r.c;
