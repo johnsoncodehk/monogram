@@ -144,7 +144,7 @@ function buildJsxDecls(hasTypes: boolean): { rules: RuleDecl[]; tokens: TokenDec
 // differs from the official's (it splits element/fragment/self-closing where the official splits
 // tag-with/without-attributes), so MOST JSX keys are deliberately NOT mapped — only a genuine 1:1
 // is aligned. `jsx-children`, `jsx-string-double-quoted`, `jsx-string-single-quoted` ALREADY match
-// by name (gen-tm never clobbers an existing key, so listing them is unnecessary). Verified 1:1:
+// by name (gen-textmate never clobbers an existing key, so listing them is unnecessary). Verified 1:1:
 //   • `jsx-entities` ← `jsx-entity` — the JSX character-entity construct (`&amp;`/`&#65;`/`&#x41;`),
 //     same emitted scopes (`constant.character.entity` + `punctuation.definition.entity`); the
 //     official name is the plural wrapper, Monogram's is the single match rule. A pure rename.
@@ -197,7 +197,7 @@ export function withJsx(base: Grammar, opts: { name: string; scopeName: string }
 
   // Inherit the base's canonical repo-key names (jsBaseCanonical for the JS base, the full TS map
   // for the TS base) and add the JSX delta, so both the `.jsx` and `.tsx` dialects emit the official
-  // names natively. Pure DATA merge — gen-tm only looks them up, so the engine stays agnostic.
+  // names natively. Pure DATA merge — gen-textmate only looks them up, so the engine stays agnostic.
   return {
     ...base, name: opts.name, scopeName: opts.scopeName, rules, tokens,
     // `>` closes a JSX tag (`<a>>b</a>`), so `>`-led operators are composed from single `>` tokens.

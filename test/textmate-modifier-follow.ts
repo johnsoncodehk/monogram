@@ -18,9 +18,9 @@
 // `async` and `lazy` also begin a computed member (`async [x];`), so a `<` / `(` the reading
 // misses would make them contextual.
 //
-// Run with: node test/tm-modifier-follow.ts
+// Run with: node test/textmate-modifier-follow.ts
 import { token, rule, defineGrammar, alt, many, opt, not, seq, plus, star, oneOf, range } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };

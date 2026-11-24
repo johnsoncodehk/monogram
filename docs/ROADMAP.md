@@ -78,7 +78,7 @@ evaluation asked for. That evaluation (a TSX dialect; reproduced on master `1d41
 parser accepts each dialect form but every form fails in at least one generator: 26 of its 38
 editor test cases fail and innermost-scope agreement is 80.0%. The causes are in the engine:
 
-- `src/gen-tm.ts` detects element syntax from the grammar, then emits a fixed repository of
+- `src/gen-textmate.ts` detects element syntax from the grammar, then emits a fixed repository of
   patterns that reads no rule (`generateJsxPatterns`), so a dialect's additions never reach
   the output; JSDoc has a built-in sub-grammar in the same way. No gate checks the generators
   for language-specific code; `test/agnostic.ts` covers the parser.
@@ -90,7 +90,7 @@ editor test cases fail and innermost-scope agreement is 80.0%. The causes are in
   field names exist, and only `highlights.scm` is generated. Generating the TypeScript and TSX
   parsers costs about 12 CPU-minutes each (10,085 and 12,847 states) against 5 s for
   JavaScript.
-- `gen-tm`'s alternative expansion runs out of memory on some grammar shapes (a second
+- `gen-textmate`'s alternative expansion runs out of memory on some grammar shapes (a second
   decorator run on class members), which has forced grammar rules to be written as lookahead
   instead of structure.
 

@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  tm-mutation.ts — MUTATION TESTING for the completeness gap-detector.
+//  textmate-mutation.ts — MUTATION TESTING for the completeness gap-detector.
 //
-//  The completeness checker (test/tm-completeness.ts) proves structural properties
+//  The completeness checker (test/textmate-completeness.ts) proves structural properties
 //  (closure, reachability, token discharge, leaf coverage). But "the checker passes"
 //  only means something if the checker can actually FAIL when there IS a gap. A clean
 //  pass on a blind checker is worthless — the exact corpus-blindness this project has
@@ -22,9 +22,9 @@
 //      Survivors here are the detector's MEASURED blind spots, reported not failed: they
 //      are the honest boundary docs/COMPLETENESS.md draws, made empirical.
 //
-//  Run:  node test/tm-mutation.ts
+//  Run:  node test/textmate-mutation.ts
 // ─────────────────────────────────────────────────────────────────────────────
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
@@ -32,7 +32,7 @@ import { buildRoleMap, leafRoles, spanBuckets, scopeAt, GEN_OPTS, type TmTok, ty
 import {
   checkReachability, tokenCensus, literalDischarge, leafCoverage, contentObligations, loadTmFromObject, tmTokenize,
   type TmGrammarJson, type LeafObligations,
-} from './tm-completeness.ts';
+} from './textmate-completeness.ts';
 
 // ── a mutation: a precise, kind-labelled fault injected into the emitted grammar ──
 type MutClass = 'presence' | 'correctness' | 'ordering';

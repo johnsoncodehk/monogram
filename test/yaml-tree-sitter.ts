@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-//  yaml-treesitter.ts — runtime gate for the DERIVED tree-sitter YAML grammar. Loads the wasm
+//  yaml-tree-sitter.ts — runtime gate for the DERIVED tree-sitter YAML grammar. Loads the wasm
 //  built from tree-sitter/yaml/grammar.js (+ src/scanner.c) and parses flow-entry and empty-key
 //  forms, checking that its accept/reject verdict (no ERROR/MISSING node) agrees with the
 //  Monogram interpreter on each case:
@@ -10,7 +10,7 @@
 //  Build the wasm first:
 //    cd tree-sitter/yaml && npx tree-sitter generate && npx tree-sitter build --wasm .
 //
-//  Run: node test/yaml-treesitter.ts
+//  Run: node test/yaml-tree-sitter.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { existsSync } from 'node:fs';
 import { createParser } from '../src/interpreter.ts';

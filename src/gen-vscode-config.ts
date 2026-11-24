@@ -4,7 +4,7 @@ import { tokenPatternBlockDelimiters, tokenPatternHasStartAnchor, tokenPatternLi
 
 // Generate a VS Code `language-configuration.json` from the grammar. This is the
 // editor-behavior artifact (comments, bracket pairs, auto-close/surround, folding,
-// indentation) — distinct from highlighting (gen-tm) — and is derived entirely from
+// indentation) — distinct from highlighting (gen-textmate) — and is derived entirely from
 // the grammar's token definitions, lexer hints, and `scopes` section.
 
 interface AutoPair { open: string; close: string; notIn?: string[]; }

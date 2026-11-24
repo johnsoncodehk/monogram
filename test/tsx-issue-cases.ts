@@ -20,7 +20,7 @@
 // `//` comment inside an open tag is scoped as a comment; real reported cascades both now handle.
 // Each of #794 / #754 / #585 was an only-official miss until the derived grammar caught up. #754 in
 // particular: the expression-start trigger learned to see past a leading block comment to the tag —
-// anchored on the operator BEFORE the comment, so `a /**/ <b>` stays a comparison — see gen-tm's
+// anchored on the operator BEFORE the comment, so `a /**/ <b>` stays a comparison — see gen-textmate's
 // `leadComments` / `blockCommentMatchers` (the block-comment regex is DERIVED, never hardcoded).
 // Every `src` was ground-truthed as valid JSX with tsc (ScriptKind.TSX, 0 parse diagnostics; the
 // node kind confirms a real JsxElement, not a generic arrow), so a failing check is a true miss.
@@ -85,7 +85,7 @@ export const cases: Case[] = [
 
   // #585 (both solve this now). A `//` line comment is legal inside the open tag, between
   // attributes. Monogram's open-tag attribute patterns now include the grammar's comment entries
-  // (derived, not hardcoded — see gen-tm's commentRepoKeys), so the `// …` line is scoped
+  // (derived, not hardcoded — see gen-textmate's commentRepoKeys), so the `// …` line is scoped
   // `comment.line.double-slash` like the official; a `/* */` block comment in the same position
   // works too. tsc: the element is a valid JsxSelfClosingElement with the comment skipped.
   { id: '#585', title: '`//` line comment inside a JSX open tag', src: `const a = <button\n  // hi\n/>;`,
@@ -95,7 +95,7 @@ export const cases: Case[] = [
   // The expression-start JSX trigger now sees past a leading block comment to the tag — its
   // lookbehind anchors on the operator BEFORE the comment (the `=` here) and a zero-width lookahead
   // skips the ws/comment run (the block-comment regex is DERIVED from the grammar, never hardcoded;
-  // see gen-tm's `leadComments`). So `<Element />` switches into JSX and `Element` is a tag, while
+  // see gen-textmate's `leadComments`). So `<Element />` switches into JSX and `Element` is a tag, while
   // `a /**/ <b>` (an operand precedes the comment) stays a comparison. tsc: JsxSelfClosingElement,
   // 0 diagnostics. (The official anchors on the comment-close `*​/` instead, so it also flips
   // `f /**/ <T>(x)` — a generic call — to a tag; Monogram keeps that a comparison.)
@@ -110,7 +110,7 @@ export const cases: Case[] = [
   // `span` as `meta.jsx.children`. The official has no recovery; Monogram does. The lone `<` here is
   // in JSX CHILDREN, where a bare `<` is ALWAYS a tag opener (tsc rejects a stray `<` in children —
   // `<div>a < b</div>` is a parse error), so it is UNAMBIGUOUS. Monogram adds a children-only
-  // multi-line tag-open (gen-tm's `jsx-element-multiline`): it opens on a lone `<` reaching EOL
+  // multi-line tag-open (gen-textmate's `jsx-element-multiline`): it opens on a lone `<` reaching EOL
   // (`(<)(?=\s*$)`) and recovers the name — plus attributes, type-args, children, and the matching
   // close — when they arrive on following lines. Scoped to children (never expression-start), so a
   // split comparison `a <\n b` or generic `f<\n T>` outside JSX is untouched. `span` → `entity.name.tag`.

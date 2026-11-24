@@ -94,7 +94,7 @@ const BinaryNumber = token(seq('0', oneOf('b', 'B'), plus(oneOf('0', '1')), star
 // DecimalLiteral, including the leading-dot form (`.5`, `.0e1`): an integer part with optional
 // fraction/exponent, OR a bare fraction `.digits` with optional exponent. Same trailing guard.
 // Scope is set explicitly (not inferred from a `[0-9]`-leading pattern) because the leading-dot
-// alternative makes the pattern start with `(?:` — gen-tm's decimal-numeric detector keys on a
+// alternative makes the pattern start with `(?:` — gen-textmate's decimal-numeric detector keys on a
 // `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
 // `. DecimalDigits?`: a separator stands between digits only (`1._5`, `1.5_` match no token). Written
 // with a lookahead rather than an optional DecimalDigits so the portable lexers never back up into it.
@@ -880,7 +880,7 @@ const ImportClause = rule($ => [
 ]);
 
 // A class declaration from its `class` keyword on. Decl writes it once bare and once after a
-// declaration's decorators (below); gen-tm expands it to recover the `class Ident … { … }` shape
+// declaration's decorators (below); gen-textmate expands it to recover the `class Ident … { … }` shape
 // for highlighting.
 const classDecl = ['class', ...bindingName, opt('extends', field('superClass', ClassHeritage)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')];
 const Decl = rule($ => [
@@ -942,14 +942,14 @@ export const jsScopes = {
   'keyword.control.trycatch': ['try', 'catch', 'finally', 'throw'],
   'keyword.control': ['debugger', 'with'],
   'keyword.control.import': ['import'],
-  // `defer` before a namespace import, scoped by position (gen-tm's phase-modifier handling), as in TypeScript.
+  // `defer` before a namespace import, scoped by position (gen-textmate's phase-modifier handling), as in TypeScript.
   'keyword.control.import.phase': ['defer'],
   'keyword.control.export': ['export'],
   'keyword.control.from': ['from'],
   'storage.type': ['let', 'const', 'var', 'using'],
   // `const` also carries this marker subtype — a no-op for the keyword's own color
   // (`storage.type` wins, being declared first), but it tells the highlighter generator
-  // that a `const` binding names a CONSTANT. See gen-tm's const-binding rule.
+  // that a `const` binding names a CONSTANT. See gen-textmate's const-binding rule.
   'storage.type.const': ['const'],
   'storage.type.function': ['function', 'constructor'],
   'storage.type.class': ['class'],
@@ -990,7 +990,7 @@ export const jsScopes = {
 // (`source.js#qstring-double`, `#comment`, `#punctuation-comma`, …) must be the names Monogram
 // NATIVELY emits. Monogram derives those keys under its OWN structural names (`#string-double`,
 // `#linecomment`/`#blockcomment`, `#scope-punctuation-separator-comma`, …), so this maps each
-// OFFICIAL name → the structural key(s) gen-tm derived for the SAME construct; gen-tm projects the
+// OFFICIAL name → the structural key(s) gen-textmate derived for the SAME construct; gen-textmate projects the
 // repository through it at generation time, emitting the canonical name NATIVELY (a STRING value
 // RENAMES the structural key — its old name ceases to exist — and rewrites every `#…` reference; an
 // ARRAY value SYNTHESISES the `{patterns:[…]}` union the official grammar itself writes, resolving
@@ -998,13 +998,13 @@ export const jsScopes = {
 // PURELY a naming projection — no `match`/`begin`/`name` changes — so emitted tokenization is
 // byte-for-byte unchanged (verified: test/repo-compat.ts + the byte-identical scope-array diff). The
 // NAMES are ECMAScript DATA and belong here (the grammar definition may know JS — it already carries
-// `jsScopes`); gen-tm only looks them up + substitutes, so the engine stays language-agnostic.
+// `jsScopes`); gen-textmate only looks them up + substitutes, so the engine stays language-agnostic.
 //
 // This file OWNS the shared ECMAScript vocabulary, so it owns these shared canonical names too;
 // typescript.ts imports + spreads this map and adds its TS-only entries (type-parameters, casts,
 // type-object, return-type, …). Every entry here was verified 1:1 against the official JavaScript
 // grammar (same construct + same emitted scope) — see the per-construct audit. Official names that
-// ALREADY name a real Monogram key (`expression`, `template`) are omitted (gen-tm never clobbers an
+// ALREADY name a real Monogram key (`expression`, `template`) are omitted (gen-textmate never clobbers an
 // existing key). Deliberately NOT mapped: `null-literal`/`undefined-literal` (Monogram folds
 // `null`+`undefined` into ONE `constant.language.null` key — official splits them, so neither is a
 // clean 1:1) and `numericConstant-literal` (NaN/Infinity — Monogram has no such key).
@@ -1093,7 +1093,7 @@ export default defineGrammar({
   canonicalRepoNames: jsBaseCanonical,
 
   entry: Program,
-  // The expression rule — lets gen-tm derive a `#expression` sub-grammar (used by
+  // The expression rule — lets gen-textmate derive a `#expression` sub-grammar (used by
   // expression-only embeds like Vue's `{{ }}`, where statements are invalid).
   expression: Expr,
 });

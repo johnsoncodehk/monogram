@@ -466,7 +466,7 @@ Differences from the interpreter, none visible in the token stream:
 
 ## What the generators need
 
-- Region-only tokens (`text`, `tagTokens`): no flat top-level match (done in `gen-tm` /
+- Region-only tokens (`text`, `tagTokens`): no flat top-level match (done in `gen-textmate` /
   `gen-monarch`; the element patterns paint them).
 - Code children: the element body patterns include the code grammar (`$self`) instead of the
   fixed JSX children repository.
@@ -484,8 +484,8 @@ Differences from the interpreter, none visible in the token stream:
 - Root region: today's markup TextMate output is that case; nothing changes unless `html.ts`
   moves.
 
-**TextMate: built** (`src/gen-tm.ts`, from `regionView` / `operandEntry` in `src/region-view.ts`
-and `directivesOf`): every item above except the root region, gated by `test/tm-dialect.ts` on
+**TextMate: built** (`src/gen-textmate.ts`, from `regionView` / `operandEntry` in `src/region-view.ts`
+and `directivesOf`): every item above except the root region, gated by `test/textmate-dialect.ts` on
 the two dialect fixtures (every row passes; a dialect needs only its grammar file). What a
 TextMate grammar cannot express, each a limitation stated where the pattern is built:
 

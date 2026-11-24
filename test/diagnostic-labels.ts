@@ -16,8 +16,8 @@ import { jsTarget } from '../src/target-js.ts';
 import { createParser } from '../src/interpreter.ts';
 import { objectify } from './emitted-obj.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range, type Grammar } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
-import { generateTreeSitter } from '../src/gen-treesitter.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
+import { generateTreeSitter } from '../src/gen-tree-sitter.ts';
 import { generateLanguageConfig } from '../src/gen-vscode-config.ts';
 import { scratchDir } from './scratch.ts';
 

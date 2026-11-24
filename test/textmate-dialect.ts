@@ -1,4 +1,4 @@
-// tm-dialect.ts — what the TextMate generator does for an element dialect that is not React.
+// textmate-dialect.ts — what the TextMate generator does for an element dialect that is not React.
 //
 // Two parts, both measured on grammars defined in the repository (no committed artifact):
 //   1. DIALECT rows: scope assertions on test/fixtures/elementdialect.ts (`@if` / `@each`
@@ -16,14 +16,14 @@
 // `xfail` with its reason and the editor-queue item expected to flip it. The gate fails when a
 // `pass` row fails (a regression) AND when an `xfail` row passes (flip its mark in the same
 // commit, so the record says what changed).
-//   node test/tm-dialect.ts           run, print failures and the counts
-//   node test/tm-dialect.ts --all     print every row with the scopes it saw
+//   node test/textmate-dialect.ts           run, print failures and the counts
+//   node test/textmate-dialect.ts --all     print every row with the scopes it saw
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import vsctm from 'vscode-textmate';
 import onig from 'vscode-oniguruma';
 import { token, rule, defineGrammar, seq, oneOf, range, star, sep, opt, many, alt, noneOf } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-tm.ts';
+import { generateTmLanguage } from '../src/gen-textmate.ts';
 import { createParser } from '../src/interpreter.ts';
 import type { Grammar } from '../src/types.ts';
 import dialect from './fixtures/elementdialect.ts';

@@ -98,14 +98,14 @@ const GATES: Gate[] = [
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },
   { group: 'conformance', name: 'html', args: ['test/html-conformance.ts'] },
-  { group: 'highlighter', name: 'tm-guards', args: ['test/tm-highlight-guards.ts'] },
-  { group: 'highlighter', name: 'tm-completeness', args: ['test/tm-completeness.ts'] },
-  { group: 'highlighter', name: 'tm-mutation', args: ['test/tm-mutation.ts'], tier: 'ci' },
-  { group: 'highlighter', name: 'tm-diagnostics', args: ['test/redcmd-tm-diagnostics.ts'] },
-  { group: 'highlighter', name: 'tm-lookahead-words', args: ['test/tm-lookahead-words.ts'] },
-  { group: 'highlighter', name: 'tm-modifier-follow', args: ['test/tm-modifier-follow.ts'] },
-  { group: 'highlighter', name: 'tm-dialect', args: ['test/tm-dialect.ts'] },
-  { group: 'highlighter', name: 'treesitter-assertions', args: ['test/treesitter-assertions.ts'] },
+  { group: 'highlighter', name: 'textmate-guards', args: ['test/textmate-highlight-guards.ts'] },
+  { group: 'highlighter', name: 'textmate-completeness', args: ['test/textmate-completeness.ts'] },
+  { group: 'highlighter', name: 'textmate-mutation', args: ['test/textmate-mutation.ts'], tier: 'ci' },
+  { group: 'highlighter', name: 'textmate-diagnostics', args: ['test/redcmd-textmate-diagnostics.ts'] },
+  { group: 'highlighter', name: 'textmate-lookahead-words', args: ['test/textmate-lookahead-words.ts'] },
+  { group: 'highlighter', name: 'textmate-modifier-follow', args: ['test/textmate-modifier-follow.ts'] },
+  { group: 'highlighter', name: 'textmate-dialect', args: ['test/textmate-dialect.ts'] },
+  { group: 'highlighter', name: 'tree-sitter-assertions', args: ['test/tree-sitter-assertions.ts'] },
   { group: 'highlighter', name: 'angle-depth', args: ['test/angle-depth-probe.ts'] },
   { group: 'highlighter', name: 'monarch-dialect', args: ['test/monarch-dialect.ts'] },
   { group: 'highlighter', name: 'monarch-dialect/agreement', args: ['test/monarch-dialect.ts', '--agreement'], tier: 'ci' },
@@ -114,7 +114,7 @@ const GATES: Gate[] = [
   { group: 'yaml', name: 'issue12-regressions', args: ['test/yaml-issue12-regressions.ts'] },
   // the YAML TextMate site checks, one section each (formerly depth-witnesses, depth-sites, flow-sites,
   // compact-nest-sites, deepest-sibling, blockscalar-depth)
-  { group: 'yaml', name: 'tm-sites', args: ['test/yaml-sites.ts'] },
+  { group: 'yaml', name: 'textmate-sites', args: ['test/yaml-sites.ts'] },
   { group: 'generative', name: 'scope≡role', args: ['test/generative.ts'] },
 ];
 // The QUICK tier (`--quick`, the loop of seconds): the affected gates of this list run (sampled where
@@ -127,9 +127,9 @@ const QUICK_GATES = new Set([
   'emit-parity/emit-reentrancy', 'emit-parity/parser-ir-library', 'core/recovery', 'core/template-holes', 'core/diagnostic-labels', 'core/issue-cases',
   'core/env-spec-regressions', 'core/nullable-rules', 'core/agnostic', 'core/tag-open-entry', 'core/left-recursion',
   'core/indent-extensions', 'core/text-dialect', 'conformance/js', 'conformance/tsx', 'conformance/jsx', 'conformance/html',
-  'conformance/ts-ast-structure', 'highlighter/tm-guards', 'highlighter/treesitter-assertions', 'highlighter/tm-dialect',
-  'highlighter/tm-diagnostics', 'highlighter/angle-depth', 'highlighter/monarch-dialect', 'highlighter/raw-text-case-sites',
-  'highlighter/tm-lookahead-words', 'highlighter/tm-modifier-follow', 'yaml/tm-sites', 'yaml/issue12-regressions',
+  'conformance/ts-ast-structure', 'highlighter/textmate-guards', 'highlighter/tree-sitter-assertions', 'highlighter/textmate-dialect',
+  'highlighter/textmate-diagnostics', 'highlighter/angle-depth', 'highlighter/monarch-dialect', 'highlighter/raw-text-case-sites',
+  'highlighter/textmate-lookahead-words', 'highlighter/textmate-modifier-follow', 'yaml/textmate-sites', 'yaml/issue12-regressions',
 ]);
 for (const g of GATES) if (QUICK_GATES.has(`${g.group}/${g.name}`)) g.quick = true;
 if (QUICK_GATES.size !== GATES.filter((g) => g.quick).length) throw new Error('check.ts: a QUICK_GATES name names no gate');

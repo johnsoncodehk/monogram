@@ -54,12 +54,12 @@ The old gates map to new ones as follows. Cases are each gate's own count line, 
 | highlighter/html-embed-js | highlighter/raw-text-case-sites | 16 + 7 → 16 cells + 7 checks |
 | highlighter/self-close-sites | generative/scope≡role | 6 languages, 32 cells → same |
 | generative/gap-ledger-selftest | generative/scope≡role (its mutation proof and classifier locks) | 13 → 6 moved, 7 ledger-only dropped |
-| yaml/depth-witnesses, depth-sites, flow-sites, compact-nest-sites, deepest-sibling, blockscalar-depth | yaml/tm-sites (`test/yaml-sites.ts`) | 22 + 16 + 8 + 57 + 576 + 72 → 751 |
+| yaml/depth-witnesses, depth-sites, flow-sites, compact-nest-sites, deepest-sibling, blockscalar-depth | yaml/textmate-sites (`test/yaml-sites.ts`) | 22 + 16 + 8 + 57 + 576 + 72 → 751 |
 | emit-parity/decision-dead | emit-parity/decision-report (the witnesses, then the dead alternatives; the pages are `npm run gen` outputs) | unchanged |
 | emit-parity/portable-targets/edits-1 … edits-5 | edits-1, edits-2 | unchanged (grammars regrouped) |
 | conformance/js-corpus | deleted, with `docs/JS-CONFORMANCE.md` (test262 is JavaScript's oracle) | |
 | generative/gap-ledger-check | deleted (`npm run ledger:check` remains, for gap-issues.yml) | |
-| highlighter/tm-capture-patterns | deleted (a pinned count with no decision attached) | |
+| highlighter/textmate-capture-patterns | deleted (a pinned count with no decision attached) | |
 | emit-parity/emit-size-record | not a gate: the profile job compares the record | |
 
 `conformance/test262` measures the JS grammar against test262, JavaScript's own conformance suite: every
@@ -79,7 +79,7 @@ oracle: [docs/SECOND-LANGUAGE.md](SECOND-LANGUAGE.md).
 
 `highlighter/monarch-dialect/agreement` (`node test/monarch-dialect.ts --agreement`, tier ci) runs
 the committed TextMate and Monarch grammars of javascript and typescript over the same real code and
-counts their disagreements by class against `test/tm-monarch-agreement.json`. It is a one-sided
+counts their disagreements by class against `test/textmate-monarch-agreement.json`. It is a one-sided
 record. It FAILS when a class rises above the record, when a new class appears, or when a corpus's
 agreement percentage falls. A class that FALLS passes, printing one line (`fell: … re-record when
 convenient`), for every class, small ones included: a disagreement that disappears is never a
@@ -122,7 +122,7 @@ the lockfile or `tsconfig.json` runs every gate. It prints each skipped gate and
 that no skipped gate of the inner tier could have seen the change: CI runs every gate with
 `CHECK_TRACE_DEPS=1`, which traces the files each gate opens and fails when one is not among its
 derived inputs. It does NOT run the `ci` tier (whole-corpus crosses and gates of more than about ten
-seconds: the portable-targets corpus / edits / recovery classes, test262, tm-mutation, look-extent,
+seconds: the portable-targets corpus / edits / recovery classes, test262, textmate-mutation, look-extent,
 …): those run in CI on every `land/**` push and on master, `--changed --all` runs them too, and a
 `ci`-tier gate whose own script changed runs in the inner loop (the change is to that gate). It
 assumes the generated artifacts are current (`npm run gen`). Inputs are split BY TARGET: each emit
@@ -204,7 +204,7 @@ the failing gate and message of the original CI run): of the 12 that reproduce, 
 
 What `--quick` does not run at all: a Rust parser of a real grammar, the Go parser of a real grammar
 unless the Go target changed, the Go / Rust library build and run, every `ci`-tier gate (the parity
-corpus, edits-1 / edits-2, recovery, wide, test262, look-extent, tm-mutation, ...), the native work
+corpus, edits-1 / edits-2, recovery, wide, test262, look-extent, textmate-mutation, ...), the native work
 and allocation gates (portable-work, lexer-work, lexer-reservation, builder-reuse,
 parser-ir-split, alloc-work), jsTarget's standalone type check (emit-standalone), and the
 generated artifacts' drift (CI runs `npm run gen` and diffs).
@@ -276,7 +276,7 @@ Neither subsumes the other. `check` (self-consistency) does **not** replace the 
 ## 4. Bench — on demand
 
 `npm run bench:perf`, `bench:html-official`, `bench:issues` (the bug ledger in `HIGHLIGHTER-EVIDENCE.md`, its summary in the README),
-`gate:treesitter`, `compat`. Informational — perf, official-comparison detail, repo-compat. Not gates.
+`gate:tree-sitter`, `compat`. Informational — perf, official-comparison detail, repo-compat. Not gates.
 
 ---
 
