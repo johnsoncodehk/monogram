@@ -13,6 +13,7 @@
 // reserved-aware "qualKeys" variant) and every parse CONTROL loop. The interpreter keeps its
 // loops independent so it remains a genuine oracle for the emitter's loops — an oracle sharing
 // the suspect machinery could not catch bugs in it.
+import { ZERO_WIDTH_MARKERS, isZeroWidthMarker } from './grammar-utils.ts';
 import type { CstGrammar, RuleExpr, RuleDecl, ElementRegion } from './types.ts';
 import { tokenPatternFirstCharSet } from './token-pattern.ts';
 
@@ -22,6 +23,7 @@ export interface OpInfo {
   assoc: 'left' | 'right' | 'none';
   position: 'infix' | 'prefix' | 'postfix';
   requireTarget?: boolean;
+  targetCtx?: string;   // the left operand must pass this declared target context (PrecOperator.targetCtx)
   // A capped prefix operator (PrecOperator.capped): it begins an operand only while minBp < capBp
   // (its own level's binding power).
   capBp?: number;
@@ -166,7 +168,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
       } else {
         const lbp = bp;
         const rbp = level.assoc === 'right' ? bp - 1 : bp;
-        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget });
+        opTable.set(op.value, { lbp, rbp, assoc: level.assoc, position: 'infix', requireTarget: op.requireTarget, ...(op.targetCtx !== undefined ? { targetCtx: op.targetCtx } : {}) });
         if (op.noUnaryLhs) noUnaryLhsOps.add(op.value);
         if (op.requireTarget) requireTargetOps.add(op.value);
       }
@@ -415,7 +417,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         const acc = new Set<string>();
         for (const item of e.items) {
           if (item.type === 'prefix') return null;               // prefix op → any operator token: give up
-          if (item.type === 'op' || item.type === 'postfix' || item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
+          if (item.type === 'op' || item.type === 'postfix' || isZeroWidthMarker(item.type)) continue;
           const f = exprFirst(item);
           if (f === null) return null;
           for (const k of f) acc.add(k);
@@ -433,7 +435,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         return acc;
       }
       case 'quantifier': case 'group': return exprFirst(e.body);
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Set();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Set();
       case 'sep': return exprFirst(e.element);
       default: return null;
     }
@@ -466,7 +468,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
     const acc = new Set<string>();
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
+      if (isZeroWidthMarker(item.type)) continue;
       if (item.type === 'op' || item.type === 'postfix') { for (const k of opKeys) acc.add(k); return acc; }
       if (item.type === 'prefix') { for (const k of prefixOps.keys()) acc.add(k); return acc; }
       const f = exprFirst(item);
@@ -479,7 +481,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
   function suffixNullable(items: RuleExpr[], j: number): boolean {
     for (let i = j; i < items.length; i++) {
       const item = items[i];
-      if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
+      if (isZeroWidthMarker(item.type)) continue;
       if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') return false;
       if (!exprNullable(item)) return false;
     }
@@ -497,7 +499,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         const items = e.items;
         for (let i = 0; i < items.length; i++) {
           const item = items[i];
-          if (item.type === 'not' || item.type === 'sameLine' || item.type === 'noCommentBefore' || item.type === 'noMultilineFlowBefore' || item.type === 'notLeftLeaf') continue;
+          if (isZeroWidthMarker(item.type)) continue;
           let isec: Sec;
           let itemNullable: boolean;
           if (item.type === 'op' || item.type === 'postfix' || item.type === 'prefix') {
@@ -549,7 +551,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         if (sec.len1) acc.add(e.delimiter);
         return { s: acc, len1: sec.len1 };
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
         return { s: new Set(), len1: false };
       case 'op': case 'prefix': case 'postfix':
         return { s: new Set(), len1: true };
@@ -581,7 +583,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
   // Pratt marker or a shape it does not follow). Per rule a fixpoint, as ruleSecond.
   type SecBy = Map<string, Sec>;
   const ruleSecondBy = new Map<string, SecBy | null>();
-  const isZeroWidth = (t: RuleExpr['type']) => t === 'not' || t === 'sameLine' || t === 'noCommentBefore' || t === 'noMultilineFlowBefore' || t === 'notLeftLeaf';
+  const isZeroWidth = isZeroWidthMarker;
   const addSec = (m: SecBy, k: string, x: Sec): void => {
     const o = m.get(k);
     if (o === undefined) m.set(k, { s: x.s === null ? null : new Set(x.s), len1: x.len1 });
@@ -632,7 +634,7 @@ export function analyzeGrammar(grammar: CstGrammar) {
         for (const [k, x] of m) addSec(out, k, extend(x, new Set([e.delimiter]), true));
         return out;
       }
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return new Map();
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return new Map();
       default: return null;
     }
   }
@@ -759,7 +761,7 @@ export function concreteFirst(grammar: CstGrammar, a: ReturnType<typeof analyzeG
     const out = new Set(m);
     return e.reservable ? (s) => !out.has(s) || lex.maybeWords.includes(s) : (s) => !out.has(s);
   };
-  const ZERO = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'op', 'postfix']);
+  const ZERO = new Set<RuleExpr['type']>([...ZERO_WIDTH_MARKERS, 'op', 'postfix']);
   function seqF(items: readonly RuleExpr[]): F {
     const syms = new Set<string>();
     const keeps: Keep[] = [];
