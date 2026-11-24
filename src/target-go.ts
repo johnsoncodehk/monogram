@@ -3443,8 +3443,8 @@ type diag struct{ Kind, Off, End, RelOff, RelEnd, Arg int }
 // The recovery interpreter's best longest-match candidate so far (recovery-family.ts BEST).
 type bestCand struct{ Pos, Off, Won, Form, Tail, Capped, H0, Hb int }
 // The words of a repair's message: a literal's text (by lid), a token kind's name, a rule's name.
-var lidTexts = []string{${ids.lids.map(J).join(', ')}}
-func litText(x int) string { return lidTexts[x] }
+// (the lexer's literal table _lids)
+func litText(x int) string { return _lids[x] }
 func kindText(x int) string { return kindStr[x] }
 func ruleText(x int) string { return RULE_NAMES[x] }
 ${shared.recoveryFamily(ir)}
