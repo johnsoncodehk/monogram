@@ -239,12 +239,16 @@ const riIn = method('riIn', [['l', 'int'], ['x', 'int']], ['bool'], [
   ret(fls),
 ]);
 // Whether Guard g admits the token at the position (-1: no guard). A guard that tests anything
-// refuses at the end of input, as the native candidate frame does.
+// refuses at the end of input, as the native candidate frame does. Recovering, its tests of the
+// token after (second, pairs: FIRST facts, which only skip a candidate that cannot match) are
+// waived where a repair can fire at that token (riNear): `if =>a)` tries the if statement, whose
+// '(' is missing there.
 const riGuardIn = method('riGuardIn', [['g', 'int']], ['bool'], [
   if_(lt(v('g'), n(0)), [ret(tru)]),
   if_(lt(call('enPeekKid'), n(0)), [ret(fls)]),
   if_(and(ge(at(v('g'), 0), n(0)), not(call('enAhead', at(v('g'), 0), tru))), [ret(fls)]),
-  if_(and(ge(at(v('g'), 1), n(0)), not(call('enSecondIn', at(v('g'), 1)))), [ret(fls)]),
+  let_('w', call('riNear', add(call('enPos'), n(1))), 'bool'),
+  if_(and(ge(at(v('g'), 1), n(0)), not(v('w')), not(call('enSecondIn', at(v('g'), 1)))), [ret(fls)]),
   let_('nl', at(v('g'), 2)),
   let_('i', n(0)),
   while_(lt(v('i'), v('nl')), [
@@ -258,7 +262,7 @@ const riGuardIn = method('riGuardIn', [['g', 'int']], ['bool'], [
   set('i', n(0)),
   while_(lt(v('i'), v('np')), [
     let_('x', add(add(v('pb'), n(1)), add(v('i'), v('i')))),
-    if_(and(call('enAhead', at(v('x'), 0), tru), not(call('enSecondIn', at(v('x'), 1)))), [ret(fls)]),
+    if_(and(not(v('w')), call('enAhead', at(v('x'), 0), tru), not(call('enSecondIn', at(v('x'), 1)))), [ret(fls)]),
     inc('i'),
   ]),
   let_('fs', R(add(add(v('pb'), n(1)), add(v('np'), v('np'))))),
@@ -382,27 +386,59 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   ]),
   // A repetition stops at a body that matches nothing (an interpreted loop drops a zero-width
   // iteration: termination T1); the native loop never meets one on input it accepts.
+  // Recovering, an element that fails where a repair fires (riRep) may follow an extra token: the
+  // token becomes an `$error` node and the element is tried after it (the extra token in a list).
   op(REC_S_STAR, [
     while_(tru, [
-      guarded([brk]),
       let_('p0', call('enPos')),
-      ...probe('pr', attempt('ok', call('riStep', S2R, v('d')))),
+      let_('ok', fls, 'bool'),
+      if_(and(ge(S1, n(0)), not(call('enAhead', S1, tru))), [run('riFail', v('p0'))], [
+        ...probe('pr', attempt('o1', call('riStep', S2R, v('d')))),
+        set('ok', v('o1')),
+      ]),
+      if_(and(not(v('ok')), ge(call('enPeekKid'), n(0)), call('riRep', v('p0'))), [
+        let_('ke', call('enMark')),
+        let_('ce', call('enSh')),
+        run('enLeafKid'),
+        run('riErrNode', v('ce'), v('p0')),
+        ...probe('pr', [set('ok', call('riStep', S2R, v('d')))]),
+        if_(v('ok'), [run('enUnmark', v('ke'))], [run('enReset', v('ke')), run('enUnmark', v('ke'))]),
+      ]),
       if_(or(not(v('ok')), eq(call('enPos'), v('p0'))), [brk]),
     ]),
     ret(tru),
   ]),
   op(REC_S_OPT, [guarded([ret(tru)]), ...probe('pr', attempt('ok', call('riList', S2R, v('d')))), ret(tru)]),
-  // elem (delim elem)*: a trailing delimiter stays matched.
+  // elem (delim elem)*: a trailing delimiter stays matched. Recovering, where the delimiter is not
+  // there and a repair fires (riRep): the token there is extra when the delimiter follows it (an
+  // `$error` node), else the delimiter is missing (a `$missing` node) before an element that
+  // consumes; a repaired delimiter whose element fails is undone with it.
   op(REC_S_SEP, [
     guarded([ret(tru)]),
     let_('el', S2R),
     ...probe('pr', attempt('ok', call('riStep', v('el'), v('d')))),
     if_(not(v('ok')), [ret(tru)]),
-    while_(call('enLit', S3), [
+    while_(tru, [
+      let_('pd', call('enPos')),
+      let_('km', call('enMark')),
+      let_('dl', call('enLit', S3), 'bool'),
+      let_('rp', fls, 'bool'),
+      if_(and(not(v('dl')), ge(call('enPeekKid'), n(0)), call('riRep', v('pd'))), [
+        set('rp', tru),
+        let_('ce', call('enSh')),
+        run('enLeafKid'),
+        run('riErrNode', v('ce'), v('pd')),
+        set('dl', call('enLit', S3)),
+        if_(not(v('dl')), [run('enReset', v('km')), run('riRepNode', T(TR(1)), n(DK_MISS_LIT), S3), set('dl', tru)]),
+      ]),
+      if_(not(v('dl')), [run('enUnmark', v('km')), brk]),
       let_('k2', call('enMark')),
       ...probe('pr2', [let_('ok2', call('riStep', v('el'), v('d')), 'bool')]),
-      if_(not(v('ok2')), [run('enReset', v('k2')), run('enUnmark', v('k2')), brk]),
-      run('enUnmark', v('k2')),
+      if_(or(not(v('ok2')), and(v('rp'), bin('le', call('enPos'), v('pd')))), [
+        if_(v('rp'), [run('enReset', v('km'))], [run('enReset', v('k2'))]),
+        run('enUnmark', v('km')), brk,
+      ]),
+      run('enUnmark', v('km')),
     ]),
     ret(tru),
   ]),
@@ -428,7 +464,19 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       ]),
       inc('i'),
     ]),
-    run('riFail', call('enPos')),
+    // Recovering, where no branch matched and a repair fires (riRep): the branches again in order,
+    // each required (no probe: its repairs fire at its first token), the first that matches (a
+    // statement's `asi()` supplies its ';').
+    let_('pa', call('enPos')),
+    if_(call('riRep', v('pa')), [
+      set('i', n(0)),
+      while_(lt(v('i'), S2), [
+        ...attempt('o2', call('riList', atR(add(add(v('s'), n(3)), add(v('i'), v('i'))), 1), v('d'))),
+        if_(v('o2'), [ret(tru)]),
+        inc('i'),
+      ]),
+    ]),
+    run('riFail', v('pa')),
     ret(fls),
   ]),
   op(REC_S_LOOK, [ret(eq(call('enLook', S1), eq(S2, n(1))))]),
@@ -712,9 +760,14 @@ const riMatch = method('riMatch', [['op', 'int'], ['x', 'int']], ['bool'], [
 // Whether a repair fires at token p (where a required item failed): a bar is near (in [p, p + 2])
 // and no probe is still unconsumed there; else the failure is recorded.
 const riRep = method('riRep', [['p', 'int']], ['bool'], [
+  if_(call('riNear', v('p')), [ret(tru)]),
+  run('riFail', v('p')),
+  ret(fls),
+]);
+// Whether a repair can fire at token p (riRep, nothing recorded).
+const riNear = method('riNear', [['p', 'int']], ['bool'], [
   let_('pr', rm(RM_PROBE)),
-  if_(or(and(ge(v('pr'), n(0)), bin('le', v('p'), v('pr'))), not(call('riBarIn', v('p'), add(v('p'), n(2))))), [run('riFail', v('p')), ret(fls)]),
-  ret(tru),
+  ret(and(or(lt(v('pr'), n(0)), gt(v('p'), v('pr'))), call('riBarIn', v('p'), add(v('p'), n(2))))),
 ]);
 // An `$error` node over the leaves from height c, the tokens from p to the position, and its repair.
 const riErrNode = method('riErrNode', [['c', 'int'], ['p', 'int']], [], [
@@ -917,7 +970,7 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 // marks, printed with the native forms).
 export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, labels: [number, string][] = []): Fn[] {
   return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpOf(rebind),
-    riRmDrop, riBarIn, riFail, riMatch, riRep, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
+    riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
 
