@@ -20,6 +20,7 @@ import { ATOM, COMPARISON, findAnyName, isNum, isOpt, isRec, isRecList, isValLis
 import type { ShapePlan } from './shape-plan.ts';
 import { cookTable } from './shape-cook.ts';
 import { type TextUnits, unitLen } from './text-units.ts';
+import { dropUnreferenced } from './js-unreferenced.ts';
 
 export type { ShapeSpec, ShapeIR } from './shape-schema.ts';
 
@@ -3449,9 +3450,9 @@ export const tsTarget = defineParserTarget({
       if (opts.shape.source !== grammar) throw new Error('tsTarget: the shape was defined on another grammar object than the one emitted');
       const plan = shared.shapePlan(opts.shape, ir);
       SHAPE = plan;
-      try { return emitTsLibrary(plan.ir, buildLexIdPlan(plan.ir), shared) + '\n' + shared.shapeFamily(plan); } finally { SHAPE = null; }
+      try { return dropUnreferenced(emitTsLibrary(plan.ir, buildLexIdPlan(plan.ir), shared) + '\n' + shared.shapeFamily(plan)); } finally { SHAPE = null; }
     }
-    return emitTsLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionTs(ir, shared) : '');
+    return dropUnreferenced(emitTsLibrary(ir, buildLexIdPlan(ir), shared) + (opts.recovery ? recoveryRegionTs(ir, shared) : ''));
   },
   emitRunner,
 });
@@ -3828,8 +3829,8 @@ export function emitTs(grammar: Grammar, opts?: { shape?: ShapeSpec }): string {
   const ir = portableIR(grammar, FACTS);
   const ids = buildLexIdPlan(ir);
   const base = emitTsLibrary(ir, ids, tsTarget.shared);
-  if (!opts?.shape) return base;
-  return base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids);
+  if (!opts?.shape) return dropUnreferenced(base);
+  return dropUnreferenced(base + emitShapeAstAddon(ir, validateShapeOrThrow(grammar, opts.shape), ids));
 }
 
 // ── A shape-building parser's runtime (emit option `shape`, src/shape-plan.ts) ──

@@ -30,6 +30,7 @@ import { analyzeGrammar, findEntryRule, markupContainerOf, type MarkupContainer,
 import { emitLexer, emitTokenColumns, lexSpecOf } from './lexer.ts';
 import type { Target } from './target.ts';
 import { syntaxKey } from './grammar-names.ts';
+import { dropUnreferenced } from './js-unreferenced.ts';
 
 // ── Static analysis ──
 // The STRUCTURAL analysis (precedence, NUD/LED + atom/continuation classification, left
@@ -1463,7 +1464,7 @@ function emitJsParser(grammar: Grammar): string {
   // ── parse() driver ──
   emitDriver(e);
 
-  return e.toString();
+  return dropUnreferenced(e.toString());
 }
 
 // ── Runtime: the generic engine state + control loops, emitted verbatim ──

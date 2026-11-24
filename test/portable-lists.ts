@@ -149,11 +149,18 @@ function unicodeParity(r: Runner, oracleOut: (src: string) => Outcome): void {
 const RESERVED_NAMES = RESERVED_RULES.map((r) => `, ${JSON.stringify(r)}`).join('');
 for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll()) {
   // Every module of this gate is emitted with total parsing (the emit option `recovery`), whose
-  // region is appended to the default module and changes none of it but the rule-name table, which
+  // region is added to the default module and changes none of it but the rule-name table, which
   // names the reserved rules after the grammar's (parser-ir.ts RESERVED_RULES): each module,
-  // that table read without them, begins with the default emission, byte for byte.
+  // that table read without them, has every line of the default emission, in order (a helper
+  // only the region calls is between them: an emission keeps only what something reaches).
+  const hasInOrder = (rec: string, def: string): boolean => {
+    const r = rec.split('\n');
+    let i = 0;
+    for (const l of def.split('\n')) { while (i < r.length && r[i] !== l) i++; if (i++ >= r.length) return false; }
+    return true;
+  };
   for (const e of emitted) {
-    if (e.rec.replace(RESERVED_NAMES, '').startsWith(e.def())) continue;
+    if (hasInOrder(e.rec.replace(RESERVED_NAMES, ''), e.def())) continue;
     gate.failures++;
     console.log(`  ${c.grammar}/${e.label}: the recovery emission does not begin with the default emission`);
   }
