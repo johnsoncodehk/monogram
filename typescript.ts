@@ -98,7 +98,10 @@ const DecoratorExpr = rule($ => [
 // would then mis-scope a function-type PARAMETER NAME as a type. A visible `type_fn_param`
 // node keeps the param name out of `type`'s direct children (→ @variable), while the `: T`
 // annotation stays a nested `type` node (→ `T` still @type).
-const typeFnParam = () => tsRelax(Param, [opt('...'), Ident, opt('?'), opt(':', Type)], 'type_fn_param');
+// The name is the param's own (an identifier or a destructuring pattern: `...[value]: [] | [T]`,
+// es2015.iterable.d.ts); only the `= Expr` default and the decorator, which a type never carries,
+// are left out.
+const typeFnParam = () => tsRelax(Param, [opt('...'), alt(Ident, BindingPattern), opt('?'), opt(':', Type)], 'type_fn_param');
 
 // tsc's isStartOfType: whether the token here can begin a type, read from the tokens alone. It is
 // what decides a `T?` (parsePostfixTypeOrHigher): before a type start the `?` is a conditional
