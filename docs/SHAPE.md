@@ -5,9 +5,16 @@
 > closed calculus of plain data ([`src/shape2-schema.ts`](../src/shape2-schema.ts)) with no escape
 > to code. **What v2 does today:** it is checked against its grammar when it is defined, and
 > EVALUATED over the interpreter's CST ([`src/shape2-eval.ts`](../src/shape2-eval.ts), the
-> reference). **What it does not do yet:** no emitted parser builds a v2 shape's AST, and no AST
-> type definitions are derived from one. `emitTs` / `emitRust` with `{ shape }` still take a v1
-> spec, which binds by POSITION; the sections from "v1: the positional ShapeSpec" down describe it.
+> reference). `emitParser(g, tsTarget, { shape })` builds its AST directly in the parse
+> ([`src/shape-plan.ts`](../src/shape-plan.ts)); `emitParser(g, rustTarget, { shape })` builds it as
+> TYPED data ([`src/shape-types.ts`](../src/shape-types.ts) derives the types: a struct per node
+> kind, an enum per union of kinds, closed string enums, lists, records; any site with no typed
+> form is a `ShapeTypeError` listing every one; [`src/rust-shape.ts`](../src/rust-shape.ts) prints
+> them: one arena per kind, `Id<Kind>`, `parse_shape(src)` -> `Ast` with `root()` and
+> `to_json()`), for a shape with no inherited attribute yet (the typed target refuses variants).
+> Gate `shape-typed-rust`: the typed AST's JSON ≡ the evaluator. `emitTs` / `emitRust` with
+> `{ shape }` still take a v1 spec, which binds by POSITION; the sections from "v1: the positional
+> ShapeSpec" down describe it.
 
 ## Writing a shape with defineShape
 
