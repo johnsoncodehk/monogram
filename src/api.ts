@@ -299,7 +299,7 @@ class RelaxNode {
   // A tree-sitter-only divergence: the PARSER (and every other generator) parses
   // `strict`; gen-treesitter renders `relaxed`. Use when a parser-correct constraint is
   // tree-sitter-GLR-hostile and the highlighter can safely over-accept the rare malformed
-  // form (see RuleExpr.group.tsRelaxed). Like ctx/exclude it lowers to a transparent group.
+  // form (see RuleExpr.group.treeSitterRelaxed). Like ctx/exclude it lowers to a transparent group.
   readonly __kind = 'relax' as const;
   readonly strict: Element[];
   readonly relaxed: Element[];
@@ -421,7 +421,7 @@ export function exclude(connectors: string | string[], ...items: Element[]): Exc
 // Parse `strict` (in the parser and all generators) but render `relaxed` for tree-sitter.
 // For a parser-correct constraint that explodes / inflates the tree-sitter GLR table while
 // the highlighter doesn't need it. Each side is a single element or an array (a seq).
-export function tsRelax(strict: Element | Element[], relaxed: Element | Element[], ruleName?: string): RelaxNode {
+export function treeSitterRelax(strict: Element | Element[], relaxed: Element | Element[], ruleName?: string): RelaxNode {
   return new RelaxNode(Array.isArray(strict) ? strict : [strict], Array.isArray(relaxed) ? relaxed : [relaxed], ruleName);
 }
 
@@ -611,11 +611,11 @@ function toRuleExpr(el: Element, names: Lowering): RuleExpr {
   }
   if (el instanceof RelaxNode) {
     // Transparent group: every consumer reads `body` (strict); only gen-treesitter
-    // renders `tsRelaxed`.
+    // renders `treeSitterRelaxed`.
     const build = (items: Element[]): RuleExpr => items.length === 1
       ? toRuleExpr(items[0], names)
       : { type: 'seq', items: items.map(i => toRuleExpr(i, names)) };
-    return { type: 'group', body: build(el.strict), tsRelaxed: build(el.relaxed), tsRuleName: el.ruleName };
+    return { type: 'group', body: build(el.strict), treeSitterRelaxed: build(el.relaxed), treeSitterRuleName: el.ruleName };
   }
   if (el instanceof AtLevelNode) return { type: 'group', body: toRuleExpr(el.rule, names), atLevel: el.operator };
   if (el instanceof CapExprNode) {

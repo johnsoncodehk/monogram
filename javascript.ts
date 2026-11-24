@@ -28,7 +28,7 @@ import {
   token, rule, defineGrammar,
   left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
   op, prefix, postfix, sameLine,
-  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, tsRelax, arm, field,
+  sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, treeSitterRelax, arm, field,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx, when,
   altPattern, optPattern, seq, oneOf, noneOf, range, anyChar, star, plus, repeat, notFollowedBy, start,
 } from './src/api.ts';
@@ -253,7 +253,7 @@ export const variableDeclaration = (kinds: string[], Binding) =>
 // tree-sitter renders no attributes: after a specifier, `with` would also begin a `with`
 // statement past an inserted `;`, which a CFG without lookahead cannot tell apart.
 const withEntry = (rest = '') => [field(`attributeKey${rest}`, alt(Ident, String_)), ':', field(`attributeValue${rest}`, String_)];
-export const moduleSpecifier = [field('source', String_), tsRelax(opt(field('withKeyword', 'with'), '{', opt(...withEntry(), many(',', ...withEntry('Rest')), opt(',')), field('attributesClose', '}')), [])];
+export const moduleSpecifier = [field('source', String_), treeSitterRelax(opt(field('withKeyword', 'with'), '{', opt(...withEntry(), many(',', ...withEntry('Rest')), opt(',')), field('attributesClose', '}')), [])];
 
 // ── Always-reserved words ──
 // The `Ident` token deliberately swallows keywords (they lex as identifiers), so

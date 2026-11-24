@@ -250,7 +250,7 @@ function slotPositions(items: RuleExpr[], gtComps: readonly string[], recordable
   };
   // The arm's own sequence through transparent groups and sequences (a group places no slot of its
   // own, so offsets are the same either way): the engine runs such an item's parts as steps of the
-  // arm's sequence (a tsRelax group's strict side), so a record can follow each of them. An item
+  // arm's sequence (a treeSitterRelax group's strict side), so a record can follow each of them. An item
   // the engine runs as one step stays one item.
   const flat = (e: RuleExpr): RuleExpr[] => (recordable(e) ? [e] : e.type === 'group' ? flat(e.body) : e.type === 'seq' ? e.items.flatMap(flat) : [e]);
   items = items.flatMap(flat);
@@ -631,7 +631,7 @@ function armTopSteps(r: RuleIR, key: string): Step[] | null {
 }
 /** An arm's own sequence with every `seq` step spliced in: a seq only groups (the arm conjoins its
  * steps either way), so the shape form runs its parts as the arm's steps and a record can follow
- * each of them (a tsRelax group's strict side is one seq step). */
+ * each of them (a treeSitterRelax group's strict side is one seq step). */
 function ownSeq(steps: Step[]): Step[] {
   return steps.some((s) => s.t === 'seq') ? steps.flatMap((s) => (s.t === 'seq' ? ownSeq(s.steps) : [s])) : steps;
 }
