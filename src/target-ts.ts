@@ -812,7 +812,7 @@ function tsSteps(ids: LexIdPlan, m: Mode): StepLowering {
     // A branch that fails clean (Step.clean) has nothing to undo: no frame.
     branch: (cond, clean) => (clean ? `{ if (${cond}) return true; }` : branchTs(cond, m)),
     guarded: (first, branch) => `if (_ft !== null && ${firstCond(first, '_ft', ids)}) ${branch}`,
-    choice: (peek, tries) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')} return false;`,
+    choice: (peek, tries, total) => `${peek ? 'const _ft = peek(); ' : ''}${tries.join(' ')}${total ? '' : ' return false;'}`,
     predictive: (arms) => `const t = peek(); if (t === null) return false; ${arms.map((a) => `if (${firstCond(a.first, 't', ids)}) ${a.branch}`).join(' else ')} return false;`,
     // A shape's step: its slot tagged; a marked body's slots preceded by the iteration marker.
     // A call of an rd rule that reads inherited attributes sets each (restored after the call); a
@@ -1108,7 +1108,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     opRow: `    const row = ${r.name}_ROW[t.lid]!;`,
     // on the row's dense led index (cases 1..k)
     ledSwitch: (cases) => `    switch (row >>> ${OP_ROW.ledShift}) {
-${cases.map((c) => `      case ${c.idx}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
+${cases.map((c) => `      case ${c.idx}:\n${c.arms.map((a) => `      ${a}`).join('\n')}${c.leaves ? '' : '\n        break;'}`).join('\n')}
     }`,
     postfixToks: (kids) => `    switch (t.kid) {
 ${kids.map((k) => `      case ${k}:
@@ -1145,9 +1145,9 @@ function parse${r.name}W(): boolean {
   _suppressCur = prev;
   return r;
 }`,
-    bpOpen: (label) => `function ${r.name}_bpW(minBp: number): boolean {
+    bpOpen: (label, nudBp) => `function ${r.name}_bpW(minBp: number): boolean {
   const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : dem.length ? ' const p0 = pos;' : ''}
-  if (!${r.name}_nudW(minBp)) return false;
+  if (!${r.name}_nudW(${nudBp ? 'minBp' : ''})) return false;
   let form = _form;
   if (_capped) return true;   // an assignment-level arrow admits no led
   let tailClosed = _tail;
@@ -1158,7 +1158,7 @@ function parse${r.name}W(): boolean {
   _form = form;
   return true;
 }`,
-    nudEnter: `function ${r.name}_nudW(minBp: number): boolean {
+    nudEnter: (bp) => `function ${r.name}_nudW(${bp ? 'minBp: number' : ''}): boolean {
   _capped = false;
   const t = peek();
   if (t === null) return false;`,
@@ -1298,7 +1298,6 @@ export type Builder<H> = {
   shift?(h: H, byteDelta: number, tokDelta: number): H;
 };
 let _builder: Builder<any> = null!;
-let _bSave = 0;
 // The child stack: the children of every node under construction, one SLOT per child, slots 0.._n-1.
 // A slot holds what the builder returned for the child in _hs, and its span in _sp, _SW int32s per
 // slot: off, end, tokStart, headOff, headEnd (the first leaf's span), kind — 1: one handle, 2: an
@@ -1342,7 +1341,6 @@ function _count(c: number): number {
 // The node over slots b.._n-1 replaces them as one slot at b: the builder's node, with the span
 // from the first child to the last and the first child's head.
 function _put(rule: string, b: number, off: number, end: number, tokStart: number, headOff: number, headEnd: number): void {
-  _bSave = tokStart;
   const r = _builder.node(rule, _kids(b), off, end);
   _n = b;
   _slot(r, r === null ? 0 : Array.isArray(r) ? 2 : 1, off, end, tokStart, headOff, headEnd);
@@ -1559,8 +1557,7 @@ function tryReuseW<H>(builder: Builder<H>, shift: (h: H, bd: number, td: number)
     const ka = reuseKids(oldEntries, prefixLen, prefixEnd, suffixStart + adoptFrom);
     const adoptedKids = oldRootHs.slice(ka, ka + adopted).map((h) => shift(h, byteDelta, tokDelta));
     const children: H[] = [...prefixKids, ...midKids, ...adoptedKids];
-    ${tsTake(['offset', 'end', 'tokStart', 'tokEnd'], 'reuseSpan', 'newEntries')}
-    _bSave = tokStart;
+    ${tsTake(['offset', 'end', '', 'tokEnd'], 'reuseSpan', 'newEntries')}
     const savePos = pos;
     pos = tokEnd;
     const r = builder.node(${J(entryCst)}, children, offset, end);
@@ -3358,7 +3355,7 @@ function ${findAnyName(stops)}(s: string, i: number): number {
     },
     fn: (f) => [
       ...(tsSlotted(f.retTys)
-        ? [`// ${f.name}'s values after the first (tsSlotted).`, `var ${f.rets.slice(1).map((t, i) => `${f.name}_r${i + 1}: ${t} = ${t === 'boolean' ? 'false' : '0'}`).join(', ')};`]
+        ? [`// ${f.name}'s values after the first (tsSlotted).`, f.rets.slice(1).map((t, i) => `var ${f.name}_r${i + 1}: ${t} = ${t === 'boolean' ? 'false' : '0'};`).join(' ')]
         : []),
       ...f.doc.map((l) => `// ${l}`),
       `function ${f.name}(${f.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): ${f.rets.length === 0 ? 'void' : f.rets.length === 1 || tsSlotted(f.retTys) ? f.rets[0] : `[${f.rets.join(', ')}]`} {`,
@@ -3431,9 +3428,10 @@ function ${findAnyName(stops)}(s: string, i: number): number {
 const tsSlotted = (ret: Ty[]): boolean => ret.length > 1 && ret.slice(1).every((t) => isNum(t) || t === 'bool');
 // The same read, printed where the hand-written runtime calls a family function of several numbers:
 // the element lexer's opens / frame / raw steps (src/lex-family.ts), the Doc's reuse bounds and
-// span (src/reuse-family.ts) and its alignment core (src/relex-family.ts).
+// span (src/reuse-family.ts) and its alignment core (src/relex-family.ts). A result nothing
+// reads is named '' and not read (the first one is the call itself).
 const tsTake = (names: string[], fn: string, args: string): string =>
-  names.map((n, i) => `const ${n} = ${i === 0 ? `${fn}(${args})` : `${fn}_r${i}`};`).join(' ');
+  names.map((n, i) => i === 0 ? `const ${n} = ${fn}(${args});` : n === '' ? '' : `const ${n} = ${fn}_r${i};`).filter((t) => t !== '').join(' ');
 
 // No callee-FIRST body guards: a JS rd call refused at its dispatch costs less than the guard's test
 // on every iteration (measured: TS blocks +0.19% to +0.53% on the real inputs with them).
@@ -3807,14 +3805,15 @@ if (_editFast || process.argv.includes('edit-session')) {
   if (root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
   process.stdout.write(_cstJSON(root));
 } else if (process.argv.includes('tok-spans')) {
-  // Parse-consumption spans via a builder reading the parser cursor (pos / _bSave).
+  // Parse-consumption spans via a builder reading the parser cursor (pos): a node begins at its
+  // first child (a punctuation leaf too), an empty one at the cursor.
   type _Span = { name: string; s: number; e: number; kids: _Span[] };
   const _root = parseWith<_Span>(_raw, {
-    leaf: (tokenType) => (tokenType === '$punct' ? null : { name: tokenType, s: pos, e: pos + 1, kids: [] }),
-    node: (rule, children) => ({ name: rule, s: _bSave, e: pos, kids: children }),
+    leaf: (tokenType) => ({ name: tokenType, s: pos, e: pos + 1, kids: [] }),
+    node: (rule, children) => ({ name: rule, s: children.length > 0 ? children[0]!.s : pos, e: pos, kids: children }),
   });
   if (_root === null) { process.stderr.write('parse error\\n'); process.exit(1); }
-  for (const k of _root.kids) process.stdout.write(k.name + '\\t' + k.s + '\\t' + k.e + '\\n');
+  for (const k of _root.kids) if (k.name !== '$punct') process.stdout.write(k.name + '\\t' + k.s + '\\t' + k.e + '\\n');
   process.stdout.write('total\\t0\\t' + pos + '\\n');
 } else {
   const _root = parse(_raw);

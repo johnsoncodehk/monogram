@@ -142,5 +142,20 @@ export function dropUnreferenced(src: string): string {
     const s = work.pop()!;
     for (const r of s.refs) for (const d of byName.get(r) ?? []) if (d !== s) keep(d);
   }
-  return stmts.filter((s) => kept.has(s)).map((s) => s.text).join('');
+  // A kept top-level variable that is only ever assigned is not read either: its declaration and
+  // its assignments go (an assignment that is a statement of its own, of a value without a call;
+  // where any occurrence is anything else, the variable stays).
+  const live = stmts.filter((s) => kept.has(s));
+  for (const s of live) {
+    if (s.names.length !== 1 || !/^(?:let|var) [\w$]+(?:: [\w$<>[\] |]+)? = [\w$.'"-]*;\s*$/.test(stripLead(s.text))) continue;
+    const nm = s.names[0]!.replace(/\$/g, '\\$');
+    const any = new RegExp(`(?<![\\w$.])${nm}(?![\\w$])`, 'g');
+    const write = new RegExp(`(^|[;{}]|\\n)([ \\t]*)${nm} = [\\w$.\\[\\] +\\-]*;`, 'g');
+    const users = live.filter((o) => o !== s && o.refs.has(s.names[0]!));
+    if (users.every((o) => (o.text.match(any) ?? []).length === (o.text.match(write) ?? []).length)) {
+      s.text = '';
+      for (const o of users) o.text = o.text.replace(write, '$1');
+    }
+  }
+  return live.map((s) => s.text).join('');
 }

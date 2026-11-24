@@ -1651,7 +1651,7 @@ export type StepLowering = {
   ctx(ctx: Ctx, cond: string): string;           // statements: cond in context ctx, the one in force put back after
   branch(cond: string, clean: boolean): string;  // a BRANCH frame: returns true when cond matched, else undoes it (clean: the branch fails clean, so there is nothing to undo and no mark)
   guarded(first: NonNullable<FirstSig>, branch: string): string;   // the branch, tried only when the next token is in first
-  choice(peek: boolean, tries: string[]): string;                  // the tries in order, then false; peek: a guard reads the next token
+  choice(peek: boolean, tries: string[], total: boolean): string;  // the tries in order, then false (total: the last try returns, nothing follows it); peek: a guard reads the next token
   predictive(arms: { first: NonNullable<FirstSig>; branch: string }[]): string;   // the one arm the next token selects, else false
   // A shape plan's step (Step.tag / Step.mark; only a shape-building form has it): `body`, the
   // step printed, and then its slot's tag set / its children preceded by the iteration marker.
@@ -1717,12 +1717,16 @@ export function stepStmts(s: Step, L: StepLowering): string {
       if (s.predictive) return L.predictive(s.branches.map((br, i) => ({ first: s.firsts![i]!, branch: L.branch(conjOf(br, L), clean(i)) })));
       const firsts = s.firsts ?? [];
       const n = s.branches.length;
-      const tries = s.branches.map((br, i) => {
+      // An empty unguarded branch always matches: it is the choice's last, and its end (no
+      // `false` after it); a branch after it is never tried.
+      const always = s.branches.findIndex((br, i) => br.length === 0 && !isFirstGuardable(firsts[i] ?? null, n));
+      const tried = always < 0 ? s.branches : s.branches.slice(0, always);
+      const tries = tried.map((br, i) => {
         const b = L.branch(conjOf(br, L), clean(i));
         const f = firsts[i] ?? null;
         return isFirstGuardable(f, n) ? L.guarded(f, b) : b;
       });
-      return L.choice(s.branches.some((_, i) => isFirstGuardable(firsts[i] ?? null, n)), tries);
+      return L.choice(tried.some((_, i) => isFirstGuardable(firsts[i] ?? null, n)), always < 0 ? tries : [...tries, L.ret('true')], always >= 0);
     }
     case 'suppress': return L.suppress(s.set, conjOf(s.steps, L));
     case 'ctx': return L.ctx(s.ctx, conjOf(s.steps, L));
@@ -1972,8 +1976,9 @@ export type PrattLowering = {
   // The buffered token's operator row (prattOpRow) as `row`: the loop's one table load, after
   // bpOpen; the led switch, postfixOp and binary read it.
   opRow: string;
-  // the led groups, by the row's dense led index (idx = row >> OP_ROW.ledShift, 1..k; key: the group's lid)
-  ledSwitch(cases: { key: number; idx: number; arms: string[] }[]): string;
+  // the led groups, by the row's dense led index (idx = row >> OP_ROW.ledShift, 1..k; key: the group's lid;
+  // leaves: the last arm is unconditional and leaves the loop, so nothing follows the arms)
+  ledSwitch(cases: { key: number; idx: number; arms: string[]; leaves: boolean }[]): string;
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
   postfixOp: string;                             // the postfix operator
@@ -1981,9 +1986,9 @@ export type PrattLowering = {
   binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry: string;                                 // the entry function (and the operator tables, where the target prints them beside it)
-  bpOpen(label: boolean): string;                // `bp` up to the loop's buffered token (label: a led continues the loop by name)
+  bpOpen(label: boolean, nudBp: boolean): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power)
   bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
-  nudEnter: string;                              // `nud` up to its buffered token `t` (none: no match)
+  nudEnter(bp: boolean): string;                 // `nud` up to its buffered token `t` (none: no match); bp: it takes the binding power (a capped arm reads it)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
   nudClose: string;
   nudEnd: string;                                // the end of `nud`'s function, where it has no frame (the commit switch decides every key)
@@ -2051,7 +2056,8 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   const { ledIdx } = prattOpRow(r, ids);
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
-    return { key: lid, idx: ledIdx.get(lid)!, arms: g.members.map(({ item: b, index: i }, j) =>
+    const leaves = exits.has(lid) && ledIf(g.members[g.members.length - 1]!.index) === '';
+    return { key: lid, idx: ledIdx.get(lid)!, leaves, arms: g.members.map(({ item: b, index: i }, j) =>
       `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null, r.ledCapsFromTail[i]!)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
@@ -2059,7 +2065,9 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   // A rule without postfix (binary) operators prints no postfix (binary) test: its row has no such
   // field, and a test that never passes still costs its instructions on every iteration.
   const hasBin = r.binary.length > 0, hasPost = r.postfix.length > 0;
-  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  // Only a capped arm reads the binding power in `nud` (capBelow): without one, nud takes none.
+  const nudBp = r.nudOrder.some((a) => a.kind === 'capped' || (a.kind === 'seq' && a.capBp !== undefined));
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
   // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
   // decides it, its guard's remaining tests, a capped arm's binding power.
   const tests = (t: CommitTest): string[] => {
@@ -2085,7 +2093,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
   };
   const commit = r.nudCommit === undefined ? [] : [commitWalk(r.nudCommit, ids, act, tests, L.commitSw)];
   const frame = r.nudCommit !== undefined && dispatchArms(d).size === 0 ? [L.commitFail, L.nudEnd] : [L.nudOpen, dispatchWalk(d, ids, nudArm, L.dispatch, false), L.nudClose];
-  const nud = [L.nudEnter, ...commit, ...frame].join('\n');
+  const nud = [L.nudEnter(nudBp), ...commit, ...frame].join('\n');
   return [L.entry, bp, nud].join('\n');
 }
 

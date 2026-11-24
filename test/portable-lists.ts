@@ -151,12 +151,13 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // Every module of this gate is emitted with total parsing (the emit option `recovery`), whose
   // region is added to the default module and changes none of it but the rule-name table, which
   // names the reserved rules after the grammar's (parser-ir.ts RESERVED_RULES): each module,
-  // that table read without them, has every line of the default emission, in order (a helper
-  // only the region calls is between them: an emission keeps only what something reaches).
+  // that table read without them, has every word of the default emission, in order (a helper or
+  // a variable only the region reads is between them: an emission keeps only what something
+  // reaches, src/js-unreferenced.ts).
   const hasInOrder = (rec: string, def: string): boolean => {
-    const r = rec.split('\n');
+    const r = rec.split(/\s+/);
     let i = 0;
-    for (const l of def.split('\n')) { while (i < r.length && r[i] !== l) i++; if (i++ >= r.length) return false; }
+    for (const w of def.split(/\s+/)) { while (i < r.length && r[i] !== w) i++; if (i++ >= r.length) return false; }
     return true;
   };
   for (const e of emitted) {

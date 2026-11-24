@@ -128,9 +128,9 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   Inside the portable lexers an error is a returned value, never a throw or panic used for
   control flow.
 - Total parsing is an emit option: `emitParser(grammar, target, { recovery: true })` appends a
-  region to the module (the default emission is unchanged: every line of it is in the module, in
-  order; the TypeScript module also has the helpers only the region calls, which the default one
-  leaves out; without the option the entry below does not exist). It adds TS
+  region to the module (the default emission is unchanged: all of it is in the module, in order;
+  the TypeScript module also has the helpers and variables only the region reads, which the
+  default one leaves out; without the option the entry below does not exist). It adds TS
   `parseTotal(src, builder) -> { root, errors }`, Go `ParseTotal(src, b) (h, ok, errs)`, Rust
   `parse_total(src, &mut b) -> (Option<H>, Vec<Diagnostic>)`. It never throws or panics on input:
   an accepted text gives `parseWith`'s root and no errors; a text the parser rejects gives a tree
