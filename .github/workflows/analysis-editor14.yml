@@ -1,0 +1,48 @@
+name: analysis (editor14, measurement only)
+on:
+  push:
+    branches: ['editor14/analysis']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  ts-src:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TS_REPO_SHA: 6fbce89821d93a5b761581d9ac540455f38e9acb
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: corpora and wasms
+        run: |
+          rm -rf /tmp/ts-repo; mkdir -p /tmp/ts-repo
+          git -C /tmp/ts-repo init -q
+          git -C /tmp/ts-repo remote add origin https://github.com/microsoft/TypeScript
+          git -C /tmp/ts-repo config core.sparseCheckout true
+          printf 'src/\n' > /tmp/ts-repo/.git/info/sparse-checkout
+          git -C /tmp/ts-repo fetch -q --depth 1 --filter=blob:none origin "$TS_REPO_SHA"
+          git -C /tmp/ts-repo checkout -q FETCH_HEAD
+          mkdir -p /tmp/w && gh run download "$(cat analysis/RUN)" -R "$GITHUB_REPOSITORY" -n wasm -D /tmp/w
+          ls -R /tmp/w | head
+      - name: analyse
+        run: |
+          export W=$PWD
+          mkdir -p /tmp/out
+          O=node_modules/@vscode/tree-sitter-wasm/wasm
+          T=/tmp/w/typescript/tree-sitter-typescript.wasm
+          node analysis/listspans.ts typescript $T /tmp/ts-repo src > /tmp/out/ts-list.txt
+          cut -d' ' -f1 /tmp/out/ts-list.txt | sort | uniq -c | tee -a "$GITHUB_STEP_SUMMARY"
+          MODE=spans node analysis/firstcause2.ts typescript $T /tmp/out/ts-other.jsonl $(grep '^other' /tmp/out/ts-list.txt | cut -d' ' -f2 | sed 's#^#/tmp/ts-repo/#') > /dev/null || true
+          MODE=error node analysis/firstcause2.ts typescript $T /tmp/out/ts-error.jsonl $(grep '^ERROR' /tmp/out/ts-list.txt | cut -d' ' -f2 | sed 's#^#/tmp/ts-repo/#') > /dev/null || true
+          EXPR_FROM=$O/tree-sitter-javascript.wasm node analysis/official.ts typescript $T $O/tree-sitter-typescript.wasm /tmp/ts-repo /tmp/out/off-ts.json src | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: analysis
+          retention-days: 5
+          path: /tmp/out
