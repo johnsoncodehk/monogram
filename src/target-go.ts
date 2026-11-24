@@ -11,7 +11,7 @@
 // warmed parser allocates ~nothing per parse.
 import { type ParserIR, type MarkForm, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, hasUnaryNud, demandTwinCond, demandLids, DEFER_SHIFT, type DemandIR, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tplHoleRules, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1127,6 +1127,27 @@ func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 }`;
 }
 
+// The operator row of a Pratt rule (emit-portable prattOpRow) at the lid in \`lid\`: the index masked
+// to the table's power-of-two length, so the compiler proves it in range (no bounds check).
+const goRowAt = (r: PrattRule, ids: LexIdPlan, lid: string): string => `row_${r.name}[${lid}&${prattOpRow(r, ids).size - 1}]`;
+// The binary operator read through the row (`row`, loaded at the loop's top: PrattLowering.opRow):
+// the composite read (gtOp) only at a lead lid (the row's lead bit), then that operator's row; lbp 0
+// is no operator (every lbp is >= 1, minBp >= 0).
+function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean, dem: boolean): string {
+  // opLid is read by the composite read, a target context's switch (binLeftOps) and a demand operator's tests only
+  const lid = ids.gtComps.length > 0 || binLeftOps(prattOpTables(r, ids)).length > 0 || dem;
+  const head = `\t\t${lid ? 'opLid, ' : ''}opN${withEnd ? ', opEnd' : ''} := ${lid ? 't.Lid, ' : ''}1${withEnd ? ', t.End' : ''}
+`;
+  const lead = ids.gtComps.length === 0 ? '' : `\t\tif row&${OP_ROW.lead} != 0 {
+\t\t\topLid, opN, ${withEnd ? 'opEnd' : '_'} = gtOp(p.toks, p.pos)
+\t\t\tif e := p.pos + opN + 1; e > p.maxLook { p.maxLook = e }
+\t\t\trow = ${goRowAt(r, ids, 'opLid')}
+\t\t}
+`;
+  return `${head}${lead}\t\tlbp := int(row & ${OP_ROW.bpMask})
+\t\tif lbp <= minBp { break }
+\t\tinfoTgt, infoNoUnary, infoRbp := row&${OP_ROW.test} != 0, row&${OP_ROW.noUnary} != 0, int((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.bpMask})`;
+}
 // The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
 // its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
 function gtOpRead(ids: LexIdPlan, withEnd: boolean): string {
@@ -1388,9 +1409,10 @@ ${headUse}\tfor {
 // The Go spelling of a Pratt rule's shell (emit-portable.ts, prattShell), common to its two
 // engines. Every frame is printed in place, not called: Go inlines no function past its budget,
 // and a helper over the loop's locals is past it.
-const goPrattBase = (r: PrattRule, leftLeaf: (words: string) => string) => {
+const goPrattBase = (r: PrattRule, ids: LexIdPlan, leftLeaf: (words: string) => string) => {
   const d = r.nudDispatch;
   return {
+    opRow: `\t\trow := ${goRowAt(r, ids, 't.Lid')}`,
     ifAll: ifGo,
     kidIs: (k: number) => `t.Kid == ${k}`,
     lidIs: (l: number) => `t.Lid == ${l}`,
@@ -1406,8 +1428,9 @@ const goPrattBase = (r: PrattRule, leftLeaf: (words: string) => string) => {
       notSuppressed: (set: number) => `p.suppressCur != ${set}`,
       ifAll: (parts: string[]) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledSwitch: (cases: { key: number; arms: string[] }[]) => `\t\tswitch t.Lid {
-${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('\n')}`).join('\n')}
+    // on the row's dense led index (cases 1..k): a jump table whatever the lids
+    ledSwitch: (cases: { key: number; idx: number; arms: string[] }[]) => `\t\tswitch row >> ${OP_ROW.ledShift} {
+${cases.map((c) => `\t\tcase ${c.idx}:\n${c.arms.map((a) => `\t\t\t${a}`).join('\n')}`).join('\n')}
 \t\t}`,
     nudPeek: `\tp.capped = false
 \tt := p.peek()`,
@@ -1435,9 +1458,10 @@ function prattFormGo(r: PrattRule, ir: ParserIR, ids: LexIdPlan) {
     // form is a constant.
     // A demand operator (DemandIR): its node is ASSIGNED (binDem), a left operand with a twin
     // number goes to the cold demand_<rule> (demandFnsGo); p0 is the left operand's mark.
-    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(info.tgt, opLid, form)` : ''}` : dem.length ? `binDem_${r.name}(info.tgt, opLid)` : '1',
+    bin: r.binForm ? `${1 | r.binForm.leaf}${binLeftOps(prattOpTables(r, ids)).some((o) => o.acc) ? ` | binKeep_${r.name}(infoTgt, opLid, form)` : ''}` : dem.length ? `binDem_${r.name}(infoTgt, opLid)` : '1',
     tgt: binLeftOps(prattOpTables(r, ids)).length ? `binFail_${r.name}(opLid, form)` : dem.length ? `(form&3 != 0 || form&${D!.defer} != 0 && !p.demand_${r.name}(int(opLid), int(form), p0, p.pos))` : `${lowGo(ir, 'form')} != 0`,
     p0: dem.length ? '\n\tp0 := p.pos' : '',
+    dem: dem.length > 0,
     lf: (f: string) => lowGo(ir, f),
   };
 }
@@ -1453,7 +1477,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     `bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
-  const B = goPrattBase(r, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
+  const B = goPrattBase(r, ids, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
   const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
@@ -1512,19 +1536,18 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tnode := p.matchTemplate_${hole}()
 \t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = ${fin}; form = ${T.tpl}; continue LedLoop }
 \t\t}`,
-    postfixOp: `\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
-\t\t\tif post.tgt && ${T.lf('form')} != 0 { return -1 }
+    postfixOp: `\t\tif row&${OP_ROW.bpMask << OP_ROW.postShift} != 0 && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
-    binary: `${gtOpRead(ids, false)}
-\t\tinfo := bin_${r.name}[opLid]
-\t\tif !info.ok || info.lbp <= minBp { break }
-\t\tif info.tgt && ${T.tgt} || info.noUnary && ${T.lf('form')} == 2 { return -1 }
+    noBinary: '\t\tbreak\n\t}',
+    binary: `${goRowOpRead(r, ids, false, T.dem)}
+\t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return -1 }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos))
 \t\tp.pos += opN
-\t\trhs := p.bp_${r.name}(info.rbp)
+\t\trhs := p.bp_${r.name}(infoRbp)
 \t\tif rhs < 0 { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tp.scratch = append(p.scratch, rhs)
 \t\tleft = ${fin}
@@ -1546,6 +1569,7 @@ func (p *engine) parse${r.name}() int32 {
 \tform := p.form
 \tif p.capped { return left }
 \ttailClosed := p.tail
+\t_ = tailClosed // Go refuses an unread local: a rule without postfix or binary operators may not read it
 ${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
@@ -1572,9 +1596,7 @@ ${B.nudClose}
  *  map[uint16] would hash on every LED iteration and every prefix NUD. */
 function goPrattOpTables(r: PrattRule, ids: LexIdPlan, D?: DemandIR): string {
   const ops = prattOpTables(r, ids);
-  const bin = ops.bin.map((b) => `${b.lid}: {${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}, true}`).join(', ');
   const pre = ops.pre.map((p) => `${p.lid}: {${p.rbp}, ${p.tgt}, ${p.form}, true}`).join(', ');
-  const post = ops.post.map((p) => `${p.lid}: {${p.lbp}, ${p.tgt}, true}`).join(', ');
   // The operators a target context reads (emit-portable binLeftOps), behind the table's test bit:
   // does the left operand fail its context (binFail), the pass bits the node keeps from it (binKeep).
   const left = binLeftOps(ops), keep = left.filter((o) => o.acc);
@@ -1598,9 +1620,11 @@ func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
   const dem = demandLids(r, ids, D);
   const demFn = dem.length ? `
 func binDem_${r.name}(tgt bool, op uint16) uint8 { if tgt && (${dem.map((l) => `op == ${l}`).join(' || ')}) { return ${1 | D!.assigned} }; return 1 }` : '';
-  return `var bin_${r.name} = [${ops.size}]bp{${bin}}${fns}${demFn}
-var pre_${r.name} = [${ops.size}]preOp{${pre}}
-var post_${r.name} = [${ops.size}]postOp{${post}}`;
+  const row = prattOpRow(r, ids);
+  // the operator row (emit-portable prattOpRow), its nonzero entries keyed by lid
+  const rowInit = row.rows.flatMap((v, lid) => (v ? [`${lid}: ${v}`] : [])).join(', ');
+  return `var row_${r.name} = [${row.size}]uint32{${rowInit}}${fns}${demFn}
+var pre_${r.name} = [${ops.size}]preOp{${pre}}`;
 }
 
 // The relex of an edit (both Docs). A lexer error in the relex is the text's own (the relexed
@@ -2144,7 +2168,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     `found = true; bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
-  const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
+  const B = goPrattBase(r, ids, (ws) => `!p.nllBlockedW(${ws}, left)`);
   const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
@@ -2203,19 +2227,18 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\t\tleft = ${fin}; form = ${T.tpl}; continue LedLoop
 \t\t\t}
 \t\t}`,
-    postfixOp: `\t\tif post := post_${r.name}[t.Lid]; post.ok && !tailClosed && post.lbp > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
-\t\t\tif post.tgt && ${T.lf('form')} != 0 { return spanned{}, false }
+    postfixOp: `\t\tif row&${OP_ROW.bpMask << OP_ROW.postShift} != 0 && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
+\t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
 \t\t}`,
-    binary: `${gtOpRead(ids, true)}
-\t\tinfo := bin_${r.name}[opLid]
-\t\tif !info.ok || info.lbp <= minBp { break }
-\t\tif info.tgt && ${T.tgt} || info.noUnary && ${T.lf('form')} == 2 { return spanned{}, false }
+    noBinary: '\t\tbreak\n\t}',
+    binary: `${goRowOpRead(r, ids, true, T.dem)}
+\t\tif infoTgt && ${T.tgt} || infoNoUnary && ${T.lf('form')} == 2 { return spanned{}, false }
 \t\tledSave := p.pos; sb := len(p.scratch)
 \t\tp.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, opEnd)
 \t\tp.pos += opN
-\t\trhs, rok := p.bpW_${r.name}(info.rbp)
+\t\trhs, rok := p.bpW_${r.name}(infoRbp)
 \t\tif !rok { p.back(ledSave); p.scratch = p.scratch[:sb]; break }
 \t\tif rhs.present { p.scratch = append(p.scratch, rhs.h) }
 \t\tleft = ${fin}
@@ -2236,6 +2259,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \tform := p.form
 \tif p.capped { return left, true }
 \ttailClosed := p.tail
+\t_ = tailClosed // Go refuses an unread local: a rule without postfix or binary operators may not read it
 ${label ? 'LedLoop:\n' : ''}\tfor {
 \t\tt := p.peek()
 \t\tif t == nil { break }`,
