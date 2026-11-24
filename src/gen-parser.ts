@@ -1,8 +1,7 @@
 import type { CstGrammar, RuleExpr, RuleDecl } from './types.ts';
-import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
+import { CTX_SPAN, ctxReserves, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
-import { withAwaitYield } from './await-yield-fork.ts';
 import { targetWalker } from './declared-targets-cst.ts';
 
 // ── CST output ──
@@ -41,9 +40,8 @@ export function createParser(grammar: CstGrammar) {
     tokenizers.set(grammar, lex);
   }
   const tokenize = lex;
-  // [Await]/[Yield] fork — same rule-identity space as the emitted parser (no-op
-  // without ctx markers). Keeps the interp ≡ emit equivalence the gates compare.
-  grammar = withAwaitYield(grammar);
+  // The context word's value under each context marker (grammar-utils.ts ctxWordOfMode).
+  const splitSync = readsSyncFn(grammar);
   const tokenNames = new Set(grammar.tokens.map(t => t.name));
 
 
@@ -60,7 +58,7 @@ export function createParser(grammar: CstGrammar) {
     ledPrecByConnector, binaryConnectors, nudCapOf, atLevelBp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
-    firstSets, exprFirst, exprSecond,
+    firstSets, exprFirst, exprSecond, ctxObserve,
   } = analyzeGrammar(grammar);
   // Declared target contexts (declared-targets-cst.ts): the predicate as a walk over the CST; absent, nothing is recorded.
   const tw = grammar.targets && Object.keys(grammar.targets).length ? targetWalker(grammar, ruleByName.values(), tokenNames) : null;
@@ -354,7 +352,12 @@ export function createParser(grammar: CstGrammar) {
     // that are not bypass the memo — see parseRule). The result includes the node's
     // cap (`_prattCapped`): a hit restores it, so a construct that reads it after a
     // trailing self operand (cap propagation) sees the same flag as a fresh parse.
+    // An entry is keyed by (position, the context word masked by what the rule reads: ctxObserve).
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number; capped: boolean }>>();
+    // The context word in force (grammar-utils.ts CTX_PARAMS; docs/GRAMMAR.md "Contexts"): set by a
+    // context marker for its body and put back after it, read by a `when`, a gated prefix operator
+    // and a reserved-word guard. A rule's parse is a function of (position, word & ctxObserve).
+    let ctxWord = 0;
     let memoVerifying = false;   // inside a MEMO_VERIFY re-parse
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
@@ -508,7 +511,8 @@ export function createParser(grammar: CstGrammar) {
       const capped = parseLimit >= 0;
       const start = pos;
       let m = memo.get(name);
-      const hit = !mySup && !capped ? m && m.get(start) : undefined;
+      const key = start * CTX_SPAN + (ctxWord & ctxObserve.get(name)!);
+      const hit = !mySup && !capped ? m && m.get(key) : undefined;
       // A hit met inside a verifying re-parse is returned: verifying it too would re-parse every
       // nesting level again (exponential in depth); each entry is still verified where it is hit
       // outside one.
@@ -534,7 +538,7 @@ export function createParser(grammar: CstGrammar) {
       }
       if (!mySup && !capped) {
         if (!m) { m = new Map(); memo.set(name, m); }
-        m.set(start, { node: result, end: pos, capped: isPratt && result !== null && _prattCapped });
+        m.set(key, { node: result, end: pos, capped: isPratt && result !== null && _prattCapped });
       }
       return result;
     }
@@ -563,7 +567,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          bestNode = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          bestNode = { rule: rule.name, children, offset: startOff, end: endOff };
           tw?.built(bestNode, alt);
           bestPos = pos;
         }
@@ -595,7 +599,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestAtomPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          node = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          node = { rule: rule.name, children, offset: startOff, end: endOff };
           tw?.built(node, atom);
           bestAtomPos = pos;
           const items = atom.type === 'seq' ? atom.items : [atom];
@@ -627,7 +631,7 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             node = {
-              rule: (rule.canon ?? rule.name),
+              rule: rule.name,
               children: [node, ...children],
               offset: node.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : node.end,
@@ -736,7 +740,7 @@ export function createParser(grammar: CstGrammar) {
             const key = tok.text;
             const op = prefixOps.get(key);
             // A gated operator (`await`) exists only where its `when` holds in the rule's family.
-            const info = op?.when !== undefined && (rule.ctx! & op.when.mask) !== op.when.val ? undefined : op;
+            const info = op?.when !== undefined && (ctxWord & op.when.mask) !== op.when.val ? undefined : op;
             // A capped prefix (Python `not`) begins an operand only below its own level.
             if (info && (info.capBp === undefined || minBp < info.capBp)) {
               // A capped prefix's node is the sequence `op $` (its operator a literal leaf), as
@@ -753,7 +757,7 @@ export function createParser(grammar: CstGrammar) {
               // (`++-x`, `++ ++x`, `++x--` are syntax errors). Fail hard like noUnaryLhs.
               if (rhs && info.requireTarget && notAssignTarget(rhs)) return null;
               if (rhs && pos > bestNudPos) {
-                lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                lhs = { rule: rule.name, children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
                 if (info.capBp !== undefined) unaryNodes.add(lhs);
                 tw?.op(lhs, rule.name, 'prefix', key);
                 bestNudPos = pos;
@@ -769,7 +773,7 @@ export function createParser(grammar: CstGrammar) {
         if (children !== null && pos > bestNudPos) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
-          lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          lhs = { rule: rule.name, children, offset: startOff, end: endOff };
           tw?.built(lhs, nud);
           bestNudPos = pos;
           const endsSelf = selfRefName(items[items.length - 1], rule.name);
@@ -842,7 +846,7 @@ export function createParser(grammar: CstGrammar) {
           }
           if (children !== null) {
             lhs = {
-              rule: (rule.canon ?? rule.name),
+              rule: rule.name,
               children: [lhs, ...children],
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
@@ -879,7 +883,7 @@ export function createParser(grammar: CstGrammar) {
               pos += tokKey === tok.text ? 1 : tokKey.length;
               if (pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
-              lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              lhs = { rule: rule.name, children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
               tw?.op(lhs, rule.name, 'postfix', tokKey);
               tailClosed = true;
               matched = true;
@@ -914,12 +918,12 @@ export function createParser(grammar: CstGrammar) {
             // `|| x` / `? :` stays unconsumed (`a = () => {} || x` rejects). `_prattCapped` is
             // still true from the RHS, so an enclosing operator refuses it too (`b = a = arrow`).
             if (rhs && _prattCapped) {
-              const capNode: CstNode = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              const capNode: CstNode = { rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               tw?.op(capNode, rule.name, 'binary', tokKey);
               return capNode;
             }
             if (rhs) {
-              lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              lhs = { rule: rule.name, children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
               tw?.op(lhs, rule.name, 'binary', tokKey);
               tailClosed = true;
               matched = true;
@@ -997,6 +1001,13 @@ export function createParser(grammar: CstGrammar) {
           // the group: a body that never enters that rule (its FIRST set refuses the token, so
           // `exclude('in', Expr)` before a `;` matches nothing) leaves nothing staged for the
           // NEXT rule after the group (`for (; a in b;)` reads its `in`).
+          // A `when` group exists only where its condition holds over the word in force.
+          if (expr.when !== undefined) { const w = whenTest(expr.when); if ((ctxWord & w.mask) !== w.val) return null; }
+          // A context marker parses its body in its word, then puts back the one in force.
+          if (expr.ctxMode) {
+            const outer = ctxWord; ctxWord = ctxWordOfMode(expr.ctxMode, splitSync);
+            try { return matchExpr(expr.body); } finally { ctxWord = outer; }
+          }
           if (!expr.suppress || !expr.suppress.length) return matchExpr(expr.body);
           suppressNext = new Set(expr.suppress);
           const r = matchExpr(expr.body);
@@ -1009,9 +1020,10 @@ export function createParser(grammar: CstGrammar) {
           const kw = notKwSet(expr);
           if (kw) {                                              // fast path: one membership test
             const tok = peek();
-            const hit = !!tok && tok.type !== '' && tokenNames.has(tok.type) && kw.has(tok.text);
+            const hit = !!tok && tok.type !== '' && tokenNames.has(tok.type) && (kw.has(tok.text) || (!!expr.reservable && ctxReserves(ctxWord, tok.text)));
             return hit ? null : [];
           }
+          if (expr.reservable) throw new Error('interpreter: a reservable guard must test keywords');
           const saved = pos;
           const m = matchExpr(expr.body);
           pos = saved;

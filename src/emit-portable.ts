@@ -26,7 +26,7 @@ import { identifierClassesOf } from './uni-ident.ts';
 import { planTargets, type ArmForm } from './declared-targets.ts';
 import { KIND, analyzeGrammar, concreteFirst, directivesOf, findEntryRule, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
 import { nameRule, syntaxKey, type RuleNames } from './grammar-names.ts';
-import { collectLiterals, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest, type CtxMode } from './grammar-utils.ts';
+import { CTX_WORDS, CTX_WORD_BITS, collectLiterals, ctxWordOfMode, gtComposites, isKeywordLiteral, readsSyncFn, whenTest, type CtxMode } from './grammar-utils.ts';
 import { tokenPatternCharLoop, tokenPatternLiteralPrefix } from './token-pattern.ts';
 import { type TextUnits, firstUnit, oneUnit, unitLen } from './text-units.ts';
 import { scannedTokens, templateLiterals, tokenLiterals } from './lex-family.ts';
@@ -172,10 +172,8 @@ export function stepKey(s: Step | readonly Step[]): string {
 // (`syncFn`, transitional, see there) is set by a reset body only in a grammar that reads it.
 export const CTX_NONE = 0, CTX_AWAIT = 1, CTX_YIELD = 2;
 export type Ctx = number;
-/** The operator word each context bit reserves: CTX_WORDS[i] for bit 1 << i. */
-const CTX_WORDS: readonly string[] = ['await', 'yield'];
-/** The bits of the word an `aheadCtx` test reads (those of CTX_WORDS). */
-export const CTX_WORD_BITS = 3;
+/** The bits of the word an `aheadCtx` test reads (grammar-utils.ts CTX_WORDS, shared with the interpreter and jsTarget). */
+export { CTX_WORD_BITS };
 // The LED connectors a `suppress` step disables (`exclude('in', Expr)`: no `in` in a for-head) are
 // a constant of the grammar at each site, so a parser never builds one at run time. The grammar
 // analysis keeps each distinct set once (ParserIR.suppressSets, sorted; set 0 is the empty set, the
