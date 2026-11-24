@@ -1,0 +1,2 @@
+# test/verdict-scan.ts --python: class, disposition, count, shortest witness (re-record: add --write)
+py-fstring-fields	lexer	6	"f\"{*a}\"\n"

@@ -51,7 +51,14 @@ const TOTAL_K = 3;
 // become others): the disagreements fall 186 -> 182, the agreements 5,441 -> 5,439 (of 5,621 rejects now).
 // typescript 5950 -> 5946 (land/sound-cap-tail): the cap-through-a-trailing-operand accepts
 // (`a ? b : () => {};`, `[...() => {}];`, …) draw another mutant set: 5,946 of 6,842 rejects agree.
-const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5439, typescript: 5946 };
+// javascript 5439 -> 5412 (land/shape-test262-valid): the literals `defer` and `source` join the grammar,
+// and the mutation corpus picks literals from the sorted list by a seeded index, so it is another
+// population (javascript: 5,412 of 5,901 rejects agree; typescript's rises 5946 -> 5994). Most of javascript's new
+// disagreements are one pattern, `import` and a token neither `(` nor `.` (`import ?. ;`): the
+// interpreter's farthest is `import` itself (no hint), the engine's the token its form guard read. The
+// interpreter's message on these inputs is master's. Re-measured on master a2ba418e (land/recovery-stage3)
+// merged in: javascript 5,412 of 5,902 rejects agree, typescript 6,051 of 6,868.
+const RECOVERY_FARTHEST_FLOOR: Record<string, number> = { javascript: 5412, typescript: 6051 };
 const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // P10 EXPECTED-FAIL on `$missing`-only repairs, by class. GREEDY CAPTURE: the repair is right by
 // position (each supplied token is where the derivation needs it), but the substituted token is
@@ -63,9 +70,11 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // The mutants are drawn from the accept lists (seeded), so the list is re-measured when they change.
 // typescript 'for ((async) from y);' -> 'for (() of y);' (land/recovery-stage3 merged with master
 // 1f944fcf: two accept rows added at the front of the typescript list draw another mutant set).
+// typescript + 'for (x = (y = (a in b)) declare c);' (land/shape-test262-valid: its new literals draw
+// another set): the parse supplies '=>' and 'in'; in `… =>  declare in  c` the arrow body takes `in c`.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (() of x);', 'for (() of y);'],
-  typescript: ['for (() of y);'],
+  typescript: ['for (() of y);', 'for (x = (y = (a in b)) declare c);'],
 };
 // P10 EXPECTED-FAIL, second class: LOOKAHEAD BYPASS. A negative lookahead was decided on the
 // original tokens and a supplied token makes the repaired text one it refuses: in `async { class C {}`
@@ -245,10 +254,14 @@ function interpCheck(c: Case, grammar: CstGrammar, r: Runner, srcs: string[], ow
   }
 }
 
-for (const p of await prepareAll(selectedCases().filter((c) => ECMASCRIPT.has(c.grammar)))) {
-  if (!ECMASCRIPT.has(p.c.grammar)) continue;
+// Beyond ECMAScript, the grammars whose plan has a recovery encoding of its own (a capped prefix's
+// cap on a REC_N_SEQ entry: recovery-family.ts riNudOf), on their lists.
+const RECOVERY_GRAMMARS = new Set([...ECMASCRIPT, 'cappedcalc']);
+for (const p of await prepareAll(selectedCases().filter((c) => RECOVERY_GRAMMARS.has(c.grammar)))) {
+  if (!RECOVERY_GRAMMARS.has(p.c.grammar)) continue;
   const { c, grammar, runners, oracleOut, tokenize } = p;
-  recoveryClass(c, grammar, runners, oracleOut, [...parityCorpus(p).map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : [])], tokenize);
+  // The expected-fail inputs are run whatever the seeded mutants are (a new grammar literal reshuffles them).
+  recoveryClass(c, grammar, runners, oracleOut, [...parityCorpus(p).map((i) => i.src), ...c.accept, ...c.reject, ...(c.grammar === 'typescript' ? CURATED_TS : []), ...(RECOVERY_VERDICT_EXPECTED_FAIL[c.grammar] ?? [])], tokenize);
 }
 
 finish('total parsing (parseTotal) on the corpus, the lists and the mutation corpus');

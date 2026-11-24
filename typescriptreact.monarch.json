@@ -440,6 +440,8 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
+            "defer": "keyword",
+            "source": "keyword",
             "let": "keyword",
             "var": "keyword",
             "if": "keyword",
@@ -468,7 +470,6 @@
             "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
-            "defer": "keyword",
             "delete": "operator",
             "string": "keyword",
             "number": "keyword",
@@ -585,14 +586,14 @@
         }
       ],
       [
-        "[0-9]+(?:_[0-9]+)*n(?![0-9A-Za-z_$\\\\])",
+        "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])",
         {
           "token": "number",
           "switchTo": "@value"
         }
       ],
       [
-        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
         {
           "token": "number",
           "switchTo": "@value"
@@ -613,7 +614,7 @@
         }
       ],
       [
-        "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.)*)?",
+        "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?",
         {
           "token": "annotation",
           "switchTo": "@value"
@@ -648,7 +649,7 @@
         }
       ],
       [
-        "(?:asserts|infer|target|meta|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
           "switchTo": "@value"
@@ -711,6 +712,13 @@
         }
       ],
       [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        {
+          "token": "identifier",
+          "switchTo": "@value"
+        }
+      ],
+      [
         "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
@@ -754,13 +762,6 @@
       ],
       [
         "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
-        {
-          "token": "identifier",
-          "switchTo": "@value"
-        }
-      ],
-      [
-        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         {
           "token": "identifier",
           "switchTo": "@value"
@@ -942,6 +943,14 @@
               "token": "keyword",
               "switchTo": "@root"
             },
+            "defer": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
+            "source": {
+              "token": "keyword",
+              "switchTo": "@root"
+            },
             "let": {
               "token": "keyword",
               "switchTo": "@root"
@@ -1055,10 +1064,6 @@
               "switchTo": "@root"
             },
             "constructor": {
-              "token": "keyword",
-              "switchTo": "@root"
-            },
-            "defer": {
               "token": "keyword",
               "switchTo": "@root"
             },
@@ -1905,11 +1910,11 @@
         "number.binary"
       ],
       [
-        "[0-9]+(?:_[0-9]+)*n(?![0-9A-Za-z_$\\\\])",
+        "(?:0|[1-9][0-9]*(?:_[0-9]+)*)n(?![0-9A-Za-z_$\\\\])",
         "number"
       ],
       [
-        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
+        "(?:(?:0|[1-9][0-9]*(?:_[0-9]+)*)(?:\\.(?!_)[0-9]*(?:_[0-9]+)*)?|\\.[0-9]+(?:_[0-9]+)*)(?:[eE][+\\-]?[0-9]+(?:_[0-9]+)*)?(?![0-9A-Za-z_$\\\\])",
         "number"
       ],
       [
@@ -1921,7 +1926,7 @@
         "variable"
       ],
       [
-        "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.)*)?",
+        "@(?:(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\}|\\.#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})|\\.)*)?",
         "annotation"
       ],
       [
@@ -1941,7 +1946,7 @@
         "identifier"
       ],
       [
-        "(?:asserts|infer|target|meta|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "(?:asserts|infer|target|meta|source|interface|enum|module|namespace|from)(?![\\w$])(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
       [
@@ -1977,6 +1982,10 @@
         "identifier"
       ],
       [
+        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
+        "identifier"
+      ],
+      [
         "(?:let|var|using)(?![\\w$])(?!\\s*(?:\\[|\\{))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
@@ -2002,10 +2011,6 @@
       ],
       [
         "(?:constructor)(?![\\w$])(?!\\s*(?:\\(|<))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
-        "identifier"
-      ],
-      [
-        "(?:defer)(?![\\w$])(?!\\s*(?:\\*))(?=\\s*[!%&()*+,\\-./:;<=>?[\\]\\^{|}~])",
         "identifier"
       ],
       [
@@ -2055,6 +2060,8 @@
             "yield": "keyword",
             "satisfies": "operator",
             "meta": "keyword",
+            "defer": "keyword",
+            "source": "keyword",
             "let": "keyword",
             "var": "keyword",
             "if": "keyword",
@@ -2084,7 +2091,6 @@
             "namespace": "keyword",
             "from": "keyword",
             "constructor": "keyword",
-            "defer": "keyword",
             "require": "variable",
             "delete": "operator",
             "string": "keyword",

@@ -546,6 +546,9 @@ export interface PrecOperator {
   // expression. ECMAScript AssignmentTargetType, enforced at parse time (JS `=`/`+=`/…,
   // postfix `++`/`--`). A parenthesized cover or member/element/call/non-null tail passes.
   requireTarget?: boolean;
+  // An infix operator whose left operand must pass the declared target context of this name
+  // (CstGrammar.targets; api.ts targetOps) in place of requireTarget's shallow check.
+  targetCtx?: string;
   // A prefix operator CAPPED at its own level (`cappedPrefix`): it may begin an operand only where
   // the enclosing Pratt minBp is looser than its level, so it is never the operand of a tighter
   // operator (Python `a == not b`, `-not x` have no parse). Its own operand and the leds after it
@@ -661,6 +664,9 @@ type RuleExprNode =
   // so the derived GLR grammar keeps the UNCONSTRAINED `.` LED (a left-leaf predicate is not
   // expressible in GLR, and a stray `void.x` is harmless for a highlighter) — no tsRelax needed.
   | { type: 'notLeftLeaf'; words: string[] }
+  // Zero-width DECLARED ASSIGNMENT-TARGET check (api.ts `target`): the node ending immediately
+  // before it must pass the target context `ctx` of CstGrammar.targets. Consumes nothing.
+  | { type: 'target'; ctx: string }
   | { type: 'sep'; element: RuleExpr; delimiter: string }
   | { type: 'op' }
   | { type: 'prefix' }
@@ -680,6 +686,8 @@ export interface RuleDecl {
   label?: string;
 }
 
+export interface TargetContext { leaves: string[]; containers?: Record<string, string>; last?: string[] }
+
 export interface CstGrammar {
   tokens: TokenDecl[];
   precs: PrecLevel[];
@@ -689,6 +697,14 @@ export interface CstGrammar {
   // `>>`, `>=`, `>>>=` … from adjacent single `>` tokens where it reads an operator (tsc's
   // reScanGreaterToken). Absent: `>` is an ordinary punctuator and `>=` one token. See gtComposites.
   composeGt?: true;
+  // DECLARED ASSIGNMENT-TARGET CONTEXTS, by name (api.ts `target(ctx)`, `targetOps(ctx, …)`): which
+  // nodes may stand where a context's target is taken. Arms are named by their stable names
+  // (grammar-names), never by text. A node passes iff its arm is in `leaves`, or in `containers`
+  // and every child of the named field (or every rule child, 'all') passes; a node with one child
+  // and nothing else is its child. A `last` arm passes as a container's child only as its final
+  // child with no ',' after it (an ECMAScript rest element). Absent: no context; the shallow
+  // `lhsTarget` check is the grammar's only target rule.
+  targets?: Record<string, TargetContext>;
   rules: RuleDecl[];
   entryRule?: string;  // the rule a parse starts from (`defineGrammar`'s `entry`); absent → the last declared rule. Read it through findEntryRule, never by position
   scopeOverrides: Map<string, string[]>;
