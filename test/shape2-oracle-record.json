@@ -51,8 +51,48 @@
   "corpus": "node_modules",
   "view": "expression statement",
   "units": 13292,
-  "compared": 175,
-  "identical": 175,
-  "outOfSubset": 13086
+  "compared": 12400,
+  "identical": 12400,
+  "outOfSubset": 861
+ },
+ "estree node_modules built statement": {
+  "corpus": "node_modules",
+  "view": "top-level statement",
+  "units": 13292,
+  "compared": 12385,
+  "identical": 12385,
+  "outOfSubset": 875
+ },
+ "estree node_modules built file": {
+  "corpus": "node_modules",
+  "view": "file",
+  "units": 186,
+  "compared": 24,
+  "identical": 24,
+  "outOfSubset": 105
+ },
+ "tsc conformance/expressions built": {
+  "corpus": "conformance/expressions",
+  "view": "expression statement",
+  "units": 2177,
+  "compared": 1932,
+  "identical": 1932,
+  "outOfSubset": 14
+ },
+ "tsc conformance/expressions built statement": {
+  "corpus": "conformance/expressions",
+  "view": "top-level statement",
+  "units": 2177,
+  "compared": 1932,
+  "identical": 1932,
+  "outOfSubset": 14
+ },
+ "tsc conformance/expressions built file": {
+  "corpus": "conformance/expressions",
+  "view": "file",
+  "units": 350,
+  "compared": 0,
+  "identical": 0,
+  "outOfSubset": 13
  }
 }

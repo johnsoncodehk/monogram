@@ -28,6 +28,18 @@ export type NTree = {
   fields: Record<string, NValue>;
 };
 
+/** A shape's value (flat nodes, src/shape2-eval.ts ShapeNode, their kind and span under the
+ * shape's node keys) in the harness's form: every node an NTree, its fields apart. */
+export function nestValue(v: unknown, keys: { kind: string; start: string; end: string }): NValue {
+  if (v === null || typeof v !== 'object') return v as NValue;
+  if (Array.isArray(v)) return v.map((x) => nestValue(x, keys));
+  const o = v as Record<string, unknown>;
+  if ('record' in o && !(keys.kind in o)) return { record: Object.fromEntries(Object.entries(o.record as object).map(([k, x]) => [k, nestValue(x, keys)])) };
+  const fields: Record<string, NValue> = {};
+  for (const [k, x] of Object.entries(o)) if (k !== keys.kind && k !== keys.start && k !== keys.end && x !== undefined) fields[k] = nestValue(x, keys);
+  return { kind: o[keys.kind] as string, start: o[keys.start] as number, end: o[keys.end] as number, fields };
+}
+
 /** What a candidate or an oracle returns for one file. */
 export type Produced = { tree: NTree } | { skip: string } | { fail: string };
 export type Producer = (src: string, path: string) => Produced;

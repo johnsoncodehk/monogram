@@ -11,6 +11,7 @@ import { jsTarget } from '../src/emit-parser.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
+import { RESERVED_RULES } from '../src/emit-portable.ts';
 import { objectify } from './emitted-obj.ts';
 import { runsTarget } from './check-targets.ts';
 import { cachedEmit } from './emit-cache.ts';
@@ -145,12 +146,14 @@ function unicodeParity(r: Runner, oracleOut: (src: string) => Outcome): void {
   console.log(`  javascript/unicode/${r.label}: ${editOk}/${UNICODE_EDITS.length} edit-sessions ≡ fresh`);
 }
 
+const RESERVED_NAMES = RESERVED_RULES.map((r) => `, ${JSON.stringify(r)}`).join('');
 for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll()) {
   // Every module of this gate is emitted with total parsing (the emit option `recovery`), whose
-  // region is appended to the default module and changes none of it: each module begins with the
-  // default emission, byte for byte.
+  // region is appended to the default module and changes none of it but the rule-name table, which
+  // names the reserved rules after the grammar's (emit-portable.ts RESERVED_RULES): each module,
+  // that table read without them, begins with the default emission, byte for byte.
   for (const e of emitted) {
-    if (e.rec.startsWith(e.def())) continue;
+    if (e.rec.replace(RESERVED_NAMES, '').startsWith(e.def())) continue;
     gate.failures++;
     console.log(`  ${c.grammar}/${e.label}: the recovery emission does not begin with the default emission`);
   }

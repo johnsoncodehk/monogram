@@ -40,19 +40,19 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | ts | javascript | _tsserver.js | parseWith | 4,928 | 3,139 | 16,042 | 3.26 | 5.11 | 540,160 | 109.6 | 172.1 | 8,673 | 252,132 | 288,028 |
 | ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,553 | 64,089 | 3.25 | 5.11 | 2,115,088 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,695 |
 | ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,553 | 64,089 | 3.25 | 5.11 | 2,115,088 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,695 |
-| js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,109 | 0.12 | 0.18 | 13,844,124 | 328.0 | 480.5 | - | - | - |
+| js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,112 | 0.12 | 0.18 | 13,901,664 | 329.4 | 482.5 | - | - | - |
 | js | typescript | acorn.js | reuse | 42,209 | 28,813 | 4,950 | 0.12 | 0.17 | 233,752 | 5.5 | 8.1 | - | - | - |
-| js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,694 | 7,434 | 0.54 | 0.97 | 2,781,480 | 203.6 | 361.5 | - | - | - |
-| js | typescript | lib.es5.d.ts | reuse | 13,659 | 7,694 | 7,335 | 0.54 | 0.95 | 170,884 | 12.5 | 22.2 | - | - | - |
-| js | typescript | _tsserver.js | fresh | 4,932 | 3,221 | 423 | 0.09 | 0.13 | 1,244,004 | 252.2 | 386.2 | - | - | - |
+| js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,692 | 7,007 | 0.51 | 0.91 | 2,781,116 | 203.6 | 361.6 | - | - | - |
+| js | typescript | lib.es5.d.ts | reuse | 13,659 | 7,692 | 6,907 | 0.51 | 0.90 | 162,260 | 11.9 | 21.1 | - | - | - |
+| js | typescript | _tsserver.js | fresh | 4,932 | 3,221 | 424 | 0.09 | 0.13 | 1,252,264 | 253.9 | 388.8 | - | - | - |
 | js | typescript | _tsserver.js | reuse | 4,932 | 3,221 | 330 | 0.07 | 0.10 | 15,368 | 3.1 | 4.8 | - | - | - |
-| js | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,881 | 1,415 | 0.07 | 0.11 | 4,635,708 | 235.0 | 359.9 | - | - | - |
+| js | typescript | _tsserver.js ×4 | fresh | 19,728 | 12,881 | 1,417 | 0.07 | 0.11 | 4,660,416 | 236.2 | 361.8 | - | - | - |
 | js | typescript | _tsserver.js ×4 | reuse | 19,728 | 12,881 | 1,293 | 0.07 | 0.10 | 60,512 | 3.1 | 4.7 | - | - | - |
-| js | javascript | acorn.js | fresh | 42,051 | 28,958 | 4,782 | 0.11 | 0.17 | 13,140,440 | 312.5 | 453.8 | - | - | - |
+| js | javascript | acorn.js | fresh | 42,051 | 28,958 | 4,785 | 0.11 | 0.17 | 13,197,980 | 313.9 | 455.8 | - | - | - |
 | js | javascript | acorn.js | reuse | 42,051 | 28,958 | 4,627 | 0.11 | 0.16 | 228,444 | 5.4 | 7.9 | - | - | - |
-| js | javascript | _tsserver.js | fresh | 4,928 | 3,263 | 403 | 0.08 | 0.12 | 1,085,236 | 220.2 | 332.6 | - | - | - |
+| js | javascript | _tsserver.js | fresh | 4,928 | 3,263 | 404 | 0.08 | 0.12 | 1,093,496 | 221.9 | 335.1 | - | - | - |
 | js | javascript | _tsserver.js | reuse | 4,928 | 3,263 | 318 | 0.06 | 0.10 | 15,176 | 3.1 | 4.7 | - | - | - |
-| js | javascript | _tsserver.js ×4 | fresh | 19,712 | 13,049 | 1,362 | 0.07 | 0.10 | 4,788,556 | 242.9 | 367.0 | - | - | - |
+| js | javascript | _tsserver.js ×4 | fresh | 19,712 | 13,049 | 1,364 | 0.07 | 0.10 | 4,813,264 | 244.2 | 368.9 | - | - | - |
 | js | javascript | _tsserver.js ×4 | reuse | 19,712 | 13,049 | 1,245 | 0.06 | 0.10 | 59,744 | 3.0 | 4.6 | - | - | - |
 | go | typescript | acorn.js | fresh | 42,209 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 219.1 | 323.0 | 3 | 2,072,576 | 7,177,344 |
 | go | typescript | acorn.js | reuse | 42,209 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
@@ -120,21 +120,21 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| new Array → array | `new Array(tokN + N)` | 1 | 30 | 0.00 | 5,065,920 | 36.6% | - |
-| new Int32Array → typed array | `new Int32Array(kidCap)` | 1 | 9 | 0.00 | 2,753,088 | 19.9% | - |
-| new Int32Array → typed array | `new Int32Array(tokN + N)` | 1 | 10 | 0.00 | 1,689,040 | 12.2% | - |
-| new Int32Array → typed array | `new Int32Array(rowCap)` | 1 | 16 | 0.00 | 1,573,888 | 11.4% | - |
+| new Array → array | `new Array(tokN + N)` | 1 | 30 | 0.00 | 5,065,920 | 36.4% | - |
+| new Int32Array → typed array | `new Int32Array(kidCap)` | 1 | 9 | 0.00 | 2,753,088 | 19.8% | - |
+| new Int32Array → typed array | `new Int32Array(tokN + N)` | 1 | 10 | 0.00 | 1,689,040 | 12.1% | - |
+| new Int32Array → typed array | `new Int32Array(rowCap)` | 1 | 16 | 0.00 | 1,573,888 | 11.3% | - |
 | new Int32Array → typed array | `new Int32Array(tkCap)` | 2 | 8 | 0.00 | 983,552 | 7.1% | - |
-| new Uint8Array → typed array | `new Uint8Array(tkCap)` | 2 | 16 | 0.00 | 492,544 | 3.6% | - |
+| new Uint8Array → typed array | `new Uint8Array(tkCap)` | 2 | 16 | 0.00 | 492,544 | 3.5% | - |
 | new Int32Array → typed array | `new Int32Array(rows)` | 1 | 8 | 0.00 | 262,656 | 1.9% | - |
 | new Uint16Array → typed array | `new Uint16Array(tkCap)` | 2 | 4 | 0.00 | 246,016 | 1.8% | - |
+| new Uint8Array → typed array | `new Uint8Array(rowCap)` | 1 | 8 | 0.00 | 197,120 | 1.4% | - |
 | new Int32Array → typed array | `new Int32Array(rows * N)` | 1 | 3 | 0.00 | 196,800 | 1.4% | - |
-| new Uint8Array → typed array | `new Uint8Array(rowCap)` | 1 | 6 | 0.00 | 147,840 | 1.1% | - |
 | new Uint16Array → typed array | `new Uint16Array(rowCap)` | 1 | 2 | 0.00 | 98,432 | 0.7% | - |
 | .exec() → array | `LXRE_10_Number.exec(source)` | 1 | 1,719 | 0.04 | 96,280 | 0.7% | - |
 | .exec() → array | `LXRE_3_LineComment.exec(source)` | 1 | 784 | 0.02 | 46,972 | 0.3% | - |
 | .exec() → array | `LXRE_11_String.exec(source)` | 1 | 738 | 0.02 | 44,016 | 0.3% | - |
-| new Int32Array → typed array | `new Int32Array(N)` | 2 | 2 | 0.00 | 32,896 | 0.2% | - |
+| new Uint8Array → typed array | `new Uint8Array(rows)` | 1 | 4 | 0.00 | 33,024 | 0.2% | - |
 
 ## Where: js target, reuse, typescript grammar, acorn.js (top 15 of 15 sites by bytes)
 
