@@ -236,7 +236,6 @@ const CLASSES: Class[] = [
   { id: 'arrow-body-ctx', disposition: 'grammar', note: 'an arrow ExpressionBody is [~Yield], [~Await]', test: (r) => /=> (yield|await)/.test(r.src) },
   { id: 'coalesce-mix', disposition: 'grammar', note: 'CoalesceExpression: `??` beside `||` / `&&` needs parentheses', test: (r) => /\|\| b \?\?|\?\? a \|\||&& b \?\?|\?\? a &&/.test(r.src) },
   { id: 'number-then-ident', disposition: 'lexer', note: 'a NumericLiteral directly followed by an IdentifierStart (`1.x`)', test: (r) => /(^|[ (=])1\.x/.test(r.src) },
-  { id: 'lt-composite', disposition: 'engine', note: '`<<` opening nested type arguments (no `<` split, the mirror of the `>` re-scan)', test: (r) => /<</.test(r.src) && !r.we },
   { id: 'ts-type-args-commit', disposition: 'grammar', note: 'after a type reference tsc commits to `<` type arguments', test: (r) => /(as|satisfies) T <|f<T> \/=/.test(r.src) },
   { id: 'ts-new-import', disposition: 'grammar', note: 'an ImportCall is no MemberExpression', test: (r) => /new import/.test(r.src) },
   { id: 'ts-cond-in-extends', disposition: 'grammar', note: 'no unparenthesized conditional type in an extends position', test: (r) => r.grammar === 'typescript' && /extends .*extends .*\?/.test(r.src) && r.we },

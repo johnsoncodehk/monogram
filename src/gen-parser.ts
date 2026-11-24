@@ -77,6 +77,7 @@ export function createParser(grammar: CstGrammar) {
     return ka.length === kb.length && ka.every((k) => sameCst((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
   };
   const gtComps = new Set(gtComposites(grammar));
+  const gtLeads = new Set([...gtComps].map((c) => c[0]));   // the characters a composite begins at (compositeLeads)
 
 
   // Per-LED binding-power lookup (object-keyed like ledFirst): a led whose first
@@ -370,14 +371,15 @@ export function createParser(grammar: CstGrammar) {
     }
 
     // The punctuator read at token i where an operator or a composite literal is read: a lone
-    // `>` extends over each adjacent single-character token after it while the text stays a
-    // composite (gtComposites; one token per character); any other token reads as itself. Not
-    // bounded by parseLimit: an operator leaf's extent is a function of the token stream alone.
+    // `>` (or `<`: a composite's lead, gtLeads) extends over each adjacent single-character token
+    // after it while the text stays a composite (gtComposites; one token per character); any other
+    // token reads as itself. Not bounded by parseLimit: an operator leaf's extent is a function of
+    // the token stream alone.
     // A composite read counts its tokens as reached (maxPos), like the emitted engine's watermark.
     function opText(i: number): string {
       const t = tokens[i];
-      if (gtComps.size === 0 || t.type !== '' || t.text !== '>') return t.text;
-      let text = '>';
+      if (gtComps.size === 0 || t.type !== '' || !gtLeads.has(t.text)) return t.text;
+      let text = t.text;
       for (let j = i + 1; j < tokens.length; j++) {
         const u = tokens[j];
         if (u.type !== '' || u.text.length !== 1 || u.offset !== t.offset + (j - i) || !gtComps.has(text + u.text)) break;

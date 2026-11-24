@@ -484,8 +484,10 @@ const startsExprNotBinary = alt(
   Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, PrivateField, Decorator,
   '[', '{', '!', '~', '++', '--',
 );
+// A lone `<` only: `<` is scanned alone too (composeLt), and tsc's `<=`, `<<`, `<<=` are binary
+// operators that end it.
 const instantiationEnd = not(alt(
-  '<', '>', '>=', '>>', '>>=', '>>>', '>>>=', '+', '-', '(', Template,
+  [not(alt('<=', '<<', '<<=')), '<'], '>', '>=', '>>', '>>=', '>>>', '>>>=', '+', '-', '(', Template,
   [sameLine, startsExprNotBinary],
 ));
 
@@ -1155,6 +1157,10 @@ export default defineGrammar({
   // `>` closes type arguments (`f<A<B>>(x)`, `a as Map<K, V>>= b`), so `>>`, `>=` … are composed by
   // the parser from single `>` tokens (tsc's reScanGreaterToken).
   composeGt: true,
+  // `<` opens type arguments, and a type argument may itself open with `<` (`X<<T>(a: T) => T>`),
+  // so `<<`, `<=`, `<<=` are composed by the parser from single `<` tokens too (the split tsc's
+  // reScanLessThanToken makes).
+  composeLt: true,
 
   tokens: {
     // Comments must come before Regex_ to avoid /** ... */ being matched as regex

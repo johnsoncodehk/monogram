@@ -200,7 +200,7 @@ verdicts, with every disagreement and its class pinned in
 the trees are compared too: in every file both parse without ERROR, tree-sitter's expression spans
 against the interpreter's, recorded per corpus as totals and as the differing files by the class of
 their first difference (`spans` entries: a wrong tree with no ERROR, which no verdict sees). On
-`2896c53`: TypeScript `src` 314 of 691 files span-equal (1,346 interpreter spans missing, 7,582
+`1fc7c47`: TypeScript `src` 314 of 691 files span-equal (1,346 interpreter spans missing, 7,582
 extra), test262 15,780 of 22,580 (46 missing, 8,189 extra); the first difference is a declaration
 built as an expression statement in 363 and 6,651 files, a block built as an object literal in 9 and
 85, an arrow body built as one in 2 and 9. Both come from the zero-width line-end token

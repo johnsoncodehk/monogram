@@ -26,8 +26,8 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | target | grammar | input | mode | tokens | nodes | allocations | per token | per node | bytes | B per token | B per node | result allocs | result bytes | overhead bytes |
 |:--|:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
-| ts | typescript | acorn.js | parse | 42,209 | 28,638 | 139,581 | 3.31 | 4.87 | 4,616,120 | 109.4 | 161.2 | 79,491 | 2,313,619 | 2,302,501 |
-| ts | typescript | acorn.js | parseWith | 42,209 | 28,638 | 139,581 | 3.31 | 4.87 | 4,616,120 | 109.4 | 161.2 | 79,491 | 2,313,619 | 2,302,501 |
+| ts | typescript | acorn.js | parse | 42,251 | 28,638 | 139,665 | 3.31 | 4.88 | 4,618,136 | 109.3 | 161.3 | 79,491 | 2,313,619 | 2,304,517 |
+| ts | typescript | acorn.js | parseWith | 42,251 | 28,638 | 139,665 | 3.31 | 4.88 | 4,618,136 | 109.3 | 161.3 | 79,491 | 2,313,619 | 2,304,517 |
 | ts | typescript | lib.es5.d.ts | parse | 13,659 | 7,182 | 43,680 | 3.20 | 6.08 | 1,436,340 | 105.2 | 200.0 | 20,313 | 591,395 | 844,945 |
 | ts | typescript | lib.es5.d.ts | parseWith | 13,659 | 7,182 | 43,680 | 3.20 | 6.08 | 1,436,340 | 105.2 | 200.0 | 20,313 | 591,395 | 844,945 |
 | ts | typescript | _tsserver.js | parse | 4,932 | 3,139 | 15,943 | 3.23 | 5.08 | 537,368 | 109.0 | 171.2 | 8,673 | 252,250 | 285,118 |
@@ -40,8 +40,8 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | ts | javascript | _tsserver.js | parseWith | 4,928 | 3,139 | 16,042 | 3.26 | 5.11 | 540,160 | 109.6 | 172.1 | 8,673 | 252,132 | 288,028 |
 | ts | javascript | _tsserver.js ×4 | parse | 19,712 | 12,553 | 64,089 | 3.25 | 5.11 | 2,115,088 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,695 |
 | ts | javascript | _tsserver.js ×4 | parseWith | 19,712 | 12,553 | 64,089 | 3.25 | 5.11 | 2,115,088 | 107.3 | 168.5 | 34,686 | 1,008,393 | 1,106,695 |
-| js | typescript | acorn.js | fresh | 42,209 | 28,813 | 5,112 | 0.12 | 0.18 | 13,901,664 | 329.4 | 482.5 | - | - | - |
-| js | typescript | acorn.js | reuse | 42,209 | 28,813 | 4,950 | 0.12 | 0.17 | 233,752 | 5.5 | 8.1 | - | - | - |
+| js | typescript | acorn.js | fresh | 42,251 | 28,813 | 5,154 | 0.12 | 0.18 | 13,909,056 | 329.2 | 482.7 | - | - | - |
+| js | typescript | acorn.js | reuse | 42,251 | 28,813 | 4,992 | 0.12 | 0.17 | 234,424 | 5.5 | 8.1 | - | - | - |
 | js | typescript | lib.es5.d.ts | fresh | 13,659 | 7,692 | 7,007 | 0.51 | 0.91 | 2,781,116 | 203.6 | 361.6 | - | - | - |
 | js | typescript | lib.es5.d.ts | reuse | 13,659 | 7,692 | 6,907 | 0.51 | 0.90 | 162,260 | 11.9 | 21.1 | - | - | - |
 | js | typescript | _tsserver.js | fresh | 4,932 | 3,221 | 424 | 0.09 | 0.13 | 1,252,264 | 253.9 | 388.8 | - | - | - |
@@ -54,9 +54,9 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 | js | javascript | _tsserver.js | reuse | 4,928 | 3,263 | 318 | 0.06 | 0.10 | 15,176 | 3.1 | 4.7 | - | - | - |
 | js | javascript | _tsserver.js ×4 | fresh | 19,712 | 13,049 | 1,364 | 0.07 | 0.10 | 4,813,264 | 244.2 | 368.9 | - | - | - |
 | js | javascript | _tsserver.js ×4 | reuse | 19,712 | 13,049 | 1,245 | 0.06 | 0.10 | 59,744 | 3.0 | 4.6 | - | - | - |
-| go | typescript | acorn.js | fresh | 42,209 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 219.1 | 323.0 | 3 | 2,072,576 | 7,177,344 |
-| go | typescript | acorn.js | reuse | 42,209 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
-| go | typescript | acorn.js | slim-reuse | 42,209 | 11,491 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | typescript | acorn.js | fresh | 42,251 | 28,638 | 83 | 0.00 | 0.00 | 9,249,920 | 218.9 | 323.0 | 3 | 2,072,576 | 7,177,344 |
+| go | typescript | acorn.js | reuse | 42,251 | 28,638 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
+| go | typescript | acorn.js | slim-reuse | 42,251 | 11,491 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | lib.es5.d.ts | fresh | 13,659 | 7,233 | 73 | 0.01 | 0.01 | 2,117,280 | 155.0 | 292.7 | 3 | 548,864 | 1,568,416 |
 | go | typescript | lib.es5.d.ts | reuse | 13,659 | 7,233 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
 | go | typescript | lib.es5.d.ts | slim-reuse | 13,659 | 3,112 | 0 | 0.00 | 0.00 | 0 | 0.0 | 0.0 | 0 | 0 | 0 |
@@ -80,13 +80,13 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| object | `{ off, end, nl, kid, lid }` | 1 | 42,209 | 1.00 | 1,350,688 | 29.3% | 0 |
-| .slice() → array | `_hs.slice(b, _n)` | 1 | 28,916 | 0.69 | 898,372 | 19.5% | 28,638 |
-| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.5% | 28,638 |
+| object | `{ off, end, nl, kid, lid }` | 1 | 42,251 | 1.00 | 1,352,032 | 29.3% | 0 |
+| .slice() → array | `_hs.slice(b, _n)` | 1 | 28,916 | 0.68 | 898,372 | 19.5% | 28,638 |
+| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.68 | 809,620 | 17.5% | 28,638 |
 | object | `{ tokenType, offset: off, end }` | 1 | 23,031 | 0.55 | 644,868 | 14.0% | 22,215 |
 | array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 13.2% | 0 |
 | .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 6.5% | 0 |
-| .slice() → string | `_src.slice(t.off, u.end)` | 1 | 161 | 0.00 | 2,576 | 0.1% | 0 |
+| .slice() → string | `_src.slice(t.off, u.end)` | 1 | 203 | 0.00 | 3,248 | 0.1% | 0 |
 | .slice() → string | `_src.slice(_sp[b * _SW + N], _sp[b * _SW + N])` | 1 | 72 | 0.00 | 1,240 | 0.0% | 0 |
 | array growth | `localE.push({ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos...` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
@@ -100,13 +100,13 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| object | `{ off, end, nl, kid, lid }` | 1 | 42,209 | 1.00 | 1,350,688 | 29.3% | 0 |
-| .slice() → array | `_hs.slice(b, _n)` | 1 | 28,916 | 0.69 | 898,372 | 19.5% | 28,638 |
-| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.69 | 809,620 | 17.5% | 28,638 |
+| object | `{ off, end, nl, kid, lid }` | 1 | 42,251 | 1.00 | 1,352,032 | 29.3% | 0 |
+| .slice() → array | `_hs.slice(b, _n)` | 1 | 28,916 | 0.68 | 898,372 | 19.5% | 28,638 |
+| object | `{ rule, children, offset: off, end }` | 1 | 28,915 | 0.68 | 809,620 | 17.5% | 28,638 |
 | object | `{ tokenType, offset: off, end }` | 1 | 23,031 | 0.55 | 644,868 | 14.0% | 22,215 |
 | array growth | `toks.push(mk_tok(off, end, pendingNl, kid, lid))` | 1 | 18 | 0.00 | 607,924 | 13.2% | 0 |
 | .slice() → string | `src.slice(pos, e)` | 1 | 16,248 | 0.38 | 300,424 | 6.5% | 0 |
-| .slice() → string | `_src.slice(t.off, u.end)` | 1 | 161 | 0.00 | 2,576 | 0.1% | 0 |
+| .slice() → string | `_src.slice(t.off, u.end)` | 1 | 203 | 0.00 | 3,248 | 0.1% | 0 |
 | .slice() → string | `_src.slice(_sp[b * _SW + N], _sp[b * _SW + N])` | 1 | 72 | 0.00 | 1,240 | 0.0% | 0 |
 | array growth | `localE.push({ tokStart: _sp[s + N]!, tokEnd: pos, ext: Math.max(pos...` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
 | array growth | `parenHead.push(!isMember && prevKid === KID_IDENT && !!_phK[prevLid])` | 1 | 1 | 0.00 | 76 | 0.0% | 0 |
@@ -120,9 +120,9 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| new Array → array | `new Array(tokN + N)` | 1 | 30 | 0.00 | 5,065,920 | 36.4% | - |
+| new Array → array | `new Array(tokN + N)` | 1 | 30 | 0.00 | 5,070,960 | 36.5% | - |
 | new Int32Array → typed array | `new Int32Array(kidCap)` | 1 | 9 | 0.00 | 2,753,088 | 19.8% | - |
-| new Int32Array → typed array | `new Int32Array(tokN + N)` | 1 | 10 | 0.00 | 1,689,040 | 12.1% | - |
+| new Int32Array → typed array | `new Int32Array(tokN + N)` | 1 | 10 | 0.00 | 1,690,720 | 12.2% | - |
 | new Int32Array → typed array | `new Int32Array(rowCap)` | 1 | 16 | 0.00 | 1,573,888 | 11.3% | - |
 | new Int32Array → typed array | `new Int32Array(tkCap)` | 2 | 8 | 0.00 | 983,552 | 7.1% | - |
 | new Uint8Array → typed array | `new Uint8Array(tkCap)` | 2 | 16 | 0.00 | 492,544 | 3.5% | - |
@@ -140,10 +140,10 @@ returns. Tokens: each target's own `tokenize` count. Nodes: rule nodes of the re
 
 | kind | site (literals folded) | in functions | allocations | per token | modeled bytes | share | in result |
 |:--|:--|--:|--:|--:|--:|--:|--:|
-| .exec() → array | `LXRE_10_Number.exec(source)` | 1 | 1,719 | 0.04 | 96,280 | 41.2% | - |
-| .exec() → array | `LXRE_3_LineComment.exec(source)` | 1 | 784 | 0.02 | 46,972 | 20.1% | - |
+| .exec() → array | `LXRE_10_Number.exec(source)` | 1 | 1,719 | 0.04 | 96,280 | 41.1% | - |
+| .exec() → array | `LXRE_3_LineComment.exec(source)` | 1 | 784 | 0.02 | 46,972 | 20.0% | - |
 | .exec() → array | `LXRE_11_String.exec(source)` | 1 | 738 | 0.02 | 44,016 | 18.8% | - |
-| .slice() → string | `docFlat.slice(a, b)` | 1 | 1,255 | 0.03 | 20,220 | 8.7% | - |
+| .slice() → string | `docFlat.slice(a, b)` | 1 | 1,297 | 0.03 | 20,892 | 8.9% | - |
 | .exec() → array | `LXRE_6_HexNumber.exec(source)` | 1 | 234 | 0.01 | 13,272 | 5.7% | - |
 | .exec() → array | `LXRE_4_BlockComment.exec(source)` | 1 | 195 | 0.00 | 11,740 | 5.0% | - |
 | .exec() → array | `LXRE_12_Regex.exec(source)` | 1 | 15 | 0.00 | 888 | 0.4% | - |
