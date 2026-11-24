@@ -604,7 +604,7 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
       run('enLeafKid'),
       run('riErrNode', v('ce'), v('save')),
       let_('eo', call('enFinOff')),
-      ...probe('pr', [{ k: 'letCall', names: ['oke', 'o2'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) }]),
+      ...probe('pr', [{ k: 'letCall', names: ['oke', '_'], call: call('riNud', v('r'), v('rec'), v('minBp'), v('d')) }]),
       if_(v('oke'), [
         run('enUnmark', v('ke')),
         { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
