@@ -549,7 +549,10 @@ const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr
 // token) when that matches, else the operand is supplied, a zero-width `$missing` node and its
 // repair record `expected <rule>`, a target (form 0, so an operator that requires one takes it).
 // The one that matches ends farther, so the order is the longest match's.
-const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
+// cappedSeq: the grammar has a capped prefix operator (cappedPrefix), lowered to a sequence arm with a
+// cap: each REC_N_SEQ entry then carries one more cell, the cap (-1: none). Absent, the code and the
+// tables are as before.
+const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
   run('enSetSt', n(ST_CAPPED), n(0)),
   let_('kid', call('enPeekKid')),
   let_('lid', call('enPeekLid')),
@@ -591,7 +594,10 @@ const riNud = method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], [
           if_(eq(v('lid'), at(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
           inc('x', n(5)),
         ]),
-        if_(eq(v('tag'), n(REC_N_SEQ)), [
+        if_(eq(v('tag'), n(REC_N_SEQ)), cappedSeq ? [
+          if_(and(or(lt(at(v('x'), 5), n(0)), lt(v('minBp'), at(v('x'), 5))), call('riGuard', atR(v('x'), 1))), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
+          inc('x', n(6)),
+        ] : [
           if_(call('riGuard', atR(v('x'), 1)), nudCand(call('riList', atR(v('x'), 2), v('d')), n(0), at(v('x'), 3), n(0), isT(v('x'), 4))),
           inc('x', n(5)),
         ]),
@@ -974,8 +980,8 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
-export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, labels: [number, string][] = []): Fn[] {
-  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNud, riBp, riBpOf(rebind),
+export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): Fn[] {
+  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBp, riBpOf(rebind),
     riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
@@ -983,6 +989,6 @@ export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, labels: [num
 // The family for a grammar: the functions, the record Diag and the plan's int table `rt`.
 // `methods`: print only the engine methods (true), only the free functions (false), or all.
 // rbBracket is the native forms' (printed with them).
-export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, labels: [number, string][] = []): string {
-  return printFns(L, recoveryFamilyFns(rebind, ids, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
+export function emitRecoveryFamily(L: Lowering, rt: number[], methods: boolean | undefined, rebind: boolean, ids: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): string {
+  return printFns(L, recoveryFamilyFns(rebind, ids, cappedSeq, labels), [], [DIAG, BEST], [{ name: 'rt', data: rt }], (f) => f.name !== 'rbBracket' && (methods === undefined || (f.method === true) === methods), methods !== true);
 }

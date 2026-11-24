@@ -271,9 +271,18 @@ for (const { c, grammar, runners, oracleOut, dir, emitted } of await prepareAll(
   // (its contract, emit-parser-verify.ts). Its suppress gates (the no-`in` for-heads of
   // NO_IN_HEADS) are compiled from the grammar analysis like the portable targets', by a
   // different emitter, so they are checked here too.
+  // A grammar using a mechanism the retiring jsTarget refuses BY NAME (cappedPrefix, atLevel) is
+  // skipped here, saying so; any other emission error still fails.
+  let jsSrc: string | null = null;
   if (runsTarget('js')) {
+    try { jsSrc = cachedEmit(relative(ROOT, fileURLToPath(new URL(c.path, import.meta.url))), jsTarget.name, {}, () => emitParser(grammar, jsTarget), c.parts ?? null); } catch (e) {
+      if (!/^jsTarget: /.test(errText(e))) throw e;
+      console.log(`  ${c.grammar}/js: refused by the jsTarget emitter (${errText(e).split('\n')[0]})`);
+    }
+  }
+  if (jsSrc !== null) {
     const jsFile = `${dir}/js.mts`;
-    writeFileSync(jsFile, cachedEmit(relative(ROOT, fileURLToPath(new URL(c.path, import.meta.url))), jsTarget.name, {}, () => emitParser(grammar, jsTarget), c.parts ?? null));
+    writeFileSync(jsFile, jsSrc);
     const js = await import(jsFile);
     const jsOut = (src: string): Outcome => {
       try { const r = js.parse(src); return { ok: true, cst: canon(objectify(js.tree, (fns) => js.visit(r, fns))) }; } catch (e) { return { ok: false, err: errText(e) }; }

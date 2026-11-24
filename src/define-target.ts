@@ -6,7 +6,7 @@
 // may omit the lowering; asking it for one is then an error.
 import type { Lowering } from './algo-ir.ts';
 import type { EmitOptions, Target } from './target.ts';
-import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasRebind, recoveryTables } from './emit-portable.ts';
+import { type LexTok, type ParserIR, buildArenaIdPlan, buildLexIdPlan, hasCappedSeq, hasRebind, recoveryTables } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { EL_FRAME_FN, EL_OPENS_FN, EL_RAW_FN, EL_REACH_FN, EL_TAG_START_FN, TPL_SPAN, UNI_CLASS, UNI_IDENT, emitLexScan, hasUniPrefix, emitScanInline, scannedTokens, scannerName, templateLiterals, tokenLiterals } from './lex-family.ts';
 import { emitRelexFamily } from './relex-family.ts';
@@ -98,7 +98,7 @@ export function defineParserTarget(def: TargetDefinition): PortableTarget {
       const ids = buildLexIdPlan(ir);
       const ar = buildArenaIdPlan(ir, ids);
       const labels = Object.entries(ir.ruleLabels).flatMap(([name, label]): [number, string][] => { const r = ar.ruleNames.indexOf(name); return r < 0 ? [] : [[r, label]]; });
-      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, ar).data, methods, hasRebind(ir), ids, labels);
+      return emitRecoveryFamily(lowering(), recoveryTables(ir, ids, ar).data, methods, hasRebind(ir), ids, hasCappedSeq(ir), labels);
     },
     lexScan: (ir) => emitLexScan(ir, lowering()),
     scannedTokens,
