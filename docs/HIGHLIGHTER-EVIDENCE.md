@@ -352,3 +352,19 @@ worse. The metric counts these as differences, not defects.
 - [COMPLETENESS.md](COMPLETENESS.md): why `gen-tm` emits every construct the grammar requires.
 - [HIGHLIGHT-ISSUES-SURVEY.md](HIGHLIGHT-ISSUES-SURVEY.md): a 2026-06-03 survey of open
   highlighting issues in embedded-language formats.
+
+### tree-sitter record: classes whose cause is the missing context
+
+`test/treesitter-record.txt` names a class for each disagreement between tree-sitter's tree and the
+interpreter's. Two classes share one cause: a tree-sitter grammar has no parameters, so the generated
+grammar cannot say that `yield` (or `await`) is an operator only in a generator (or async) body.
+
+- `yield-context-not-rendered` (20 entries): outside a generator the interpreter reads `yield` as a name,
+  so `yield a + c;` is rejected and `yield(x);` is a call; tree-sitter reads the operator everywhere and
+  accepts the first and brackets the second differently.
+- `marker-wins-over-marker-free-reading` (2 test262 files): the scanner returns the same-line marker that
+  follows `await` / `yield` although a reading without the marker (the expression `await using`, the call
+  `yield()`) takes the same next token; the scanner commits and that reading dies.
+
+Both leave when the tree-sitter rendering carries the context (duplicated rules per context value, or a
+scanner state): not built; its cost in parser states is the open question.
