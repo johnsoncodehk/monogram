@@ -14,8 +14,8 @@
 //
 //   node test/guard-lead.ts
 import { readdirSync } from 'node:fs';
-import { portableIR, buildLexIdPlan, tokenSetBits, ctxWordLids, guardedSteps, type ParserIR, type Guard, type Step } from '../src/parser-ir.ts';
-import type { Grammar } from '../src/types.ts';
+import { portableIR, buildLexIdPlan, tokenSetBits, ctxWordLids, guardedSteps, type ParserIR, type Guard, type Step } from '../src/ir/parser-ir.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const paths = [

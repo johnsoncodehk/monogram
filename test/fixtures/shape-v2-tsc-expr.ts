@@ -1,5 +1,5 @@
 // ShapeSpec v2: a subset of tsc's AST (typescript 5.9, as test/shape-oracle-tsc.ts normalises
-// it) from typescript.ts, in the core calculus only (src/shape2-schema.ts): the expressions
+// it) from typescript.ts, in the core calculus only (src/shape/shape2-schema.ts): the expressions
 // below, the root, the statements, functions, arrows and their parameters (as in
 // shape-v2-estree-expr.ts), binding patterns, object / array literals, spread and templates,
 // classes, and modules (import / export, with the modifiers the wrapping arms hand a declaration).
@@ -12,8 +12,8 @@
 import {
   absent, and, branch, c, child, cook, dropLastIf, fold, get, iff, inh, let_, map, match, node, not, or, orElse, present, record, syn, text, v, list, spread,
   type ShapeSpec, type Term,
-} from '../../src/shape2-schema.ts';
-import { defineShape } from '../../src/shape2-eval.ts';
+} from '../../src/shape/shape2-schema.ts';
+import { defineShape } from '../../src/shape/shape2-eval.ts';
 import typescript from '../../typescript.ts';
 
 /** A token node (tsc's `operatorToken`, `questionDotToken`, ...) over a named leaf. */

@@ -33,7 +33,7 @@ import { fileURLToPath } from 'node:url';
 import * as acorn from 'acorn';
 import ts from 'tsc-oracle';
 import { parse as parseYaml } from 'yaml';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import { isInputError } from './input-error.ts';
 import { CLASSES, UNKNOWN, classify, type CauseClass, type TestInfo, type Verdict } from './test262-classes.ts';
 

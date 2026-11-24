@@ -11,14 +11,14 @@
 // Run with: node test/nullable-rules.ts
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createParser } from '../src/interpreter.ts';
-import { computeNullableRules } from '../src/grammar-analysis.ts';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
-import { tsTarget } from '../src/target-ts.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { computeNullableRules } from '../src/grammar/grammar-analysis.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
 import { defineShape, shapeCoverage, child, node } from '../src/shape.ts';
 import { token, rule, defineGrammar, many, opt, plus, oneOf, range } from '../src/api.ts';
-import type { RuleExpr } from '../src/types.ts';
+import type { RuleExpr } from '../src/grammar/types.ts';
 import { scratchDir } from './scratch.ts';
 
 let ok = 0, fail = 0;

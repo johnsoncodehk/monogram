@@ -66,8 +66,8 @@ go-unused)
   # a worktree shares .git/config with the main checkout, and a config written here changed the author of
   # every commit landed from that machine (51 commits on master, 2026-11-23 20:10 to 2026-11-24 06:21 UTC).
   export GIT_AUTHOR_NAME=ci GIT_AUTHOR_EMAIL=ci@example.invalid GIT_COMMITTER_NAME=ci GIT_COMMITTER_EMAIL=ci@example.invalid
-  grep -q 'const rxStateFrom = rx ? `\\tprevIsValue := func() bool {' src/target-go.ts || { echo "go-unused: the mutation site moved"; exit 1; }
-  sed -i 's/const rxStateFrom = rx ? `/&\\tunusedProbe := 0\\n/' src/target-go.ts
+  grep -q 'const rxStateFrom = rx ? `\\tprevIsValue := func() bool {' src/targets/target-go.ts || { echo "go-unused: the mutation site moved"; exit 1; }
+  sed -i 's/const rxStateFrom = rx ? `/&\\tunusedProbe := 0\\n/' src/targets/target-go.ts
   git diff | grep '^[-+] '; git commit -qam 'go-unused probe'
   node test/check.ts --quick --commit=HEAD > "$out/quick.txt" 2>&1; rc=$?
   grep -E '^    [✓✗] ' "$out/quick.txt"; grep -A12 -E '^── ✗' "$out/quick.txt" | head -40

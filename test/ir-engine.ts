@@ -3,7 +3,7 @@
 // code), with the checks guard-refused makes at every refusal and every elided mark. Its own module
 // so that test/decision-report.ts runs the same engine to observe which longest-match lists TIE
 // (two candidates end at the same token: declaration order decides) on real inputs.
-import { buildLexIdPlan, buildArenaIdPlan, isFirstGuardable, type ParserIR, type Step, type Guard, type RdRule, type PrattRule, type Dispatch, type FirstSig, type Commit, type CommitAct, type CommitTest } from '../src/parser-ir.ts';
+import { buildLexIdPlan, buildArenaIdPlan, isFirstGuardable, type ParserIR, type Step, type Guard, type RdRule, type PrattRule, type Dispatch, type FirstSig, type Commit, type CommitAct, type CommitTest } from '../src/ir/parser-ir.ts';
 export type Tok = { kid: number; lid: number; off: number; end: number; nl: boolean };
 export type Cst = { rule: string; children: Cst[] } | { tokenType: string; offset: number; end: number };
 // A guard that admitted a literal where what it guards then matched (and won): the gate's own

@@ -14,8 +14,8 @@
 //  verbatim — see the comments inline; the original prose is in generative.ts's header.
 // ─────────────────────────────────────────────────────────────────────────────
 import { normScope } from './scope-roles.ts';
-import type { CstNode, CstChild } from '../src/interpreter.ts';
-import type { Grammar, TokenPattern } from '../src/types.ts';
+import type { CstNode, CstChild } from '../src/interpreter/interpreter.ts';
+import type { Grammar, TokenPattern } from '../src/grammar/types.ts';
 import { commentSpec, type GenOptions, type GenInput } from './grammar-gen.ts';
 
 // The generation knobs BOTH consumers use, so the gap ledger sees the SAME derived corpus (hence the

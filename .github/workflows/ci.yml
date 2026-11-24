@@ -299,7 +299,7 @@ jobs:
           # INTERPRETER's, so a grammar file (root *.ts) or the interpreter (its parser, lexer and the
           # grammar helpers it reads) changing moves the record even when tree-sitter/** is byte-identical
           # (2026-11-24: a change to how `yield` is read left the record stale on master for two landings).
-          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(tree-sitter-|[a-z]+-tree-sitter\.ts)|^\.github/workflows/ci\.yml$|^[a-z]+\.ts$|^src/(interpreter|lexer|api|types|grammar-utils|grammar-analysis|grammar-names)\.ts$'; then
+          if git diff --name-only "$base" HEAD | grep -qE '^tree-sitter/|^test/(tree-sitter-|[a-z]+-tree-sitter\.ts)|^\.github/workflows/ci\.yml$|^[a-z]+\.ts$|^src/api\.ts$|^src/(grammar|interpreter)/'; then
             echo "value=true" >> "$GITHUB_OUTPUT"; echo "tree-sitter inputs changed — running the gate"
           else
             echo "value=false" >> "$GITHUB_OUTPUT"; echo "no tree-sitter input change — skipping generate/build/bench"

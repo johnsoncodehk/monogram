@@ -26,15 +26,15 @@
 //   node test/look-extent.ts
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
-import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
+import { compileTokenizer, lexSpecOf } from '../src/interpreter/lexer.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { scratchDir } from './scratch.ts';
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
 
 const TMP = scratchDir('look-extent');
@@ -54,7 +54,7 @@ const GRAMMARS: { name: string; path: string; files?: () => string[] }[] = [
   ...['calc', 'minijs', 'richtokens', 'regexjs', 'templatejs', 'envspec', 'envtpl', 'altjs', 'nudjs', 'postjs', 'seqjs', 'sljs', 'arrowjs', 'ledjs', 'noinjs', 'longestjs', 'guardjs', 'lookrec']
     .map((name) => ({ name, path: `./fixtures/${name}.ts`, files: name === 'envspec' ? () => ENV : name === 'envtpl' ? () => ENVTPL : undefined })),
   { name: 'javascript', path: '../javascript.ts', files: () => ['javascript', 'typescript'].map((g) => readFileSync(`${ROOT}tree-sitter/${g}/grammar.js`, 'utf8')) },
-  { name: 'typescript', path: '../typescript.ts', files: () => readdirSync(`${ROOT}src`).filter((f) => f.endsWith('.ts')).sort().slice(0, 12).map((f) => readFileSync(`${ROOT}src/${f}`, 'utf8')) },
+  { name: 'typescript', path: '../typescript.ts', files: () => (readdirSync(`${ROOT}src`, { recursive: true }) as string[]).filter((f) => f.endsWith('.ts')).sort().slice(0, 12).map((f) => readFileSync(`${ROOT}src/${f}`, 'utf8')) },
 ];
 const MAX_EDIT_INPUTS = 120;   // accepted corpus inputs (≥ 2 entries) that seed edit sessions, per grammar
 

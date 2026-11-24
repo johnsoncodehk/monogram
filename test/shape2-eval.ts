@@ -1,5 +1,5 @@
-// Gate `shape2-eval`: the ShapeSpec v2 reference interpreter (src/shape2-eval.ts) on its calculus
-// (src/shape2-schema.ts): every operator evaluated on a small grammar with every name written
+// Gate `shape2-eval`: the ShapeSpec v2 reference interpreter (src/shape/shape2-eval.ts) on its calculus
+// (src/shape/shape2-schema.ts): every operator evaluated on a small grammar with every name written
 // (test/fixtures/namedcalc.ts) and on the JavaScript grammar's expression rules, and every
 // load-time rejection: a spec outside the calculus or not typed against the grammar must be
 // refused, naming the rule / arm / child.
@@ -7,17 +7,17 @@ import assert from 'node:assert/strict';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createParser, type CstLeaf, type CstNode } from '../src/interpreter.ts';
-import type { Grammar } from '../src/types.ts';
-import { armNameOf, dependencies, evaluateShape, evaluator, defineShape, ShapeSpecError, ShapeUnmapped, spineOf, type ShapeValue } from '../src/shape2-eval.ts';
-import { nodeKeysOf } from '../src/shape2-schema.ts';
+import { createParser, type CstLeaf, type CstNode } from '../src/interpreter/interpreter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
+import { armNameOf, dependencies, evaluateShape, evaluator, defineShape, ShapeSpecError, ShapeUnmapped, spineOf, type ShapeValue } from '../src/shape/shape2-eval.ts';
+import { nodeKeysOf } from '../src/shape/shape2-schema.ts';
 import {
   absent, and, armOf, branch, c, child, cook, fold, iff, inh, let_, list, map, match, node, not, or, orElse,
   dropLastIf, get, present, record, spread, syn, text, thread, typeByText, v, wrapIf, type ShapeSpec, type Term,
-} from '../src/shape2-schema.ts';
+} from '../src/shape/shape2-schema.ts';
 import calc from './fixtures/namedcalc.ts';
 import calcExample from './fixtures/shape-namedcalc.ts';
-import { freeNodeKeys, shapeCoverage, shapeSkeleton } from '../src/shape-coverage.ts';
+import { freeNodeKeys, shapeCoverage, shapeSkeleton } from '../src/shape/shape-coverage.ts';
 import { estreeExprShape } from './fixtures/shape-v2-estree-expr.ts';
 import { tscExprShape } from './fixtures/shape-v2-tsc-expr.ts';
 import { compareTrees, nestValue, type NTree, type NValue } from './shape-oracle.ts';
@@ -544,7 +544,7 @@ check('calc: a span { after } is zero width at the end of its child', () => {
 // The reference matcher finds an arm for every node of real inputs (an arm consuming all the
 // node's children): JavaScript on acorn's own source, TypeScript on this interpreter's source.
 check('the matcher is total on real files', () => {
-  for (const [g, file] of [[javascript, 'node_modules/acorn/dist/acorn.js'], [typescript, 'src/shape2-eval.ts']] as const) {
+  for (const [g, file] of [[javascript, 'node_modules/acorn/dist/acorn.js'], [typescript, 'src/shape/shape2-eval.ts']] as const) {
     const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf-8');
     const loaded = defineShape(g, { name: 'none', rules: {} });
     let nodes = 0;
@@ -746,16 +746,16 @@ check('skeleton: every arm of calc / javascript / typescript maps to a term that
   } finally { rmSync(at); }
 }
 
-// ── The emitted shape-building parser (emit option `shape`, TypeScript; src/shape-plan.ts) ──
+// ── The emitted shape-building parser (emit option `shape`, TypeScript; src/shape/shape-plan.ts) ──
 // Its value of a text is the evaluator's of the interpreter's CST: on the doc example's calc
 // shape, over accepted and rejected texts. And a LOSING candidate's nodes are truncated with it:
 // in `x! y` the arm `short` of S is accepted at `x` (its node built) and then beaten by the longer
 // `long`; that node is built (observeBuilt sees it) and is in no value the parse returns.
 {
-  const { emitParser } = await import('../src/target.ts');
-  const { tsTarget } = await import('../src/target-ts.ts');
+  const { emitParser } = await import('../src/targets/target.ts');
+  const { tsTarget } = await import('../src/targets/target-ts.ts');
   const { token, rule, defineGrammar, many, plus, oneOf, range, arm, field } = await import('../src/api.ts');
-  const { child, node, text } = await import('../src/shape2-schema.ts');
+  const { child, node, text } = await import('../src/shape/shape2-schema.ts');
   const at = join(tmpdir(), `shape2-built-${process.pid}`);
   type AnyShape = Parameters<typeof evaluateShape>[0];
   const emitted = async (shape: AnyShape, name: string) => {

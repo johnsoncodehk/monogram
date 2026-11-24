@@ -32,10 +32,10 @@
 //     `[`-in-key leak) deterministically, not by the luck of a seed. Polynomial (C^D rounds),
 //     never the exponential full derivation tree.
 // ─────────────────────────────────────────────────────────────────────────────
-import type { Grammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/types.ts';
-import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/token-pattern.ts';
-import { createParser } from '../src/interpreter.ts';
-import { findEntryRule } from '../src/grammar-analysis.ts';
+import type { Grammar, RuleExpr, RuleDecl, TokenDecl, TokenPattern, TokenCharClassItem } from '../src/grammar/types.ts';
+import { tokenPatternStartsWithDecimal, tokenPatternHasStartAnchor, tokenPatternBlockDelimiters } from '../src/grammar/token-pattern.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { findEntryRule } from '../src/grammar/grammar-analysis.ts';
 
 // Max emissions in one derivation. A deep tree of 2-rep quantifiers grows the list multiplicatively;
 // copying huge lists (not the call count) is what makes a naive enumerator hang — cap it.

@@ -2,7 +2,7 @@
 // 'ci': minutes, not the inner loop): the WIDE corpora. Every file of the tsc conformance corpus and
 // of test262 through every runner, against the interpreter.
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import { canon, ECMASCRIPT, errText, finish, gate, prepareAll, selectedCases, skelObj, skeleton, type Case, type Runner } from './portable-harness.ts';
 // Every rule level interpreted (test/portable-recovery.ts INTERP_ALL).
 const INTERP_ALL = 1 << 30;

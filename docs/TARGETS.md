@@ -38,7 +38,7 @@ and markup modes) carry the interpreter's lexer inlined into the module.
 
 The portable targets (`tsTarget` / `goTarget` / `rustTarget`) implement the token-stream and
 newline modes. They refuse indent and markup grammars (`buildIR` in
-[`src/parser-ir.ts`](../src/parser-ir.ts)) rather than emit a lexer that would
+[`src/ir/parser-ir.ts`](../src/ir/parser-ir.ts)) rather than emit a lexer that would
 mis-tokenize them. So YAML and HTML have the interpreter and `jsTarget` only.
 
 They parse grammars with element regions (`elements`, [docs/REGIONS.md](REGIONS.md)): the
@@ -57,7 +57,7 @@ begin beyond ASCII, and elements in a newline-mode grammar. The text dialect's s
 `test/portable-targets.ts`.
 
 An `identifier` token whose own pattern does not take an ASCII member of IdentifierPart
-(`src/uni-ident.ts`: `$`, also an ASCII digit or letter the pattern leaves out) ends at such a
+(`src/grammar/uni-ident.ts`: `$`, also an ASCII digit or letter the pattern leaves out) ends at such a
 unit in every lexer: the interpreter extends an identifier the pattern cut short only when it stopped
 at a unit beyond ASCII (`LX_UNI_CONT`), as the portable lexers do (`lxExt`), so the token's pattern
 decides where an ASCII run ends; an extension, once begun, takes the whole IdentifierPart run
@@ -143,7 +143,7 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   is left over). Its related location is the furthest token the parse examined, when that lies
   past the error. That token is usually the interpreter's `[farthest: …]` token, but not always:
   the interpreter counts the tokens a match advanced past, and the engine also counts a guard's
-  read of the next token. Messages come from one formatter (`src/recovery-family.ts`). Go and
+  read of the next token. Messages come from one formatter (`src/ir/recovery-family.ts`). Go and
   Rust spans are byte offsets. How good the recovered trees are is measured (not gated) on the
   seeded mutation corpus (`test/portable-recovery.ts`: each accepted list input with one token
   deleted, inserted or replaced; the rejected mutants, TS target). DAMAGE: the share whose
@@ -158,7 +158,7 @@ listed in [ROADMAP.md](ROADMAP.md#1-one-portable-engine-one-shared-runtime-descr
   | typescript (1827) | 22.6% | 12.7% | 7.9% | 76.8% | 28.7% |
 
   The option also carries the parse plan as one int table (`parser-ir.ts` recoveryTables) and
-  ONE interpreter of it (`src/recovery-family.ts`, printed for each target), which later stages
+  ONE interpreter of it (`src/ir/recovery-family.ts`, printed for each target), which later stages
   make repair: TS `parseInterpreted(src, builder, depth)`, Go `ParseInterpreted`, Rust
   `parse_interpreted` parse as `parseWith` does (the same verdict and tree) with `depth` rule
   levels interpreted and the native functions below, and report the steps they interpreted.
@@ -241,13 +241,13 @@ The inputs are hand-written accept/reject lists and a corpus derived from each g
 
 On that corpus every lexer must also give the interpreter lexer's token stream. A token
 pattern means what its regex means: the emitted scanners back up out of a choice exactly where
-that regex would ([`src/lex-match-plan.ts`](../src/lex-match-plan.ts)), and
+that regex would ([`src/grammar/lex-match-plan.ts`](../src/grammar/lex-match-plan.ts)), and
 [`test/lex-family.ts`](../test/lex-family.ts) checks every scanner against its token's regex.
 
 ## AST shapes
 
-`emitTs(grammar, { shape })` ([`src/target-ts.ts`](../src/target-ts.ts)) and
-`emitRust(grammar, { shape })` ([`src/target-rust.ts`](../src/target-rust.ts)) append a
+`emitTs(grammar, { shape })` ([`src/targets/target-ts.ts`](../src/targets/target-ts.ts)) and
+`emitRust(grammar, { shape })` ([`src/targets/target-rust.ts`](../src/targets/target-rust.ts)) append a
 declarative AST layer (`parseAst`) to the CST parser. The Go target has none. Spec format,
 primitives and contracts: [SHAPE.md](SHAPE.md). Gates: `shape-rust`,
 `shape-parity`, `builder-reuse`.

@@ -13,7 +13,7 @@
 //  Run: node test/yaml-tree-sitter.ts
 // ─────────────────────────────────────────────────────────────────────────────
 import { existsSync } from 'node:fs';
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import yaml from '../yaml.ts';
 
 const WASM = 'tree-sitter/yaml/tree-sitter-yaml.wasm';

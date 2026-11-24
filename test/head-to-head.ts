@@ -15,8 +15,8 @@
 // so it reads through a 16KB chunk callback (its documented large-input path).
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import { writeFileSync } from 'node:fs';
 import ts from 'tsc-oracle';
 import { scratchDir } from './scratch.ts';

@@ -4,7 +4,7 @@
 import {
   token, rule, defineGrammar, many, opt, sep, seq, plus, oneOf, range, star, noneOf, never,
 } from '../../src/api.ts';
-import type { NewlineConfig } from '../../src/types.ts';
+import type { NewlineConfig } from '../../src/grammar/types.ts';
 
 const Newline = token(never(), {});
 const Ident   = token(plus(oneOf(range('a', 'z'), range('A', 'Z'), range('0', '9'), '_')), { identifier: true });

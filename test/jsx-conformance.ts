@@ -5,7 +5,7 @@
 //   2. plain JavaScript still parses under the .jsx grammar — additivity gate;
 //   3. TypeScript-only syntax (type annotations, generics) is REJECTED — .jsx is
 //      JavaScript, so a type layer must NOT leak in via the shared JSX module.
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import ts from 'tsc-oracle';
 
 const grammar = (await import('../javascriptreact.ts')).default;
@@ -102,7 +102,7 @@ for (const c of par_fail) console.log('    DIVERGED from base (withJsx changed t
 
 // ── Corpus 4: known-unsupported valid JSX (expected-fail) ──
 // Valid JSX (tsc, ScriptKind.JSX) that Monogram rejects: where the lexer-local element region
-// differs from tsc's parser-driven scanner (ElementRegion in src/types.ts). A row that starts
+// differs from tsc's parser-driven scanner (ElementRegion in src/grammar/types.ts). A row that starts
 // parsing fails the gate until it moves to corpus 1.
 const unsupported: [string, string][] = [
 ];

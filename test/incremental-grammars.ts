@@ -16,8 +16,8 @@
 //
 //   node test/incremental-grammars.ts
 import { readFileSync, writeFileSync } from 'node:fs';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import { generateInputs } from './grammar-gen.ts';
 import { objectify } from './emitted-obj.ts';
 import { scratchDir } from './scratch.ts';
@@ -226,7 +226,7 @@ for (const name of ['javascript', 'typescript']) {
 // The random mutator above reaches a hole only by chance. With them, the portable Doc's documents
 // (test/relex-edit-docs.ts): a `/` decided by the text after it, a paren-head keyword, and tokens
 // decided by reading past their end + 1, each LOOK document with its own insertions (the relex
-// anchor rule, src/relex-family.ts).
+// anchor rule, src/ir/relex-family.ts).
 type FrameDoc = string | { doc: string; ins: string[] };
 // the text dialect's insertions: the frame characters, and a digit and `_` (a tag start or not)
 const TEXT_INS = ['{', '}', '<', '>', '/', ';', 'x', ' ', '\n', '9', '_', '.'];
@@ -422,7 +422,7 @@ console.log(`  deep-hole edits: ${deepSteps} edits on documents with 254-300 nes
       default: { const stmt = '\n' + C_STMTS[cRand(C_STMTS.length)]; return { next: text + stmt, edit: { start: text.length, end: text.length, text: stmt } }; }
     }
   };
-  let ctext = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf-8');
+  let ctext = readFileSync(new URL('../src/grammar/types.ts', import.meta.url), 'utf-8');
   const ccst = cSes.parse(ctext);
   let cEqual = 0;
   for (let k = 0; k < 120; k++) {

@@ -16,10 +16,10 @@
 //
 //   3. A known-UNSUPPORTED set (expected-fail): valid TSX the lexer-local element
 //      region decides differently from tsc's parser-driven scanner (see
-//      `ElementRegion` in src/types.ts). A row that starts parsing fails the gate.
+//      `ElementRegion` in src/grammar/types.ts). A row that starts parsing fails the gate.
 //
 //   4. Invalid TSX that must be REJECTED (near misses of the element region).
-import { createParser } from '../src/interpreter.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
 import ts from 'tsc-oracle';
 
 const grammar = (await import('../typescriptreact.ts')).default;
@@ -118,7 +118,7 @@ const tsStillWorks: [string, string][] = [
 ];
 
 // ── Corpus 3: known-unsupported valid TSX: where the lexer-local element region decides
-// differently from tsc, whose scanner is driven by the parser (ElementRegion in src/types.ts) ──
+// differently from tsc, whose scanner is driven by the parser (ElementRegion in src/grammar/types.ts) ──
 const unsupported: [string, string][] = [
   // a `<Name>` head whose `( … )` is followed by `:` reads as a type-parameter signature
   ['needs parser context: text of an attribute-less element: a group then `:`', `const a = <li>(1): one</li>;`],

@@ -16,8 +16,8 @@
 // With GITHUB_STEP_SUMMARY set, the per-grammar and per-rule tables go to the job summary.
 import { appendFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { generateTreeSitter, EXACT_ASSERTION_CLASSES, type AssertionClass, type AssertionRecord } from '../src/gen-tree-sitter.ts';
-import type { Grammar } from '../src/types.ts';
+import { generateTreeSitter, EXACT_ASSERTION_CLASSES, type AssertionClass, type AssertionRecord } from '../src/editor/gen-tree-sitter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 
 const CLASSES: AssertionClass[] = ['lowered', 'vacuous', 'reserved-set', 'scanner', 'reserved', 'lookahead1', 'lookahead', 'left-context'];
 // Rendered into grammar.js (every other class is dropped to blank()).

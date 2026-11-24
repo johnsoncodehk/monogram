@@ -13,10 +13,10 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { emitParser } from '../src/target.ts';
-import { tsTarget } from '../src/target-ts.ts';
-import { goTarget } from '../src/target-go.ts';
-import { rustTarget } from '../src/target-rust.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { tsTarget } from '../src/targets/target-ts.ts';
+import { goTarget } from '../src/targets/target-go.ts';
+import { rustTarget } from '../src/targets/target-rust.ts';
 import { asGoMain } from './go-main.ts';
 import { scratchDir } from './scratch.ts';
 import { cachedGoBuild, cachedRustc } from './build-cache.ts';
@@ -206,7 +206,7 @@ export function __denseWork(src: string) {
 `;
   const lib = emitParser(grammar, tsTarget);
   if (!lib.includes('\nfunction parseTokens(tokens: Tok[]): Cst | null {')) throw new Error('dense probe: parseTokens not found in the TS target');
-  // A module whose rules never read the source text has no _src (src/js-unreferenced.ts).
+  // A module whose rules never read the source text has no _src (src/targets/js-unreferenced.ts).
   writeFileSync(join(dir, 'dense.ts'), lib + (lib.includes('\nlet _src') ? probe : probe.replace('  _src = src;\n', '')));
   const m = (await import(join(dir, 'dense.ts'))) as { __denseWork(s: string): DenseWork | null };
   const work = [DENSE_N, 4 * DENSE_N].map((n) => m.__denseWork(DENSE_LINE.repeat(n)));

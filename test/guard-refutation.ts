@@ -18,12 +18,12 @@
 //
 //   node test/guard-refutation.ts
 import { readdirSync } from 'node:fs';
-import { portableIR, buildLexIdPlan, type ParserIR, type Guard, type TokenSet } from '../src/parser-ir.ts';
-import { analyzeGrammar, hasMarker } from '../src/grammar-analysis.ts';
-import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
-import { createParser } from '../src/interpreter.ts';
-import { collectLiterals } from '../src/grammar-utils.ts';
-import type { Grammar, RuleExpr, RuleDecl } from '../src/types.ts';
+import { portableIR, buildLexIdPlan, type ParserIR, type Guard, type TokenSet } from '../src/ir/parser-ir.ts';
+import { analyzeGrammar, hasMarker } from '../src/grammar/grammar-analysis.ts';
+import { compileTokenizer, lexSpecOf } from '../src/interpreter/lexer.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import { collectLiterals } from '../src/grammar/grammar-utils.ts';
+import type { Grammar, RuleExpr, RuleDecl } from '../src/grammar/types.ts';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const paths = [

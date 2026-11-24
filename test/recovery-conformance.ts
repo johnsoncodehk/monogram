@@ -13,8 +13,8 @@
 import { writeFileSync, readFileSync } from 'node:fs';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { emitParser } from '../src/target.ts';
-import { jsTarget } from '../src/target-js.ts';
+import { emitParser } from '../src/targets/target.ts';
+import { jsTarget } from '../src/targets/target-js.ts';
 import ts from 'tsc-oracle';
 import { scratchDir } from './scratch.ts';
 

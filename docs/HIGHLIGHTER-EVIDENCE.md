@@ -224,7 +224,7 @@ records, per grammar, `tree-sitter generate` wall and CPU time, peak memory and 
 generator).
 
 Operator precedence: tree-sitter's precedence numbers are the binding powers of the shared analysis
-(`analyzeGrammar` in `src/grammar-analysis.ts`, the table the interpreter and the portable printers
+(`analyzeGrammar` in `src/grammar/grammar-analysis.ts`, the table the interpreter and the portable printers
 read): an operator's left binding power, a prefix operator's right one, and a `ledPrec` continuation
 (`?:`, `in`, `instanceof`, `as`, `satisfies`) its connector's; a continuation whose last operand is read
 whole (the conditional's last branch, `as T`'s type) leaves that step unprecedenced, so the operators
@@ -253,7 +253,7 @@ conflicts (call / instantiation / binary / unary) and no scanner token: it reads
 Overlapping readings: two more corpora compare spans, `type arguments` (calls with type arguments
 beside the relational readings, TypeScript and TSX) and `new arguments` (an arm's optional arguments
 beside a call on the arm without them, every JS / TS dialect). Where two readings of the same tokens
-overlap, the generator renders the interpreter's order (`overlapOrder` in `src/gen-tree-sitter.ts`):
+overlap, the generator renders the interpreter's order (`overlapOrder` in `src/editor/gen-tree-sitter.ts`):
 the LED loop tries the continuations in grammar order before any operator, the first that matches
 winning, and a NUD takes its longest match. So a continuation that is a strict prefix of an earlier one
 (the instantiation `f<T>` beside the typed call `f<T>(x)`), whose own lookahead excludes every token

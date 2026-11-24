@@ -1,15 +1,15 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { generateLanguageConfig } from './gen-vscode-config.ts';
-import { registeredHighlighters, highlighterInput } from './define-highlighter.ts';
-import { treeSitterFiles } from './highlighters.ts';
-import { generateCstMatch } from './gen-cst-match.ts';
-import type { Grammar, RuleExpr } from './types.ts';
-import { tokenPatternSource } from './token-pattern.ts';
-import { decisionReport } from './decision-report.ts';
+import { generateLanguageConfig } from './editor/gen-vscode-config.ts';
+import { registeredHighlighters, highlighterInput } from './editor/define-highlighter.ts';
+import { treeSitterFiles } from './editor/highlighters.ts';
+import { generateCstMatch } from './targets/gen-cst-match.ts';
+import type { Grammar, RuleExpr } from './grammar/types.ts';
+import { tokenPatternSource } from './grammar/token-pattern.ts';
+import { decisionReport } from './ir/decision-report.ts';
 
 // `--decisions` also writes <name>.decisions.md: how the generated parser decides every choice
-// point, with the dead alternatives and declaration-order ties to act on (src/decision-report.ts).
+// point, with the dead alternatives and declaration-order ties to act on (src/ir/decision-report.ts).
 // It is a diagnostic for the grammar's author, not an artifact a consumer ships, so it is not in
 // the default output set that `npm run gen` commits.
 //
@@ -33,14 +33,14 @@ const grammar = mod.default as Grammar;
 const langName = grammar.name;
 
 if (args.includes('--shape-skeleton')) {
-  const { shapeSkeleton } = await import('./shape-coverage.ts');
+  const { shapeSkeleton } = await import('./shape/shape-coverage.ts');
   console.log(shapeSkeleton(grammar, `./${basename(file)}`));
   process.exit(0);
 }
 if (shapeFile) {
-  const { shapeCoverage, coverageReport } = await import('./shape-coverage.ts');
+  const { shapeCoverage, coverageReport } = await import('./shape/shape-coverage.ts');
   // Loading the module runs defineShape: a spec that does not fit throws ShapeSpecError here.
-  const shape = (await import(resolve(shapeFile))).default as import('./shape2-eval.ts').Shape;
+  const shape = (await import(resolve(shapeFile))).default as import('./shape/shape2-eval.ts').Shape;
   if (shape?.source !== grammar) {
     console.error(`${shapeFile}: its default export is not a shape defined on ${file} (export default defineShape(grammar, { ... }) with grammar imported from ${file})`);
     process.exit(1);
@@ -76,7 +76,7 @@ for (const r of grammar.rules) {
   console.log(`  ${r.name} = ${formatExpr(r.body)}`);
 }
 
-// ── The highlighters (src/highlighters.ts, registered with defineHighlighter): each renders its
+// ── The highlighters (src/editor/highlighters.ts, registered with defineHighlighter): each renders its
 // files from the grammar's highlight facts; a construct one declines is listed with its reason.
 const emit = (rel: string, content: string) => {
   const full = join(dirname(file), rel);

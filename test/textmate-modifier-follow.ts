@@ -20,7 +20,7 @@
 //
 // Run with: node test/textmate-modifier-follow.ts
 import { token, rule, defineGrammar, alt, many, opt, not, seq, plus, star, oneOf, range } from '../src/api.ts';
-import { generateTmLanguage } from '../src/gen-textmate.ts';
+import { generateTmLanguage } from '../src/editor/gen-textmate.ts';
 
 let ok = 0, fail = 0;
 const check = (label: string, cond: boolean) => { if (cond) ok++; else { fail++; console.log('  ✗', label); } };

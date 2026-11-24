@@ -46,8 +46,8 @@ import onig from 'vscode-oniguruma';
 import ts from 'tsc-oracle';
 import { parseAllDocuments } from 'yaml';
 import { parseFragment } from 'parse5';
-import { createParser, type CstNode } from '../src/interpreter.ts';
-import type { Grammar } from '../src/types.ts';
+import { createParser, type CstNode } from '../src/interpreter/interpreter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import {
   type TmTok, type Violation,

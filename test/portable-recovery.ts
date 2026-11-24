@@ -1,15 +1,15 @@
 // Gate class of the portable targets (test/portable-harness.ts): TOTAL PARSING.
-import type { Grammar } from '../src/types.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import { mutationEdits, type Mutant } from './mutation-corpus.ts';
 import { CURATED_TS } from './emit-corpus.ts';
 import { ECMASCRIPT, canon, finish, gate, parityCorpus, prepareAll, selectedCases, primaryLexMsg, type Case, type DiagRow, type Outcome, type Runner, type Total } from './portable-harness.ts';
 import { checkContract, damage, summarize, withOperandSamples, type ContractRow } from './recovery-contract.ts';
-import { RM_MAX_BARS } from '../src/recovery-family.ts';
+import { RM_MAX_BARS } from '../src/ir/recovery-family.ts';
 import type { Tok } from './parity-corpus.ts';
-import { portableIR, type PortableFacts } from '../src/parser-ir.ts';
-import { FACTS as TS_FACTS } from '../src/target-ts.ts';
-import { FACTS as GO_FACTS } from '../src/target-go.ts';
-import { FACTS as RS_FACTS } from '../src/target-rust.ts';
+import { portableIR, type PortableFacts } from '../src/ir/parser-ir.ts';
+import { FACTS as TS_FACTS } from '../src/targets/target-ts.ts';
+import { FACTS as GO_FACTS } from '../src/targets/target-go.ts';
+import { FACTS as RS_FACTS } from '../src/targets/target-rust.ts';
 
 
 // ── The recovery class: total parsing, `parseTotal` (the emit option `recovery`) ──

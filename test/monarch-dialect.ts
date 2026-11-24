@@ -23,9 +23,9 @@
 //   node test/monarch-dialect.ts --agreement [--write]   TextMate against Monarch on real code, by
 //                                          class, against test/textmate-monarch-agreement.json (tier ci)
 import { readFileSync } from 'node:fs';
-import { generateMonarch, type MonarchLanguage, type MonarchRule } from '../src/gen-monarch.ts';
-import { createParser } from '../src/interpreter.ts';
-import type { Grammar } from '../src/types.ts';
+import { generateMonarch, type MonarchLanguage, type MonarchRule } from '../src/editor/gen-monarch.ts';
+import { createParser } from '../src/interpreter/interpreter.ts';
+import type { Grammar } from '../src/grammar/types.ts';
 import tsx from '../typescriptreact.ts';
 import jsx from '../javascriptreact.ts';
 import elementDialect from './fixtures/elementdialect.ts';
