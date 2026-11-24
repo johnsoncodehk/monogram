@@ -2112,6 +2112,10 @@ export interface TypeContext {
   /** The delimiter when the reference is a whole `sep` element (`implements A, B`, `<A, B>`):
    *  after it another type of the list follows. */
   delimiter: string | null;
+  /** The bracket whose list holds the reference's rule, when every call site of the rule is the
+   *  element of a `sep` right after that bracket (`TypeParam` in `'<', sep(TypeParam, ','), '>'`):
+   *  a reader of that bracket's list reads the position. */
+  insideBracket: string | null;
   /** The closers that are also CONTINUERS of the type (TypeBody.continuers): there the text alone
    *  does not tell whether the type goes on. `type`: the parser reads the type on (a
    *  left-recursive arm of the type rule takes the literal with no lookahead guard: its longest
@@ -2123,8 +2127,13 @@ export interface TypeContext {
 /** What is known of a type's own text: the literals that may follow a COMPLETE type at bracket
  *  depth 0 (after a `@type` reference, or after an item an arm of a type rule may end with: never
  *  the FIRST of a type, which follows only an operator), and of those the ones a left-recursive
- *  arm reads with no lookahead guard after it. */
-export interface TypeBody { continuers: string[]; unguarded: string[] }
+ *  arm reads with no lookahead guard after it (see `unguarded` in typeBody). */
+export interface TypeBody {
+  continuers: string[];
+  unguarded: string[];
+  /** The literals a type may begin with (the type rules' literal FIRST). */
+  starts: string[];
+}
 
 const OPEN_CLOSE: Record<string, string> = { '(': ')', '[': ']', '{': '}', '<': '>' };
 const zeroWidthItem = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf'].includes(e.type);
@@ -2193,7 +2202,9 @@ export function typeBody(grammar: CstGrammar): TypeBody | null {
       if (lit?.type === 'literal' && !rejectsOperand(items[i + 1])) unguarded.add(lit.value);
     }
   }
-  return { continuers: longestFirstOf(cont), unguarded: longestFirstOf([...unguarded].filter(l => cont.has(l))) };
+  const starts = new Set<string>();
+  for (const name of types) for (const l of firstLiterals(byName.get(name)!, byName)) starts.add(l);
+  return { continuers: longestFirstOf(cont), unguarded: longestFirstOf([...unguarded].filter(l => cont.has(l))), starts: longestFirstOf(starts) };
 }
 
 /** The type positions of a grammar, and the keywords that open one (see TypeContext). */
@@ -2202,8 +2213,9 @@ export interface TypeContexts {
   /** Each keyword opener (`as`, `satisfies`, `is`, `implements` …) and, where the word stands in
    *  an arm without a type after it (`import * as ns from`, `{ a as b }`), the literals that may
    *  follow the item after it there (`from`, `,`, `}`): a reader that cannot tell the two arms
-   *  apart ends the type at them. */
-  openerWords: { word: string; elsewhere: string[] }[];
+   *  apart ends the type at them. `ambiguous`: somewhere the word is followed by a rule (an
+   *  expression: `class A extends B`), not one token, so its text does not tell a type. */
+  openerWords: { word: string; elsewhere: string[]; ambiguous: boolean }[];
 }
 
 /** typeContexts: see TypeContexts. Empty without `@type` rules. */
@@ -2285,6 +2297,19 @@ export function typeContexts(grammar: CstGrammar): TypeContexts {
     }
     return [...pairs.values()];
   };
+  const bracketOf = (r: number): string | null => {
+    const brackets = new Set<string>();
+    for (const c of callSites[r]) {
+      const sr = g.root[c];
+      if (g.rootKind[sr] !== 'sep' || !g.first[sr].includes(c)) return null;
+      for (const s of callSites[sr]) for (const b of preds[s]) {
+        const x = g.node[b];
+        if (x.type !== 'literal' || !OPEN_CLOSE[x.value]) return null;
+        brackets.add(x.value);
+      }
+    }
+    return brackets.size === 1 ? [...brackets][0] : null;
+  };
   const cont = new Set(body.continuers), unguarded = new Set(body.unguarded);
   const out: TypeContext[] = [];
   g.node.forEach((e, p) => {
@@ -2301,21 +2326,25 @@ export function typeContexts(grammar: CstGrammar): TypeContexts {
       left: openers.flatMap(leftOf),
       closers, closerTokens: [...f.toks].sort(),
       delimiter: sep?.delimiter ?? null,
+      insideBracket: bracketOf(r),
       conflicts: closers.filter(l => cont.has(l)).map(l => ({ literal: l, reads: unguarded.has(l) ? 'type' as const : 'closer' as const })),
     });
   });
   // a keyword that opens a type position somewhere: what follows the item after it elsewhere
-  const opens = new Map<string, Set<string>>();
-  for (const c of out) if (c.opener && isKeywordLiteral(c.opener)) opens.set(c.opener, new Set());
+  const opens = new Map<string, { after: Set<string>; ambiguous: boolean }>();
+  for (const c of out) if (c.opener && isKeywordLiteral(c.opener)) opens.set(c.opener, { after: new Set(), ambiguous: false });
   g.node.forEach((e, p) => {
-    if (e.type !== 'literal' || !opens.has(e.value)) return;
+    if (e.type !== 'literal' || !opens.has(e.value) || types.has(ruleOf(g.root[p]))) return;
+    const w = opens.get(e.value)!;
     for (const q of g.follow[p]) {
       const x = g.node[q];
-      if (x.type === 'ref' && types.has(x.name)) continue;
-      for (const l of followOf(q, new Set()).lits) opens.get(e.value)!.add(l);
+      const typeRef = (y: RuleExpr): boolean => (y.type === 'ref' && types.has(y.name)) || (y.type === 'sep' && typeRef(y.element)) || (y.type === 'group' && typeRef(y.body));
+      if (typeRef(x)) continue;
+      if ((x.type === 'ref' && !tokenNames.has(x.name)) || x.type === 'sep') w.ambiguous = true;
+      for (const l of followOf(q, new Set()).lits) w.after.add(l);
     }
   });
-  return { sites: out, openerWords: [...opens].map(([word, after]) => ({ word, elsewhere: longestFirstOf(after) })) };
+  return { sites: out, openerWords: [...opens].map(([word, w]) => ({ word, elsewhere: longestFirstOf(w.after), ambiguous: w.ambiguous })) };
 }
 
 // ── The facts object ──
@@ -2388,6 +2417,12 @@ const FACTS = {
   alwaysBeforeString: (g: CstGrammar) => alwaysBeforeString(g),
   keywordFollowers: (g: CstGrammar) => keywordFollowers(g),
   keywordNameGroups: (g: CstGrammar) => keywordNameGroups(g),
+  /** The variable-declaration keywords (`let` `const` `var` `using`): literals scoped exactly
+   *  `storage.type` that start no declaration of their own (detectDeclarations). */
+  varDeclarationKeywords: (g: CstGrammar) => {
+    const decl = new Set(highlightFacts(g).declarations.map(d => d.keyword));
+    return new Set([...highlightFacts(g).allLiterals].filter(l => getScope(g.scopeOverrides, l) === 'storage.type' && !decl.has(l)));
+  },
   typeBody: (g: CstGrammar) => typeBody(g),
   typeContexts: (g: CstGrammar) => typeContexts(g),
 };
