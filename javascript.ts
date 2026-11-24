@@ -42,7 +42,7 @@ import {
 // resolve at thunk-eval time (defined below), so this is safe to call inside a rule().
 function fnArms(nameParts, body) {
   return [
-    arm('function_', 'function', ...nameParts, '(', sep(field('parameter', Param), ','), ')', resetCtx(field('body', body))),
+    arm('function_', 'function', ...nameParts, '(', sep(resetCtx(field('parameter', Param)), ','), ')', resetCtx(field('body', body))),
     arm('generator', 'function', field('asterisk', '*'), ...nameParts, '(', sep(yieldCtx(field('parameter', Param)), ','), ')', yieldCtx(field('body', body))),
     arm('asyncFunction', field('asyncKeyword', 'async'), sameLine, 'function', ...nameParts, '(', sep(awaitCtx(field('parameter', Param)), ','), ')', awaitCtx(field('body', body))),
     arm('asyncGenerator', field('asyncKeyword', 'async'), sameLine, 'function', field('asterisk', '*'), ...nameParts, '(', sep(asyncGenCtx(field('parameter', Param)), ','), ')', asyncGenCtx(field('body', body))),
@@ -90,21 +90,37 @@ const Ident        = token(seq(identStart, star(identPart)), { identifier: true 
 const HexNumber    = token(seq('0', oneOf('x', 'X'), plus(hexDigit), star(seq('_', plus(hexDigit))), optPattern('n'), numericTailGuard), { scope: 'constant.numeric.hex' });
 const OctalNumber  = token(seq('0', oneOf('o', 'O'), plus(range('0', '7')), star(seq('_', plus(range('0', '7')))), optPattern('n'), numericTailGuard), { scope: 'constant.numeric.octal' });
 const BinaryNumber = token(seq('0', oneOf('b', 'B'), plus(oneOf('0', '1')), star(seq('_', plus(oneOf('0', '1')))), optPattern('n'), numericTailGuard), { scope: 'constant.numeric.binary' });
-const BigInt_      = token(seq(digits, 'n', numericTailGuard), { scope: 'constant.numeric.bigint' });
 // DecimalLiteral, including the leading-dot form (`.5`, `.0e1`): an integer part with optional
 // fraction/exponent, OR a bare fraction `.digits` with optional exponent. Same trailing guard.
 // Scope is set explicitly (not inferred from a `[0-9]`-leading pattern) because the leading-dot
 // alternative makes the pattern start with `(?:` — gen-tm's decimal-numeric detector keys on a
 // `[0-9]`/`\d` prefix, so without this the token would lose its `constant.numeric` scope.
-const fracTail = seq('.', star(digit), star(seq('_', plus(digit))));
+// `. DecimalDigits?`: a separator stands between digits only (`1._5`, `1.5_` match no token). Written
+// with a lookahead rather than an optional DecimalDigits so the portable lexers never back up into it.
+const fracTail = seq('.', notFollowedBy('_'), star(digit), star(seq('_', plus(digit))));
 const expTail = seq(oneOf('e', 'E'), optPattern(oneOf('+', '-')), digits);
 // A decimal integer part is a single `0` or a `[1-9]`-led run — a leading `0` followed by
 // a digit (legacy octal `0123`, leading-zero decimal `09`) is NOT a decimal literal: with
 // intPart='0', the trailing digit trips numericTailGuard so the token fails to match and
-// the lexer rejects it (tsc's scanner behavior). fracTail/expTail/BigInt keep `digits`
-// (leading zeros legal there: `0.012`, `1e007`, `0n`).
+// the lexer rejects it (tsc's scanner behavior). fracTail/expTail keep `digits` (leading
+// zeros legal there: `0.012`, `1e007`).
 const intPart = altPattern('0', seq(range('1', '9'), star(digit), star(seq('_', plus(digit)))));
+// Owed: `1._5` and `0.n` are `1.` / `0.` and an IdentifierStart (the longest literal, then no token),
+// but the token backs up to `1` and `._5`; refusing that (an integer part not followed by `.`) makes
+// those inputs lex errors, after which the portable lexers' relex of an edit before them (`.1._x`)
+// keeps the error (portable-targets/edits: edited rejects, fresh accepts): the lexer lane's.
 const Number_      = token(seq(altPattern(seq(intPart, optPattern(fracTail)), seq('.', digits)), optPattern(expTail), numericTailGuard), { scope: 'constant.numeric.decimal' });
+// A decimal BigInt (`DecimalBigIntegerLiteral : 0 BigIntLiteralSuffix | NonZeroDigit DecimalDigits? BigIntLiteralSuffix`):
+// the integer part of a decimal literal, so no leading zero (`010n`, `00n` match no token).
+const BigInt_      = token(seq(intPart, 'n', numericTailGuard), { scope: 'constant.numeric.bigint' });
+// Annex B.1.1 (JavaScript only: TypeScript's scanner refuses both): LegacyOctalIntegerLiteral
+// `0 OctalDigit+` (`010` is 8) and NonOctalDecimalIntegerLiteral, a `0`-led digit run with an `8`
+// or `9` (`08`, `019`), which is a DecimalIntegerLiteral and so takes a fraction and an exponent
+// (`08.5`, `09e1`). Neither has separators. Both are refused in strict mode code (an early error).
+const LegacyNumber = token(altPattern(
+  seq('0', star(range('0', '7')), oneOf('8', '9'), star(digit), optPattern(fracTail), optPattern(expTail), numericTailGuard),
+  seq('0', plus(range('0', '7')), numericTailGuard),
+), { scope: 'constant.numeric.decimal' });
 // A well-formed JS escape, used in the string-body pattern below. `\u`/`\x` must
 // match their strict forms — a `\u{cp}` with cp ≤ 0x10FFFF, a 4-hex `\uXXXX`, or a
 // 2-hex `\xXX` — while `\` + any *other* char (\n, \\, \q non-escape, line
@@ -113,14 +129,18 @@ const Number_      = token(seq(altPattern(seq(intPart, optPattern(fracTail)), se
 // lexer throws — TS's exact rejection. The in-range codepoint is `0*` leading zeros
 // then 1–5 hex (0–0xFFFFF) or `10`+4 hex (0x100000–0x10FFFF).
 const codePoint = seq(star('0'), altPattern(repeat(hexDigit, 1, 5), seq('10', repeat(hexDigit, 4, 4))));
-const escape = seq('\\', altPattern(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), noneOf('u', 'x')));
+const escape = seq('\\', altPattern(seq('u{', codePoint, '}'), seq('u', repeat(hexDigit, 4, 4)), seq('x', repeat(hexDigit, 2, 2)), '\r\n', seq('\r', notFollowedBy('\n')), noneOf('u', 'x', '\r')));
 const highlightedEscape = seq('\\', altPattern(
   oneOf('n', 'r', 't', 'b', 'f', 'v', '0', "'", '"', '\\'),
   seq('x', repeat(hexDigit, 2, 2)),
   seq('u', repeat(hexDigit, 4, 4)),
   seq('u{', plus(hexDigit), '}'),
 ));
-const String_      = token(altPattern(seq('"', star(altPattern(noneOf('"', '\\'), escape)), '"'), seq("'", star(altPattern(noneOf("'", '\\'), escape)), "'")), {
+// DoubleStringCharacter / SingleStringCharacter: any code point but the quote, `\`, LF and CR (LS / PS
+// are allowed since ES2019), or an escape; a LineContinuation is `\` and a LineTerminatorSequence,
+// CR LF included (`\` CR is a continuation only where no LF follows: each escape ends in one place,
+// which the portable lexers' scan needs). A JSX attribute value is its own token (JSXString), which may span lines.
+const String_      = token(altPattern(seq('"', star(altPattern(noneOf('"', '\\', '\n', '\r'), escape)), '"'), seq("'", star(altPattern(noneOf("'", '\\', '\n', '\r'), escape)), "'")), {
   string: true,
   escape: highlightedEscape,
 });
@@ -147,7 +167,7 @@ const regexFirstChar = altPattern(noneOf('/', '\\', '[', '*', lineTerminator), r
 const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(identPart)), {   // flags: maximal-munch any IdentifierPart run (tsc lexes flags leniently; validity is a checker rule)
   regex: true,
   regexContext: {
-    divisionAfterTypes: ['Ident', 'Number', 'String', 'Template', 'BigInt', 'PrivateField'],
+    divisionAfterTypes: ['Ident', 'Number', 'LegacyNumber', 'HexNumber', 'OctalNumber', 'BinaryNumber', 'String', 'Template', 'BigInt', 'PrivateField'],
     divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
     regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new', 'default'],
     // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
@@ -165,9 +185,11 @@ const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(i
     postfixAfterValueTexts: ['!'],
   },
 });
-// `@name` / `@ns.name` — each dotted segment is an IdentifierName, so it admits the same
-// `\u`-escape forms as `Ident` (`@℘`, `@ZW_‌_NJ`); the parser owns the `(args)` tail.
-const Decorator    = token(seq('@', optPattern(seq(identStart, star(altPattern(identPart, '.'))))), { scope: 'entity.name.function.decorator' });
+// `@name` / `@ns.name` / `@ns.#name` — each dotted segment is an IdentifierName, so it admits the
+// same `\u`-escape forms as `Ident` (`@℘`, `@ZW_‌_NJ`), and a segment may be a PrivateIdentifier
+// (`DecoratorMemberExpression : DecoratorMemberExpression . PrivateIdentifier`); the parser owns
+// the `(args)` tail.
+const Decorator    = token(seq('@', optPattern(seq(identStart, star(altPattern(identPart, seq('.#', identStart), '.'))))), { scope: 'entity.name.function.decorator' });
 // PrivateIdentifier: `#` + an IdentifierName, so it admits the same `\u`-escape forms as `Ident`
 // (`#\u{6F}_`). A non-ASCII literal `#name` (`#℘`, `#ZWNJ`) is handled by the lexer's Unicode
 // fallback, which recognises this token's leading `#` as a name prefix.
@@ -323,6 +345,15 @@ export const notReservedExpr = reservableNot(alt(...reservedWords.filter((w) => 
 // AssignmentExpression ,opt )`), so `import()`, `import(a, b, c)` and `import(...a)` have no parse.
 const notReservedJsExpr = reservableNot(alt(...reservedWords));
 
+// A computed member's index (13.3 `MemberExpression : MemberExpression [ Expression ]`, `SuperProperty
+// : super [ Expression ]`, `OptionalChain : ?. [ Expression ]`): an Expression, so a comma list
+// (`a[0, 1]`, `a?.[0, 1]`); each operand is its own AssignmentExpression call.
+export const bracketIndex = (E) => ['[', E, many(field('exprComma', ','), field('exprRest', E)), ']'];
+
+// ImportCall's arguments (`( AssignmentExpression ,opt )`, `( AssignmentExpression ,
+// AssignmentExpression ,opt )`): no spread, no empty list.
+const importCallArgs = ($) => ['(', not('...'), field('source', $), opt(',', opt(not('...'), field('options', $), opt(','))), ')'];
+
 // ── Precedence ladder (shared ECMAScript operator precedence) ──
 
 // Binding powers for the ALTERNATIVE-form LEDs (rule alternatives `[$, connector, …]`).
@@ -422,8 +453,8 @@ export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs 
   NewTarget,
   classExpression,
   [$, '.', alt(Ident, PrivateField)],
-  [$, '?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'], Template)],
-  [$, '[', Expr, ']'],
+  [$, '?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'], Template)],   // `?.[` one expression: see Expr's
+  [$, ...bracketIndex(Expr)],
   ...typeArgs,
   [$, '(', sep(Expr, ','), ')'],
   [$, Template],
@@ -447,11 +478,11 @@ export const classHeritageArms = ($, Expr, NewTarget, classExpression, typeArgs 
 //   expression rule's own `new class …` arms.
 // - SuperProperty (`new super.x()`, `new super[x]`), MetaProperty (`new new.target()`, `new
 //   import.meta.x()`), and the member forms, a private name included (`new X.#f()`).
-export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [] }) => [
+export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, taggedTemplate = [], literals = [] }) => [
   'true', 'false', 'null', 'this',
   arm('ident', identGuard, Ident),
-  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_,
-  arm('superMember', field('superKeyword', 'super'), alt(['.', Ident], ['[', Expr, ']'])),
+  Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, String_, Regex_, ...literals,
+  arm('superMember', field('superKeyword', 'super'), alt(['.', Ident], bracketIndex(Expr))),
   arm('newDotTarget', field('newKeyword', 'new'), '.', field('targetKeyword', 'target')),
   arm('importMeta', 'import', '.', 'meta'),
   ['new', not('<'), $, newArgs],
@@ -460,7 +491,7 @@ export const newTargetArms = ($, Expr, newArgs, { identGuard, Prop, fnExprArms, 
   arm('object', '{', sep(field('property', Prop), ','), '}'),
   ...fnExprArms,
   [$, '.', alt(Ident, PrivateField)],
-  [$, '[', Expr, ']'],
+  [$, ...bracketIndex(Expr)],
   [$, Template],
   ...taggedTemplate,
   ['(', field('first', Expr), many(field('comma', ','), field('rest', Expr)), ')'],
@@ -470,7 +501,7 @@ const ClassHeritage = rule($ => classHeritageArms($, Expr, NewTarget,
   ['class', opt(...bindingName), opt('extends', field('superClass', $)), field('bodyOpen', '{'), many(field('member', ClassMember)), field('bodyClose', '}')]));
 
 const NewTarget = rule($ => newTargetArms($, Expr, opt('(', sep(Expr, ','), ')'),
-  { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block) }));
+  { identGuard: notReservedJsExpr, Prop, fnExprArms: fnArms([opt(...bindingName)], Block), literals: [LegacyNumber] }));
 
 const Expr = rule($ => [
   // The keyword-valued literals and `this` (reserved words, so the identifier below refuses
@@ -478,7 +509,7 @@ const Expr = rule($ => [
   'true', 'false', 'null', 'this',
   // `super` is a CONSTRAINED primary (mirrors tsc's parseSuperExpression): MUST be
   // immediately followed by a call `(args)`, member `.name`/`.#priv`, or element `[expr]`.
-  [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
+  [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], bracketIndex($))],
   // A standalone identifier expression (IdentifierReference): never a reserved word (see
   // notReservedExpr), so `catch(x){}` with no `try`, `void ;` and `throw ;` are no expression.
   [notReservedJsExpr, Ident],
@@ -499,8 +530,11 @@ const Expr = rule($ => [
   // valid current ECMAScript (V8 + Babel accept it; tsc's lone parse rejection is a bug being
   // removed in TS#60263) — so PrivateField stays. The CST producer models the syntax; it does
   // not adjudicate tsc-only restrictions.
+  // Owed: `a?.[0, 1]` (OptionalChain `?. [ Expression ]`): TypeScript's v1 ESTree shape
+  // (test/fixtures/shape-typescript.ts estreeOptionalChain and its Rust stream type) tells this branch
+  // from a call by its kids, so both grammars keep one expression here until that shape names it.
   [$, '?.', alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template)],
-  [$, '[', $, ']'],
+  [$, ...bracketIndex($)],
   [$, '?', field('then', $), ':', field('otherwise', $)],
   [$, 'instanceof', $],
   [$, 'in', $],
@@ -541,10 +575,20 @@ const Expr = rule($ => [
   arm('arrowIdentifier', capExpr('?', notReservedJsExpr, field('parameter', Ident), field('arrow', '=>'), resetCtx(field('body', conciseBody(Block, $))))),
   arm('yield_', capExpr('?', 'yield', alt(['*', $], [opt($)]))),   // yield e | yield* e (delegate) | yield
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
-  // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta
-  arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', not('...'), field('source', $), opt(',', opt(not('...'), field('options', $), opt(','))), ')'), arm('meta', '.', field('metaKeyword', 'meta'))))),
+  // ImportCall: one or two AssignmentExpressions, no spread (the `...` arm is Arguments'), and ImportMeta.
+  // A phase import call (import defer and source phase imports, Stage 3: `ImportCall : import .
+  // ImportPhase ( AssignmentExpression ,opt )`, and with options as ImportCall) takes the same
+  // arguments; `import.defer` / `import.source` are no expression of their own (`typeof
+  // import.source`, `new import.defer(x)` have no parse). After `.` one token decides the form.
+  arm('import_', field('importKeyword', 'import'), field('form', alt(
+    arm('call', ...importCallArgs($)),
+    arm('dot', '.', field('property', alt(
+      arm('meta', field('metaKeyword', 'meta')),
+      arm('phaseCall', field('phase', alt('defer', 'source')), ...importCallArgs($)),
+    ))),
+  ))),
   PrivateField,
-  HexNumber, OctalNumber, BinaryNumber, BigInt_,
+  HexNumber, OctalNumber, BinaryNumber, BigInt_, LegacyNumber,
   // function expression, 4-way split on async × generator (see fnArms).
   ...fnArms([opt(...bindingName)], Block),
   // named vs anonymous kept separate (greedy opt(Ident) would eat a leading
@@ -569,7 +613,7 @@ const BindingProperty = rule($ => [
   // shorthand `a` / shorthand-with-default `a = 1` — the name is a BindingIdentifier,
   // so a reserved word is invalid (`{ while }`, `{ class }`).
   arm('shorthand', ...bindingName, opt('=', field('value', Expr))),
-  arm('pair', field('key', alt(String_, Number_, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/[e]: elem
+  arm('pair', field('key', alt(String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, LegacyNumber, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/0x1/1n/[e]: elem (a LiteralPropertyName or a ComputedPropertyName)
   arm('rest', field('ellipsis', '...'), field('argument', alt(bindingIdentifier, BindingPattern))),    // ...rest | ...{ a }
 ]);
 
@@ -676,6 +720,7 @@ const MemberName = rule($ => [
   OctalNumber,
   BinaryNumber,
   BigInt_,
+  LegacyNumber,
   arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')),
 ]);
 
@@ -777,6 +822,9 @@ const ExportSpecifier = rule($ => [
 const namedImports = () => [field('brace', '{'), sep(field('specifier', ImportSpecifier), ','), field('braceClose', '}')];
 const namespaceImport = () => [field('star', '*'), 'as', notReserved, field('namespace', Ident)];
 const ImportClause = rule($ => [
+  // import defer (Stage 3): `import defer NameSpaceImport FromClause`. `defer` is the phase only
+  // before `* as`; elsewhere it is a name (`import defer from "m"`, `import defer, { a } from "m"`).
+  arm('deferNamespace', field('deferKeyword', 'defer'), ...namespaceImport()),
   // default import, optionally followed by named `{…}` or namespace `* as x`
   arm('defaultBinding', notReserved, field('name', Ident), opt(',', field('bindings', alt(arm('named', ...namedImports()), arm('namespace', ...namespaceImport()))))),
   arm('named', ...namedImports()),
@@ -819,6 +867,9 @@ const Decl = rule($ => [
   arm('exportNamed', field('exportKeyword', 'export'), field('brace', '{'), sep(field('specifier', ExportSpecifier), ','), field('braceClose', '}'), opt('from', ...moduleSpecifier), asi()),
   arm('importDeclaration', field('importKeyword', 'import'), field('form', alt(
     arm('clause', field('clause', ImportClause), 'from', ...moduleSpecifier),   // import X from "m"
+    // source phase imports (Stage 3): `import source ImportedBinding FromClause`; `import source
+    // from "m"` is the default import of `source` (the clause arm), `import source from from "m"` this one.
+    arm('source', field('sourceKeyword', 'source'), notReserved, field('name', Ident), 'from', ...moduleSpecifier),
     arm('bare', ...moduleSpecifier),                                            // import "m"
   )), asi()),
 ]);
@@ -843,6 +894,8 @@ export const jsScopes = {
   'keyword.control.trycatch': ['try', 'catch', 'finally', 'throw'],
   'keyword.control': ['debugger', 'with'],
   'keyword.control.import': ['import'],
+  // `defer` before a namespace import, scoped by position (gen-tm's phase-modifier handling), as in TypeScript.
+  'keyword.control.import.phase': ['defer'],
   'keyword.control.export': ['export'],
   'keyword.control.from': ['from'],
   'storage.type': ['let', 'const', 'var', 'using'],
@@ -926,7 +979,7 @@ export const jsBaseCanonical: Record<string, string | string[]> = {
   comment: ['jsdoc', 'tripleslash', 'linecomment', 'blockcomment'],
   string: ['string-single', 'string-double', 'template'],
   'boolean-literal': ['scope-constant-language-boolean-true', 'scope-constant-language-boolean-false'],
-  'numeric-literal': ['hexnumber', 'binarynumber', 'octalnumber', 'number', 'bigint'],
+  'numeric-literal': ['hexnumber', 'binarynumber', 'octalnumber', 'number', 'legacynumber', 'bigint'],
 };
 
 // ── Grammar ──
@@ -939,7 +992,7 @@ export default defineGrammar({
     // Comments must come before Regex_ to avoid /** ... */ being matched as regex
     Shebang, JSDoc, TripleSlash, LineComment, BlockComment,
     Ident, HexNumber, OctalNumber, BinaryNumber, BigInt: BigInt_,
-    Number: Number_, String: String_, Template, Regex: Regex_,
+    Number: Number_, LegacyNumber, String: String_, Template, Regex: Regex_,
     Decorator, PrivateField,
   },
 
