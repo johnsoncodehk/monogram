@@ -168,7 +168,7 @@ const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(i
   regex: true,
   regexContext: {
     divisionAfterTypes: ['Ident', 'Number', 'LegacyNumber', 'HexNumber', 'OctalNumber', 'BinaryNumber', 'String', 'Template', 'BigInt', 'PrivateField'],
-    divisionAfterTexts: [')', ']', '++', '--', 'this', 'super', 'true', 'false', 'null', 'undefined'],
+    divisionAfterTexts: [')', ']', 'this', 'super', 'true', 'false', 'null', 'undefined'],
     regexAfterTexts: ['in', 'of', 'instanceof', 'typeof', 'delete', 'void', 'await', 'yield', 'throw', 'return', 'case', 'do', 'else', 'new', 'default'],
     // `kw ( … )` heads (control-flow): the closing `)` is a statement head, not a
     // value, so `if (a) /re/` parses `/re/` as a regex rather than division.
@@ -181,8 +181,9 @@ const Regex_       = token(seq('/', regexFirstChar, star(regexChar), '/', star(i
     // its postfix form (after a value); as prefix-not a following `/` is a regex (`!/re/`).
     // Resolved per-occurrence from the preceding context (the lexer/highlighter check whether
     // the `!` itself follows a value). In valid JS `!` is only ever prefix, so this is inert
-    // for JS (a `!` never follows a value) — it earns its keep in the shared TS layer.
-    postfixAfterValueTexts: ['!'],
+    // for JS (a `!` never follows a value) — it earns its keep in the shared TS layer. `++` / `--`
+    // are the same: postfix after a value (`a++ / 2` divides), prefix otherwise (`++/r/.lastIndex`).
+    postfixAfterValueTexts: ['!', '++', '--'],
   },
 });
 // `@name` / `@ns.name` / `@ns.#name` — each dotted segment is an IdentifierName, so it admits the
