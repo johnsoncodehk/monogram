@@ -2645,7 +2645,7 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
 // classes (identifierClassesOf): an ASCII match continues at a character beyond ASCII of the
 // continue class through the whole continue run (`caf|é`, `na|ïve`), and a run that starts at a
 // character beyond ASCII of the start class is an identifier (`été`); a prefixed identifier token
-// (`#x`) is its prefix then such a run (emit-lexer.ts, the portable lexers' lxExt). tree-sitter's
+// (`#x`) is its prefix then such a run (lexer.ts, the portable lexers' lxExt). tree-sitter's
 // lexer reads code points, so the token renders as that language: `(?:P)(?:C' C*)?|PFX S' C*`
 // (S', C': the classes beyond ASCII). The classes are code-point ranges derived by Node's Unicode
 // (uniClassRanges), not tree-sitter's own `\p{…}` tables, which follow another Unicode version
@@ -2841,7 +2841,7 @@ function seqHasParenExpr(alt: RuleExpr, selfName: string): boolean {
 /**
  * Plan for an interpolated-template token. The single regex token (`Template`) is
  * re-expressed as a tree-sitter RULE so `${ … }` holes re-enter the expression
- * grammar, mirroring how interpreter.ts/emit-lexer.ts split a template into
+ * grammar, mirroring how interpreter.ts/lexer.ts split a template into
  * head/middle/tail spans around interpolation holes. All delimiters are DERIVED
  * from the token's `template` hint — nothing here is TS-specific.
  */
@@ -3014,7 +3014,7 @@ function planScannerTokens(grammar: Grammar): Map<string, string> {
   // FIRST so it heads the enum / externals order.
   if (grammar.newline) map.set(grammar.newline.token, toSnake(grammar.newline.token));
   // An indentation-sensitive grammar (YAML): INDENT / DEDENT / NEWLINE and the block-scalar body are
-  // engine-emitted — the lexer's indent stack (src/emit-lexer.ts) decides them, not a regex — so their
+  // engine-emitted — the lexer's indent stack (src/lexer.ts) decides them, not a regex — so their
   // token IR is `never()`. In tree-sitter they become EXTERNAL tokens the C scanner (src/scanner.c)
   // provides; without this they would serialize as never-match token rules (`token(/[^\s\S]/)`) that
   // the parser can never match (and the block-scalar body would orphan the scalar). Ordered
@@ -4212,7 +4212,7 @@ function bindingKeyRules(grammar: Grammar, identName: string): Map<string, strin
 //   • scan_template_chars — scans the literal run inside a template, stopping at
 //                           the closing delimiter or at an interpolation hole, so
 //                           `${ … }` holes re-enter the expression grammar (the
-//                           tree-sitter analogue of emit-lexer.ts's span scan).
+//                           tree-sitter analogue of lexer.ts's span scan).
 //
 // Nothing below is language-specific: the flag characters come from the regex
 // token pattern, and the template open/interp delimiters come from the template
@@ -4239,7 +4239,7 @@ function cCharSetTest(set: CSet, v: string): string {
 // that is no literal is known by its first character; a skip token's opening literal (`//`, `/*`)
 // defers the decision: the scanner declines, tree-sitter lexes the comment as an extra and asks again
 // in the same state, now after it. A line break is one of the characters that set the lexer's
-// `newlineBefore` (src/emit-lexer.ts: \n \r U+2028 U+2029) in the whitespace before the next token.
+// `newlineBefore` (src/lexer.ts: \n \r U+2028 U+2029) in the whitespace before the next token.
 // What the scanner cannot see: a line break inside a skipped block comment (the comment is an extra
 // already consumed when it is asked again), and, for CONT, a literal that is the prefix of a longer
 // non-literal token (`.` before `.5`; AFTER reads both, see zw_lit_tokens).
@@ -4547,7 +4547,7 @@ function cCharList(s: string): string {
 // ── Indentation external scanner (YAML) ──────────────────────────────────────
 // An indentation-sensitive grammar emits INDENT / DEDENT / NEWLINE from a line-leading-column state
 // machine that a regex lexer cannot express, so they become external tokens scanned here. This C
-// scanner mirrors the indent-stack logic of src/emit-lexer.ts: at each line boundary it measures the
+// scanner mirrors the indent-stack logic of src/lexer.ts: at each line boundary it measures the
 // next content line's column and emits INDENT (deeper → push), DEDENT (shallower → pop, one per call
 // until the stack top is reached), or NEWLINE (same column → a sibling separator). Flow context needs
 // no special handling: inside `[`/`{` the grammar never references these tokens, so valid_symbols is
@@ -4582,7 +4582,7 @@ function buildIndentScannerC(grammar: Grammar, ctx: GrammarJsContext, grammarNam
   // Compact-notation entry indicators (YAML `-` / `?`) — DERIVED from grammar.indent.compactIndicators
   // (nothing hardcoded). A `lexer->lookahead == 'c'` disjunction reused by the scanner's compact logic.
   // (The other inline-content leads — node-property `&`/`!`, flow `[`/`{`, alias `*` — are mirrored as
-  //  literals from emit-lexer's startsBlockStructuralNode, which itself treats them as fixed YAML
+  //  literals from lexer's startsBlockStructuralNode, which itself treats them as fixed YAML
   //  syntax; only the entry indicators are config-driven, matching IndentConfig.compactIndicators.)
   const compactIndicators = ind.compactIndicators ?? [];
   const compactIndicatorCond = (v: string) => compactIndicators.map(c => `${v} == '${c}'`).join(' || ') || '0';
@@ -4590,7 +4590,7 @@ function buildIndentScannerC(grammar: Grammar, ctx: GrammarJsContext, grammarNam
   // Flow-collection delimiters (`[ ] { }`) — DERIVED from grammar.indent.flowOpen / flowClose. Inside a
   // flow collection (flow_depth > 0) indentation is SUSPENDED and `,`/`[`/`]`/`{`/`}` are item/collection
   // boundaries; in block context (flow_depth == 0) those same chars are ordinary plain-scalar content
-  // (mirrors the flowDepth counter in src/emit-lexer.ts, the parser's lexer). tree-sitter discards an
+  // (mirrors the flowDepth counter in src/lexer.ts, the parser's lexer). tree-sitter discards an
   // external scanner's struct mutations on a `false` return (it restores the pre-scan serialized state
   // before lexing the internal bracket), so a counter cannot be maintained by peeking-then-returning-
   // false at the bracket; instead the flow OPEN/CLOSE brackets are emitted as EXTERNAL tokens by the
@@ -4648,7 +4648,7 @@ function buildIndentScannerC(grammar: Grammar, ctx: GrammarJsContext, grammarNam
 
   const scannerC = `// Tree-sitter external scanner generated by monogram (indentation path).
 //
-// Mirrors the indent-stack state machine of src/emit-lexer.ts: INDENT / DEDENT / NEWLINE are emitted
+// Mirrors the indent-stack state machine of src/lexer.ts: INDENT / DEDENT / NEWLINE are emitted
 // from the line-leading column relative to an indent stack; a block-scalar body is scanned verbatim.
 // All language data (comment introducer, block-scalar introducers, document markers) is DERIVED from
 // the grammar's \`indent\` config — nothing below is hand-tuned for a specific language.
@@ -4673,7 +4673,7 @@ typedef struct {
   bool property_lead;    // the line's FIRST token is a node property (\`&\`/\`!\`) — its inline content sits
                          // at the SAME node level, so it must NOT take the compact mapping-key push (\`&a
                          // a: b\` is the key \`a\` carrying anchor \`&a\`, not \`&a\`-then-INDENTED-\`a: b\`).
-                         // emit-lexer clears atLineLead on the property token (it sees every token); the
+                         // lexer clears atLineLead on the property token (it sees every token); the
                          // scanner does not lex the property, so it LATCHES this at the line lead and reads
                          // it at the push. It must survive the property's INTERNAL lex (which the scanner
                          // declines via a FALSE return) — tree-sitter deserializes the serialized fields on
@@ -4793,11 +4793,11 @@ static bool scan_block_scalar(Scanner *s, TSLexer *lexer) {
 // Compact block notation (\`- a: 1\` / \`- - x\` / \`- &a k: v\` / \`? key\`): a sequence/explicit-key
 // indicator whose inline content itself begins a block node nests at the content's column, not the
 // indicator's. The indicator chars are DERIVED from grammar.indent.compactIndicators. Mirrors
-// compactNestsHere / startsBlockStructuralNode in src/emit-lexer.ts: the inline content is
+// compactNestsHere / startsBlockStructuralNode in src/lexer.ts: the inline content is
 // block-structural when, after an optional node-property prefix (\`&anchor\` / \`!tag\`, 0-2
 // space-separated), it is a further indicator, or a mapping KEY (an unquoted \`:\` then ws/EOL/
 // flow-indicator before a \` #\` comment / EOL, scanned quote-aware). A bare scalar / flow / alias does
-// NOT nest. The property / flow / alias glyphs are fixed YAML syntax (as in emit-lexer); only the entry
+// NOT nest. The property / flow / alias glyphs are fixed YAML syntax (as in lexer); only the entry
 // indicators are config-driven.
 static inline bool compact_is_indicator(int32_t c) { return ${compactIndicatorCond('c')}; }
 static inline bool compact_sep_after(int32_t c) {
@@ -5357,7 +5357,7 @@ function buildScannerC(
     L.push('// ── Template-literal scan ───────────────────────────────────────');
     L.push('// Scans the literal run of characters inside a template, stopping just');
     L.push('// before the closing delimiter or before an interpolation hole, so a');
-    L.push('// `${ … }` hole re-enters the expression grammar (mirrors emit-lexer.ts\'s');
+    L.push('// `${ … }` hole re-enters the expression grammar (mirrors lexer.ts\'s');
     L.push('// scanTemplateSpan). The closing delimiter, the hole opener, and the hole');
     L.push('// closer are ordinary anonymous tokens matched by the CFG.');
     L.push('//');

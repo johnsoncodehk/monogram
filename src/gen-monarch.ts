@@ -38,7 +38,7 @@ import {
 //
 // Everything is derived from the grammar: nothing hardcodes a language's tokens
 // (no literal "typeof"/"`"/"/"). Identifier / template / regex behaviour all come
-// from the per-token lexer hints, exactly like emit-lexer.ts.
+// from the per-token lexer hints, exactly like lexer.ts.
 //
 // Where this BEATS Monaco's hand-written TS Monarch:
 //   • regex-vs-division by PRECEDING context — two base states `root`

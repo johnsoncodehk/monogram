@@ -14,7 +14,7 @@
 // no text: a token's text is always its source span (indent-mode engine tokens are zero-width;
 // a newline-mode NEWLINE spans its line break).
 // Flag bits: 1 newlineBefore, 2 commentBefore, 4 multilineFlowBefore, 8 '(' heads a control
-// group. test/emit-lexer-verify.ts gates the output against the golden token streams.
+// group. test/lexer-verify.ts gates the output against the golden token streams.
 import type { Grammar, ElementRegion, IndentConfig, MarkupConfig, NewlineConfig, TokenDecl, TokenPattern } from './types.ts';
 import { collectLiterals, gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { type Directives, directivesOf, tagOpenOnlyOpensTags } from './grammar-analysis.ts';
@@ -366,7 +366,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
   // line (lineStart()) with it; one regex cannot hold both.
   const anchorFlags = (t: (typeof spec.tokens)[number]): string => {
     const ks = tokenPatternAnchorKinds(t.pattern);
-    if (ks.has('start') && ks.has('lineStart')) throw new Error(`emit-lexer: token ${t.name} has both a start() and a lineStart() anchor`);
+    if (ks.has('start') && ks.has('lineStart')) throw new Error(`lexer: token ${t.name} has both a start() and a lineStart() anchor`);
     return ks.has('lineStart') ? 'ym' : 'y';
   };
   // The scan matchers, in declaration order, with their baked regexes and per-matcher facts.
@@ -400,7 +400,7 @@ export function emitLexer(spec: LexSpec, st: LexerSymtab, opts: { ts: boolean; w
     });
   type M = (typeof matchers)[number];
 
-  emit(`// ── Emitted lexer (emit-lexer.ts): specialized tokenize for this grammar ──`);
+  emit(`// ── Emitted lexer (lexer.ts): specialized tokenize for this grammar ──`);
   for (const m of matchers) {
     emit(`const ${m.re} = new RegExp(${J(`(?:${m.pattern})`)}, ${J(m.flags)});`);
     if (m.blockRe) emit(`const ${m.blockRe} = new RegExp(${J(`(?:${m.blockPattern})`)}, ${J(m.flags)});`);

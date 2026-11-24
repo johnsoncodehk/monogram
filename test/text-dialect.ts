@@ -6,7 +6,7 @@
 //   node test/text-dialect.ts [--all]
 import { createParser } from '../src/interpreter.ts';
 import { directivesOf } from '../src/grammar-analysis.ts';
-import { lexSpecOf } from '../src/emit-lexer.ts';
+import { lexSpecOf } from '../src/lexer.ts';
 import { token, rule, defineGrammar, seq, oneOf, range, star, plus, noneOf, many, alt } from '../src/api.ts';
 import type { Grammar } from '../src/types.ts';
 import dialect from './fixtures/textdialect.ts';

@@ -9,7 +9,7 @@
 // `prevIsValue` say "value" after an identifier).
 import { token, rule, defineGrammar, seq, oneOf, range, star, plus, many, opt, sep, left, op, not, noneOf } from '../src/api.ts';
 import { tagOpenOnlyOpensTags } from '../src/grammar-analysis.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import type { Grammar, ElementRegion } from '../src/types.ts';
 import javascript from '../javascript.ts';
 import typescript from '../typescript.ts';

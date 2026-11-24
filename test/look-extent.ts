@@ -30,7 +30,7 @@ import { emitParser } from '../src/target.ts';
 import { tsTarget } from '../src/target-ts.ts';
 import { goTarget } from '../src/target-go.ts';
 import { rustTarget } from '../src/target-rust.ts';
-import { compileTokenizer, lexSpecOf } from '../src/emit-lexer.ts';
+import { compileTokenizer, lexSpecOf } from '../src/lexer.ts';
 import { asGoMain } from './go-main.ts';
 import { parityInputs, type Tok } from './parity-corpus.ts';
 import { scratchDir } from './scratch.ts';

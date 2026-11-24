@@ -385,7 +385,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   console.log(`  ${advances} literal advances in the emitted lexers are their literal's length in the target's units`);
 }
 
-// ── 6b. an element region's routines are the interpreter's (src/emit-lexer.ts) ──
+// ── 6b. an element region's routines are the interpreter's (src/lexer.ts) ──
 // The region tokens (children text, tag tokens) scan to their regex's end; the type-parameter
 // vetoes decide what the interpreter's LX_TP_HEAD / LX_TP_SIG regexes decide, on every text built
 // from a vocabulary of the pieces they read, and how far they read bounds where they could have
@@ -656,7 +656,7 @@ function run(scan: Record<string, (s: string, p: number) => number>, prefix = ''
   }
   console.log(`  every portable grammar: ${proved} scans unchanged by any text at or after their read bound (${unbounded} failed attempts no relex check needs: last in their arms)`);
 
-  // The same bounds proved on the regexes the interpreter's lexer runs (src/emit-lexer.ts records
+  // The same bounds proved on the regexes the interpreter's lexer runs (src/lexer.ts records
   // them while lexing): every token of every grammar, a failed attempt bounded by its
   // `readEndWalk` (or by two units where its first two rule a longer read out: `failReadFirst`,
   // `continuesAt`), a match by the unit after its end, or, at an `overTrigger` unit, by the first

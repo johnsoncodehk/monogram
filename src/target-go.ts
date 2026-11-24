@@ -471,7 +471,7 @@ function scanTok(ir: ParserIR, t: LexTok, shared: SharedAlgorithms, stateful: bo
     ? `if lexHasLineTerm(src[pos:e]) { pendingNl = true }; `
     : `${stateful ? 'emit' : 'pushTok'}(pos, e, ${kid}, ${lidCallGo(shared.tokenLiterals(ir, t, ids.lids.slice(1)), 'src[pos:e]')}); `;
   // Identifier(-prefixed) token: fold a trailing non-ASCII ID_Continue run into the match
-  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (emit-lexer.ts).
+  // (caf|é → café), mirroring the interpreter's uniIdentContReY extension (lexer.ts).
   const ext = identLike.has(name) ? 'e = lxExt(src, e); ' : '';
   const body = shared.scanInline(ir, name, { s: 'src', p: 'pos', out: 'e' });
   // An identifier whose escapes spell no IdentifierName is the lexer error -2 - e (lex-family.ts).
@@ -929,7 +929,7 @@ ${shared.uniIdent(ir) ? `func ${shared.uniIdent(ir)}(s string, p int) int {
 	return -1
 }
 ` : ''}// Extend an identifier token that the ASCII pattern cut short at a non-ASCII
-// ID_Continue char (caf|é → café), mirroring emit-lexer's uniIdentContReY extension.
+// ID_Continue char (caf|é → café), mirroring lexer's uniIdentContReY extension.
 func lxExt(src string, e int) int {
 	if e >= len(src) || src[e] < 0x80 { return e }
 	return lxExtRun(src, e)

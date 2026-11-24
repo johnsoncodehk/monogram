@@ -391,7 +391,7 @@ class LexScan {
   private esc: string | null = null;
   private escTok = '';
   // A prefixed identifier (`#name`) whose pattern does not match: the prefix then a Unicode
-  // IdentifierName (`#℘`), as the interpreter's prefixed fallback (emit-lexer.ts), which it takes
+  // IdentifierName (`#℘`), as the interpreter's prefixed fallback (lexer.ts), which it takes
   // where no token matches; here it is taken in the token's own scanner, before the dispatch tries
   // a later candidate, so uniPrefixAlone proves that no other token or punct can match there.
   private escScan(m: string): string {
@@ -665,7 +665,7 @@ export function templateLiterals(ir: Pick<ParserIR, 'tpl'>, lits: readonly strin
   return { whole: span(t.open, t.open), head: span(t.open, t.interpOpen), middle: span(t.interpClose, t.interpOpen), tail: span(t.interpClose, t.open) };
 }
 
-// ---- element regions (ElementPlan; docs/REGIONS.md; the interpreter's emit-lexer.ts is the oracle) ----
+// ---- element regions (ElementPlan; docs/REGIONS.md; the interpreter's lexer.ts is the oracle) ----
 //
 // A frame on the lexer's frame stack (the template-hole stack of a grammar with elements) is one
 // int, low 2 bits its kind: 0 template hole and 1 element hole, each with its brace count in the

@@ -9,7 +9,7 @@ generators need from it. [`docs/GRAMMAR.md`](GRAMMAR.md) has the grammar author'
 
 ## Status
 
-Built (the interpreter's lexer, `src/emit-lexer.ts`, which the emitted JS parser shares):
+Built (the interpreter's lexer, `src/lexer.ts`, which the emitted JS parser shares):
 - **Element regions** (`ElementRegion`, grammar field `elements`, `src/types.ts`): elements entered
   from code, with text or code children, holes, close / self-close tokens that exist only inside
   an element, and TypeScript's type-parameter vetoes. JSX / TSX declare one (`withJsx` in
@@ -346,7 +346,7 @@ its start (the anchor rule, stated at the top of `src/relex-family.ts`). The rea
 shared functions of `src/lex-match-plan.ts`: `failRead` and `readEndWalk` for a failed attempt,
 `overTrigger` and `examinedUnits` for a match (a lazy repeat bounded as the regex runs it, so a
 block comment reads nothing past its `*/`). The portable relex checks them at relex time. The
-interpreter's lexer (`src/emit-lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
+interpreter's lexer (`src/lexer.ts`, windowed) records them while lexing: `lxLookEnd` is the
 exclusive end of the furthest read any decision so far made, and a token pushed while it is past
 the token's end + 1 carries flag 32: it is no restart anchor and no resync point. Such reads: a regex attempt that
 falls back to division (to the end of its line), an unterminated block comment (to the end of the
