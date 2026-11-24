@@ -29,7 +29,8 @@ import { scratchDir } from './scratch.ts';
 import { createParser, type CstLeaf, type CstNode } from '../src/gen-parser.ts';
 import type { CstGrammar } from '../src/types.ts';
 import { armNameOf, evaluator, ShapeUnmapped, type Shape, type ShapeNode } from '../src/shape2-eval.ts';
-import { compareTrees, conformanceFiles, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
+import { nodeKeysOf } from '../src/shape2-schema.ts';
+import { compareTrees, conformanceFiles, nestValue, type Divergence, type NTree, type NValue } from './shape-oracle.ts';
 
 export const REALJS_LIST = '/home/linuxuser/.cache/monogram-agents/scratch/fix-grammar-queue-2/realjs-files.txt';
 const RECORD = new URL('./shape2-oracle-record.json', import.meta.url);
@@ -141,7 +142,7 @@ export function runShape(shape: OracleShape, corpus: string, paths: string[], sa
       r.units++;
       if (!n) { r.unpaired++; return; }
       let value;
-      try { value = valueAt(n) as ShapeNode; } catch (e) {
+      try { value = nestValue(valueAt(n), nodeKeysOf(loaded.spec)) as unknown as ShapeNode; } catch (e) {
         if (e instanceof ShapeUnmapped) { r.outOfSubset++; bump(r.unmapped, `${e.rule}.${e.arm}`); return; }
         r.evalErrors++; bump(r.unmapped, `ERROR ${(e as Error).message.slice(0, 80)}`); return;
       }

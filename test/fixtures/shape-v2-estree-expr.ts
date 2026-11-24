@@ -394,6 +394,8 @@ const PRIMARY: Record<string, Term> = {
 
 export const estreeExprShape = defineShape(javascript, {
   name: 'estree-expr',
+  // Real ESTree nodes: the kind is the field `type`.
+  node: { kind: 'type', start: 'start', end: 'end' },
   synthesized: {
     directive: { type: 'bool', default: false, rules: { Stmt: { expr: and(not(present('rest')), match(armOf('first'), { string: c(true) }, c(false))) } } },
     stringBody: { type: 'string', rules: { Expr: { string: cook('stringBody', 'string') } } },
