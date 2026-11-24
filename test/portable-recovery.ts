@@ -84,7 +84,13 @@ const FARTHEST_HINT = / \[farthest: offset (\d+) near [\s\S]*\]$/;
 // body takes the `in`. Re-measured on that merge: javascript unchanged.
 const P10_GREEDY_CAPTURE: Record<string, string[]> = {
   javascript: ['for (from x = function () { return a in b; } in c);', 'for (of of async y);', 'for (async of x);', 'for (async of => 1 of x);'],
-  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);'],
+  typescript: ['for (x = () => { for (asserts a in b); } in c);', 'for (of  y);', 'for ( of x);', 'for (async of x);', 'for (async of => 1 of x);', 'for (x = (y = (a in b)) declare c);',
+    // drawn when the type-assertion rows joined the list (land/sound-type-assertion on master 46214e1c,
+    // the NUD repairs): `$missing`-only repairs whose substituted text is rejected, owed to the recovery
+    // lane: `( { *g() , \nh() {} })` (a supplied ',' after a body-less generator method),
+    // `class C { default *  class ( ) {} }` (a field `default` then a method, no separator),
+    // `f ; (class extends a?.b , { }  () {});`
+    'f(class extends a?.b{ () {});', 'class C { default class) {} }', '( { *g()\nh() {} })'],
 };
 // EXPECTED-FAIL, still run and counted: mutants on which the portable parsers' verdict (parse and
 // parseTotal alike) is not the oracle's. Not total parsing's property (parseTotal's verdict is its
