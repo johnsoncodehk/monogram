@@ -75,9 +75,9 @@
 [
   "implements" "interface" "namespace" "protected" "debugger" "readonly" "abstract" "override"
   "accessor" "default" "private" "declare" "extends" "switch" "export" "module"
-  "public" "static" "unique" "target" "const" "using" "class" "async"
-  "case" "with" "from" "type" "enum" "@new" "meta" "let"
-  "var" "get" "set" "out"
+  "public" "static" "unique" "target" "source" "const" "using" "class"
+  "async" "case" "with" "from" "type" "enum" "@new" "meta"
+  "let" "var" "get" "set" "out"
 ] @keyword
 [
   "constructor" "function" "=>"

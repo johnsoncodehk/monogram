@@ -13,7 +13,7 @@ import {
 // Param/Block/Type/TypeParams resolve at thunk-eval time (defined below).
 function tsFnArms(nameParts, body) {
   return [
-    arm('function_', 'function', ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(field('parameter', Param), ','), ')', opt(":", ReturnType), resetCtx(field('body', body))),
+    arm('function_', 'function', ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(resetCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), resetCtx(field('body', body))),
     arm('generator', 'function', field('asterisk', '*'), ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(yieldCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), yieldCtx(field('body', body))),
     arm('asyncFunction', field('asyncKeyword', 'async'), sameLine, 'function', ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(awaitCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), awaitCtx(field('body', body))),
     arm('asyncGenerator', field('asyncKeyword', 'async'), sameLine, 'function', field('asterisk', '*'), ...nameParts, opt(field('typeParameters', TypeParams)), '(', sep(asyncGenCtx(field('parameter', Param)), ','), ')', opt(":", ReturnType), asyncGenCtx(field('body', body))),
@@ -39,7 +39,7 @@ import {
   Number_, String_, Template, Regex_, Decorator, PrivateField,
   notReserved, notReservedExpr, bindingIdentifier, bindingName, asi, expressionStatement, conciseBody, classHeritageArms, newTargetArms, ecmaPrec, jsLedPrecs, jsScopes, jsBaseCanonical,
   forBindingArms, forHeadArms, forAwaitHeadArms, forStatement,
-  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier,
+  memberStart, memberAhead, memberWordRules, memberWord, exportDeclaration, moduleSpecifier, bracketIndex,
 } from './javascript.ts';
 
 // ── Type query reference (typeof's argument: just dotted identifiers) ──
@@ -71,7 +71,7 @@ const DecoratorExpr = rule($ => [
     // optional chain: ?.y | ?.#y | ?.(args) | ?.[i] — unlike plain element access,
     // `?.[` is unambiguous (a computed class member never starts with `?.`), so tsc
     // parses it in decorator position and we mirror.
-    ['?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], ['[', Expr, ']'])],   // `?.#y` is valid current ES (see Expr `?.` below)
+    ['?.', alt(Ident, PrivateField, ['(', sep(Expr, ','), ')'], bracketIndex(Expr))],   // `?.#y` is valid current ES (see Expr `?.` below)
     Template,                                             // tagged template: @x`…`
   ))],
   // `@new x` — the decorator expression is a NewExpression. The lexer maximal-munches
@@ -496,7 +496,7 @@ const Expr = rule($ => [
   // `super = …` are all parse errors. Modeling super as a bare atom would let the generic
   // LEDs (type-arg call, optional chain, tagged template, assignment) attach and re-open
   // that whole class; further access chains off the RESULT normally (`super.x<T>()`).
-  [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], ['[', $, ']'])],
+  [field('superKeyword', 'super'), alt(['(', sep($, ','), ')'], ['.', alt(Ident, PrivateField)], bracketIndex($))],
   // A standalone identifier expression (IdentifierReference): never a reserved word (see
   // notReservedExpr), so `catch(x){}` with no `try`, `void ;`, `throw ;`, and a failed `super` /
   // `new` arm (`new <T>Foo()` is no `(new < T) > Foo()`) are no expression.
@@ -529,8 +529,9 @@ const Expr = rule($ => [
   // being removed in TS#60263), so PrivateField stays — the CST producer models the syntax, not
   // a tsc-only restriction. Any "no private in optional chain" rule, were it real, would be a
   // Static-Semantics check in a CST consumer, never a parse-level exclusion here.
+  // Owed: `a?.[0, 1]` (tsc accepts): one expression here, as in JavaScript's Expr (the v1 shape).
   [$, field('questionDot', '?.'), alt(Ident, PrivateField, ['(', sep($, ','), ')'], ['[', $, ']'], Template, [...typeArgsInExpr(), '(', sep($, ','), ')'])],   // optional typed call `a?.<T>(args)`
-  [$, '[', $, ']'],
+  [$, ...bracketIndex($)],
   [$, sameLine, '!'],   // TS non-null assertion — RESTRICTED (no line break before `!`, like postfix ++/--); a LHS-chain tail (access can follow: `x!.y`, `x!()`)
   [$, field('question', '?'), field('then', $), field('colon', ':'), field('otherwise', $)],
   [$, 'as', Type],
@@ -581,7 +582,7 @@ const Expr = rule($ => [
   arm('yield_', capExpr('?', 'yield', alt([field('asterisk', '*'), $], [opt($)]))),   // yield e | yield* e (delegate) | yield: an AssignmentExpression, capped as javascript.ts's
   ['(', field('first', $), many(field('comma', ','), field('rest', $)), ')'],
   [$, 'satisfies', Type],
-  arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', field('source', $), ')'), arm('meta', '.', field('metaKeyword', 'meta')), arm('typeArguments', ...typeArgsInExpr(), opt('(', sep($, ','), ')'))))),   // import(e) | import.meta | import<T>(args) (instantiation-expression; checker rejects)
+  arm('import_', field('importKeyword', 'import'), field('form', alt(arm('call', '(', field('source', $), ')'), arm('meta', '.', field('metaKeyword', alt('meta', 'defer', 'source'))), arm('typeArguments', ...typeArgsInExpr(), opt('(', sep($, ','), ')'))))),   // import(e) | import.meta | import.defer / import.source (tsc's parser reads `import.` and a name as a MetaProperty; a call after it is the call LED) | import<T>(args) (instantiation-expression; checker rejects)
   PrivateField,
   HexNumber, OctalNumber, BinaryNumber, BigInt_,
   ...tsFnArms([opt(...bindingName)], Block),
@@ -610,7 +611,7 @@ const BindingProperty = rule($ => [
   // shorthand `a` / shorthand-with-default `a = 1` — the name is a BindingIdentifier,
   // so a reserved word is invalid (`{ while }`, `{ class }`).
   arm('shorthand', ...bindingName, opt('=', field('value', Expr))),
-  arm('pair', field('key', alt(String_, Number_, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/[e]: elem
+  arm('pair', field('key', alt(String_, Number_, HexNumber, OctalNumber, BinaryNumber, BigInt_, arm('computed', field('bracket', '['), field('expr', Expr), field('bracketClose', ']')))), ':', field('value', BindingElement)),  // "s"/0/0x1/1n/[e]: elem (a LiteralPropertyName or a ComputedPropertyName)
   // rest: ...r | ...{ a } — tsc also parses `...r: name` and `...r = init` (the
   // object-binding-element shape is uniform; "rest can't have a property name /
   // initializer" are checker errors, both parse-clean).

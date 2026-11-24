@@ -82,6 +82,8 @@ const GATES: Gate[] = [
   { group: 'emit-parity', name: 'define-target', args: ['test/define-target.ts'], reads: ['src/emit.ts', 'src/emit-parser.ts'] },
   { group: 'emit-parity', name: 'lex-family', args: ['test/lex-family.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'shape-rust', args: ['test/shape-rust.ts'], tier: 'ci' },
+  // the typed Rust shape-building parser ≡ the evaluator (needs rustc: on the dev box through rustlink)
+  { group: 'emit-parity', name: 'shape-typed-rust', args: ['test/shape-typed-rust.ts'], tier: 'ci' },
   { group: 'emit-parity', name: 'shape-parity', args: ['test/shape-parity.ts'] },
   { group: 'core', name: 'multi-doc', args: ['test/multi-doc.ts'] },
   { group: 'core', name: 'recovery', args: ['test/recovery.ts'] },
@@ -91,6 +93,8 @@ const GATES: Gate[] = [
   { group: 'core', name: 'env-spec-regressions', args: ['test/env-spec-regressions.ts'] },
   { group: 'conformance', name: 'js', args: ['test/js-conformance.ts'] },
   { group: 'conformance', name: 'test262', args: ['test/test262.ts'], tier: 'ci' },
+  // the interpreter's verdict against tsc / acorn on 30k inputs generated from the grammars' tables (~15 s)
+  { group: 'conformance', name: 'verdict-scan', args: ['test/verdict-scan.ts'], tier: 'ci' },
   { group: 'conformance', name: 'tsx', args: ['test/tsx-conformance.ts'] },
   { group: 'conformance', name: 'jsx', args: ['test/jsx-conformance.ts'] },
   { group: 'conformance', name: 'html', args: ['test/html-conformance.ts'] },

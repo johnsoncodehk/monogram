@@ -3,6 +3,7 @@ import { gtComposites, isKeywordLiteral } from './grammar-utils.ts';
 import { analyzeGrammar, findEntryRule, markupContainerOf } from './grammar-analysis.ts';
 import { compileTokenizer, lexSpecOf, type Token } from './emit-lexer.ts';
 import { withAwaitYield } from './await-yield-fork.ts';
+import { targetWalker } from './declared-targets-cst.ts';
 
 // ── CST output ──
 
@@ -61,8 +62,20 @@ export function createParser(grammar: CstGrammar) {
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     firstSets, exprFirst, exprSecond,
   } = analyzeGrammar(grammar);
+  // Declared target contexts (declared-targets-cst.ts): the predicate as a walk over the CST; absent, nothing is recorded.
+  const tw = grammar.targets && Object.keys(grammar.targets).length ? targetWalker(grammar, ruleByName.values(), tokenNames) : null;
 
   const PROF = !!process.env.PROF;   // per-rule call profiling (diagnostic)
+  // The packrat memo's soundness, as a witness (docs/CORRECTNESS.md, the memo row): with
+  // MONOGRAM_MEMO_VERIFY=1 every memo hit is parsed again and must give the recorded end, cap and
+  // tree, or the parse throws. Off: the hit is returned.
+  const MEMO_VERIFY = process.env.MONOGRAM_MEMO_VERIFY === '1';
+  const sameCst = (a: unknown, b: unknown): boolean => {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every((k) => sameCst((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  };
   const gtComps = new Set(gtComposites(grammar));
 
 
@@ -335,6 +348,7 @@ export function createParser(grammar: CstGrammar) {
     // cap (`_prattCapped`): a hit restores it, so a construct that reads it after a
     // trailing self operand (cap propagation) sees the same flag as a fresh parse.
     const memo = new Map<string, Map<number, { node: CstNode | null; end: number; capped: boolean }>>();
+    let memoVerifying = false;   // inside a MEMO_VERIFY re-parse
 
     // Bounded-parse cap (token index). When >= 0, no token at index >= parseLimit
     // may be consumed — i.e. a sub-parse is forced to stop before that token. Used
@@ -483,18 +497,29 @@ export function createParser(grammar: CstGrammar) {
       const capped = parseLimit >= 0;
       const start = pos;
       let m = memo.get(name);
-      if (!mySup && !capped) {
-        const hit = m && m.get(start);
-        if (hit !== undefined) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
-      }
+      const hit = !mySup && !capped ? m && m.get(start) : undefined;
+      // A hit met inside a verifying re-parse is returned: verifying it too would re-parse every
+      // nesting level again (exponential in depth); each entry is still verified where it is hit
+      // outside one.
+      const verify = hit !== undefined && MEMO_VERIFY && !memoVerifying;
+      if (hit !== undefined && !verify) { pos = hit.end; _prattCapped = hit.capped; return hit.node; }
 
       const prevSup = suppressCur;
       suppressCur = mySup;
       let result: CstNode | null;
+      if (verify) memoVerifying = true;
       try {
         result = isPratt ? parsePratt(rule, 0) : parseLeftRec(rule);
       } finally {
         suppressCur = prevSup;
+        if (verify) memoVerifying = false;
+      }
+      if (verify) {   // MEMO_VERIFY: the entry must be what the parse it stands for returns
+        const nowCapped = isPratt && result !== null && _prattCapped;
+        if (hit.end !== pos || hit.capped !== nowCapped || !sameCst(hit.node, result)) {
+          throw new Error(`memo: ${name} at token ${start} recorded {end ${hit.end}, capped ${hit.capped}} but re-parses to {end ${pos}, capped ${nowCapped}}${sameCst(hit.node, result) ? '' : ', another tree'}`);
+        }
+        return result;
       }
       if (!mySup && !capped) {
         if (!m) { m = new Map(); memo.set(name, m); }
@@ -528,6 +553,7 @@ export function createParser(grammar: CstGrammar) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           bestNode = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          tw?.built(bestNode, alt);
           bestPos = pos;
         }
       }
@@ -651,6 +677,11 @@ export function createParser(grammar: CstGrammar) {
     // once, for every way `prattCore` fails: an operator check refuses its operand after the
     // operand's tokens were read, and nothing below has to remember to step back.
     function parsePratt(rule: RuleDecl, minBp: number): CstNode | null {
+      // Every minBp is 0, an operator's rbp (at most 2 * levels) or a chain's rhsBp (its lbp),
+      // all below maxBp = 2 * (levels + 1): the non-op LEDs are therefore never skipped by
+      // `maxBp <= minBp` (the skip this replaces; docs/CORRECTNESS.md). A new caller that passes
+      // more (an operator's level read by atLevel, say) fails here, loudly.
+      if (minBp >= maxBp) throw new Error(`parsePratt: ${rule.name} read at bp ${minBp}, not below maxBp ${maxBp}`);
       const saved = pos;
       const node = prattCore(rule, minBp);
       if (node === null) pos = saved;
@@ -705,6 +736,7 @@ export function createParser(grammar: CstGrammar) {
               if (rhs && info.requireTarget && notAssignTarget(rhs)) return null;
               if (rhs && pos > bestNudPos) {
                 lhs = { rule: (rule.canon ?? rule.name), children: [opLeaf, rhs], offset: opLeaf.offset, end: rhs.end };
+                tw?.op(lhs, rule.name, 'prefix', key);
                 bestNudPos = pos;
                 nudClosed = true;
                 capped = false;   // a prefix NUD is never capped
@@ -719,6 +751,7 @@ export function createParser(grammar: CstGrammar) {
           const startOff = children.length > 0 ? childOffset(children[0]) : offset();
           const endOff = children.length > 0 ? childEnd(children[children.length - 1]) : offset();
           lhs = { rule: (rule.canon ?? rule.name), children, offset: startOff, end: endOff };
+          tw?.built(lhs, nud);
           bestNudPos = pos;
           nudClosed = selfRefName(items[items.length - 1], rule.name);
           // The LONGEST match wins; record whether it is capped: a capped arm, or one whose
@@ -749,7 +782,6 @@ export function createParser(grammar: CstGrammar) {
         // Check non-op LED patterns first ($ '.' Ident, $ '<' ... '>' '(', etc.)
         for (const led of leds) {
           if (led.items[0]?.type === 'op' || led.items[0]?.type === 'postfix') continue;
-          if (maxBp <= minBp) continue;
           if (tailClosed && accessTailLeds.has(led.items)) continue;   // no access tail after a postfix
           // Skip a LED whose connector is excluded in this context (e.g. `in` under
           // a no-`in` for-head) — it rebinds to the enclosing rule instead.
@@ -793,6 +825,7 @@ export function createParser(grammar: CstGrammar) {
               offset: lhs.offset,
               end: children.length > 0 ? childEnd(children[children.length - 1]) : lhs.end,
             };
+            tw?.built(lhs, led.expr);
             // CAP PROPAGATION through a trailing operand: a node whose rightmost child is a
             // self operand parsed as a full expression that returned capped is itself capped
             // (`a ? b : () => {} || x` rejects, as the binary RHS below). The operand was the
@@ -825,6 +858,7 @@ export function createParser(grammar: CstGrammar) {
               if (pos > maxPos) maxPos = pos;
               const opLeaf: CstLeaf = { tokenType: '$operator', offset: tok.offset, end: tok.offset + tokKey.length };
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf], offset: lhs.offset, end: opLeaf.end };
+              tw?.op(lhs, rule.name, 'postfix', tokKey);
               tailClosed = true;
               matched = true;
             }
@@ -832,6 +866,8 @@ export function createParser(grammar: CstGrammar) {
             // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
             // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Fail hard like noUnaryLhs.
             if (info.requireTarget && 'children' in lhs && notAssignTarget(lhs)) return null;
+            // A `targetOps` infix (CstGrammar.targets): its left operand must pass the declared context.
+            if (info.targetCtx !== undefined && !tw!.passes(lhs, info.targetCtx, source)) return null;
             // A `noUnaryLhs` op (e.g. `**`) may not take a bare unary-prefix expression
             // (`-x`, `typeof x` — a prefix-op node whose op is NOT also a postfix, i.e.
             // not an update `++`/`--`) as its LEFT operand. Fail the whole expression
@@ -855,10 +891,13 @@ export function createParser(grammar: CstGrammar) {
             // `|| x` / `? :` stays unconsumed (`a = () => {} || x` rejects). `_prattCapped` is
             // still true from the RHS, so an enclosing operator refuses it too (`b = a = arrow`).
             if (rhs && _prattCapped) {
-              return { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              const capNode: CstNode = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              tw?.op(capNode, rule.name, 'binary', tokKey);
+              return capNode;
             }
             if (rhs) {
               lhs = { rule: (rule.canon ?? rule.name), children: [lhs, opLeaf, rhs], offset: lhs.offset, end: rhs.end };
+              tw?.op(lhs, rule.name, 'binary', tokKey);
               tailClosed = true;
               matched = true;
             } else {
@@ -899,6 +938,7 @@ export function createParser(grammar: CstGrammar) {
           // DecoratorExpr/TypeParams at every position.
           if (!ruleMightStart(expr.name, peek())) return null;
           const node = parseRule(expr.name);
+          if (node && tw) tw.produced(node, expr);
           return node ? [node] : null;
         }
         case 'seq':
@@ -989,6 +1029,11 @@ export function createParser(grammar: CstGrammar) {
       for (const item of items) {
         // Skip op/prefix/postfix markers in sequence (handled by Pratt)
         if (item.type === 'op' || item.type === 'prefix' || item.type === 'postfix') continue;
+        // A declared target check (CstGrammar.targets): the node just before it passes the context.
+        if (item.type === 'target') {
+          if (!tw!.passes(children[children.length - 1], item.ctx, source)) { pos = saved; return null; }
+          continue;
+        }
         const result = matchExpr(item);
         if (result === null) { pos = saved; return null; }
         children.push(...result);

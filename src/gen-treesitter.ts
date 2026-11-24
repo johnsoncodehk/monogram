@@ -1,8 +1,9 @@
 import type { CstGrammar, RuleExpr, RuleDecl, TokenPattern } from './types.ts';
-import { collectLiterals, isKeywordLiteral } from './grammar-utils.ts';
+import { collectLiterals, isKeywordLiteral, ZERO_WIDTH_MARKERS, isZeroWidthMarker } from './grammar-utils.ts';
 import { buildLr, END, type LeafGraph, type LrAnalysis } from './lr-automaton.ts';
 import { info as tokenPatternInfo, continuesAt, type CSet } from './lex-match-plan.ts';
 import { analyzeGrammar, findEntryRule } from './grammar-analysis.ts';
+import { identifierClassesOf, uniClassRanges, uniIdentPlan, uniLookup } from './uni-ident.ts';
 import { scopeToCapture, tokenCapture } from './highlight-roles.ts';
 import { tokenPatternFirstCharSet, type TokenPatternFirstSet, tokenPatternIsNever, tokenPatternLiteralPrefix, tokenPatternLiteralPrefixes, tokenPatternSource, tokenPatternStartsWithDecimal, tokenPatternStringDelimiters, tokenPatternTrailingCharClass } from './token-pattern.ts';
 
@@ -71,7 +72,7 @@ export const EXACT_ASSERTION_CLASSES: readonly AssertionClass[] = ['lowered', 'v
 export interface AssertionRecord {
   /** grammar rule whose tree holds the assertion */
   rule: string;
-  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf';
+  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf' | 'target';
   cls: AssertionClass;
   /** the assertion, written compactly (`not("{" | Ident)`), cut at 160 characters */
   text: string;
@@ -802,6 +803,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
     case 'noCommentBefore':
     case 'noMultilineFlowBefore':
     case 'notLeftLeaf':
+    case 'target':
       // A zero-width assertion consumes nothing and a CFG has no lookahead, so it renders to a
       // no-op. Never silently: classifyAssertions recorded it with whether the drop is exact (the
       // `assertions` ledger of the output); one it did not reach is a generator defect.
@@ -1323,7 +1325,7 @@ function computeTerminalSets(grammar: CstGrammar, tokenNames: Set<string>): Term
 function greedyTail(alt: RuleExpr, follow: Set<string>, firstOf: TerminalSets['firstOf']): boolean {
   alt = tsView(alt);
   if (alt.type !== 'seq') return false;
-  const consuming = alt.items.filter(i => { const v = tsView(i); return !(v.type === 'not' || v.type === 'sameLine' || v.type === 'noCommentBefore' || v.type === 'noMultilineFlowBefore' || v.type === 'notLeftLeaf'); });
+  const consuming = alt.items.filter(i => { const v = tsView(i); return !isZeroWidthMarker(v.type); });
   if (consuming.length < 2) return false;
   const tail = tsView(consuming[consuming.length - 1]);
   const starts = tail.type === 'quantifier' ? firstOf(tail.body)
@@ -1379,7 +1381,7 @@ function planReservedSets(guards: string[][]): ReservedSets {
   return { sets: chain, nameOf: words => byKey.get(words.join(' ')) ?? null };
 }
 
-const ASSERTION_KINDS = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf']);
+const ASSERTION_KINDS = ZERO_WIDTH_MARKERS;
 
 function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets): { records: AssertionRecord[]; recordOf: Map<RuleExpr, AssertionRecord[]>; nodes: Set<RuleExpr>; reservedSets: ReservedSets; isWordLiteral: (text: string) => boolean } {
   const records: AssertionRecord[] = [];
@@ -1434,7 +1436,7 @@ function classifyAssertions(grammar: CstGrammar, tokenNames: Set<string>, sets: 
 
   const classify = (e: RuleExpr, P: Set<string>, next: RuleExpr | undefined): AssertionClass => {
     if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
-    if (e.type === 'notLeftLeaf') return 'left-context';
+    if (e.type === 'notLeftLeaf' || e.type === 'target') return 'left-context';   // a predicate over the node to its left
     if (e.type !== 'not') throw new Error(`classifyAssertions: ${e.type} is not an assertion`);
     const body = tsView(e.body);
     if (body.type === 'sameLine') return 'scanner';                      // not(sameLine): a line terminator here
@@ -2464,7 +2466,43 @@ function buildTokenBody(name: string, ctx: GrammarJsContext): string | null {
   // Block-only (no `pattern`) and dual tokens both resolve here; YAML is the only grammar with a
   // blockPattern, so every other language is unaffected (byte-identical).
   const src = tokenPatternSource({ pattern: shortestUntil(tok.blockPattern ?? tok.pattern, name) });
+  if (tok.identifier || tok.identifierPrefix) return uniIdentTokenBody(sanitizeTreeSitterRegex(src), tok.identifierPrefix ?? '');
   return `token(${jsRegexLiteral(sanitizeTreeSitterRegex(src))})`;
+}
+
+// ── Unicode identifiers (uni-ident.ts) ──
+// The identifier token's pattern is ASCII; the engine extends it with the grammar's identifier
+// classes (identifierClassesOf): an ASCII match continues at a character beyond ASCII of the
+// continue class through the whole continue run (`caf|é`, `na|ïve`), and a run that starts at a
+// character beyond ASCII of the start class is an identifier (`été`); a prefixed identifier token
+// (`#x`) is its prefix then such a run (emit-lexer.ts, the portable lexers' lxExt). tree-sitter's
+// lexer reads code points, so the token renders as that language: `(?:P)(?:C' C*)?|PFX S' C*`
+// (S', C': the classes beyond ASCII). The classes are code-point ranges derived by Node's Unicode
+// (uniClassRanges), not tree-sitter's own `\p{…}` tables, which follow another Unicode version
+// than the interpreter; JavaScript's regular expressions cannot spell an astral range without the
+// `u` flag, which tree-sitter does not take, so the pattern is a RustRegex (tree-sitter-cli's DSL:
+// the pattern string handed to tree-sitter's regex parser as it is).
+const UNI_IDENT_JS = 'UNI_IDENT';
+function uniIdentTokenBody(ascii: string, prefix: string): string {
+  const pfx = prefix.replace(/[\\.+*?()|[\]{}^$]/g, '\\$&');
+  const u = (k: string) => `${UNI_IDENT_JS}.${k}`;
+  return `token(new RustRegex(${jsString(`(?:${ascii})(?:`)} + ${u('continueBeyondAscii')} + ${u('continue')} + ${jsString(`*)?|${pfx}`)} + ${u('startBeyondAscii')} + ${u('continue')} + '*'))`;
+}
+/** The grammar.js constants uniIdentTokenBody reads: each class as one Rust-regex character class. */
+function uniIdentConstants(grammar: CstGrammar): string[] {
+  const idc = identifierClassesOf(grammar.tokens);
+  const cp = (c: number) => `\\u{${c.toString(16)}}`;
+  const cls = (rs: [number, number][]) => '[' + rs.map(([lo, hi]) => (lo === hi ? cp(lo) : `${cp(lo)}-${cp(hi)}`)).join('') + ']';
+  return [
+    `// The identifier classes (${jsString(idc.start)}, ${jsString(idc.continue)}) as code-point ranges, derived by`,
+    `// the generator's Unicode so tree-sitter's identifiers are the interpreter's (src/gen-treesitter.ts uniIdentTokenBody).`,
+    `const ${UNI_IDENT_JS} = {`,
+    `  startBeyondAscii: ${jsString(cls(uniClassRanges(idc.start, 0x80)))},`,
+    `  continueBeyondAscii: ${jsString(cls(uniClassRanges(idc.continue, 0x80)))},`,
+    `  continue: ${jsString(cls(uniClassRanges(idc.continue)))},`,
+    `};`,
+    '',
+  ];
 }
 
 // ── A non-greedy run up to a terminator, as a regular expression ──
@@ -3339,6 +3377,8 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
   lines.push(`// entry rule: ${ctx.ruleSnake.get(entryName)}`);
   lines.push('');
 
+  // Last: the splices above index `lines` from the top.
+  if ([...tokenBodies].some(b => b.includes(`${UNI_IDENT_JS}.`))) lines.splice(lines.indexOf('module.exports = grammar({'), 0, ...uniIdentConstants(grammar));
   return lines.join('\n');
 }
 
@@ -4071,14 +4111,33 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('// ── Zero-width tokens: line-end alternatives and same-line markers (planZeroWidth) ──');
   H.push('static bool zw_line_terminator(int32_t c) { return c == \'\\n\' || c == \'\\r\' || c == 0x2028 || c == 0x2029; }');
   const wordTok = word ? grammar.tokens.find(t => t.name === word) : undefined;
-  H.push(`static bool zw_word_char(int32_t c) { return ${wordTok ? cRanges(tokenPatternInfo(wordTok.pattern).chars, 'c') : 'false'}; }`);
+  // The identifier's characters beyond ASCII (uniIdentTokenBody): uni-ident.ts's class of a code
+  // point, its table and lookup as the Go and Rust lexers print them (0 neither, 1 continue only,
+  // 2 start too).
+  const identTok = grammar.tokens.find(t => t.identifier);
+  if (identTok) {
+    const p = uniIdentPlan(identifierClassesOf(grammar.tokens));
+    const l = uniLookup(p, (k) => `((uint32_t)(unsigned char)zw_uni_data[${k}])`);
+    // The symbols are `0`..`o`: `\` is escaped, and `?` so that no trigraph can form.
+    H.push(`static const char zw_uni_data[] = "${p.data.replace(/[\\?]/g, '\\$&')}";`);
+    H.push('static uint32_t zw_uni_class(int32_t c) {');
+    H.push('  if (c < 0) return 0;');
+    H.push('  uint32_t cp = (uint32_t)c, i;');
+    H.push(`  if (cp < ${p.flatLen}) return ${l.flat};`);
+    H.push(`  if (${l.top} >= ${p.topLen}) return 0;`);
+    for (const e of l.steps) H.push(`  i = ${e}; if (i < ${l.uniform}) return i;`);
+    H.push(`  return ${l.result};`);
+    H.push('}');
+  }
+  const beyondAscii = (tok: { identifier?: boolean } | undefined, cls: 1 | 2) => (tok?.identifier ? ` || (c > 127 && zw_uni_class(c) >= ${cls})` : '');
+  H.push(`static bool zw_word_char(int32_t c) { return ${wordTok ? cRanges(tokenPatternInfo(wordTok.pattern).chars, 'c') + beyondAscii(wordTok, 1) : 'false'}; }`);
   H.push('// The non-literal tokens the next character may start, one bit each:');
   kindTokens.forEach((n, i) => H.push(`//   ${i}: ${n}`));
   H.push('static uint64_t zw_token_candidates(int32_t c) {');
   H.push('  uint64_t m = 0;');
   kindTokens.forEach((n, i) => {
     const tok = grammar.tokens.find(t => t.name === n)!;
-    H.push(`  if (${cRanges(tokenPatternInfo(tok.pattern).first, 'c')}) m |= (uint64_t)1 << ${i};`);
+    H.push(`  if (${cRanges(tokenPatternInfo(tok.pattern).first, 'c')}${beyondAscii(tok, 2)}) m |= (uint64_t)1 << ${i};`);
   });
   H.push('  return m;');
   H.push('}');

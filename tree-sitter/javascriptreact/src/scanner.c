@@ -139,7 +139,19 @@ static bool scan_template_chars(TSLexer *lexer) {
 
 // ── Zero-width tokens: line-end alternatives and same-line markers (planZeroWidth) ──
 static bool zw_line_terminator(int32_t c) { return c == '\n' || c == '\r' || c == 0x2028 || c == 0x2029; }
-static bool zw_word_char(int32_t c) { return c == 36 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 123) || c == 125; }
+static const char zw_uni_data[] = "345678922:2222222222;<2222=0000>\?@ABCDE2F000GH222I000JKL0MNOPQ0R22222222222222222222S22T2U222V0W22X222Y000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000Z03020405060708090:0;0<0=0>0\?0@0A0B020C0D0E020F0G0H0I0J0K0L0M020N0O0P000000000000000000000Q0R00000S0T00000202020202020202020U0202020202020V020W0X0Y0Z0[0\\02020202020202020202020]00020^0_020`0a0b0c0d0e0f0g0h020i0j0k0l0m0n0o101112131415161718191:1;1<1=1>1\?1@1A0202021B1C1D0000000000000000001E020202021F0202020202021G02021H00001I00000000000002021J1K001L1M1N020202021O1P0000000000000000001Q021R1S0000000000000000001T000000000000001U00001V001W1X001Y1Z1[1\\00001]000000001^1_1`1a001b1c1d1e1f1g000000001h000000001U000000000202020202021i021j020202020202020202020202021k020202021l02021m0002021n00000000000202021o0202020202020202200000000021000000000000000304050006070702020202020208090101010:0;0<020=020202020>020202020\?0@020A0B0C0D0E020F0G02020H0I0J0K0L02020M0N0O0P0Q0R0S0T020U0V0W0X0Y0Z0[0\\0]0^0_0`0a0b0c0d0e0f0g0d0h0i0j0k0l0m0n0o101112131415161718191:1;1<1=1>1\?1@001A1B1C001D1E1F1G1H1I1J00021K1L1M1N021O1P02021Q021R1S1T021U021V1W1X02021Y1>020202020202020202021Z0502021[1\\1]1^1_021`1a1b1c02021d021e021f1g1h1i1j021k1l001m021n1o20212223241`252627280229022:2;2<0S2=2>2\?02020202020201011Y022@2<022A2B2C2D2E2F2G2H002I2J2K2L2M022N000000020202020202022O021O022P2Q2R2R012S2T1>022U1>022V2W0\?02022X02002Y0202020202020000020202022Z002Y2<2[2\\022]2^02022_2`2a02022b022c2d2e2f022g2h1`2i2j0N2k2l2c0W2m2n2o023031320233343536371P380202023902020202023:3;3<0202023=02023>003\?3@3A02023B3C02022<2Y023D023E3F3G3H3I3J0202022c3K3L053M021g3N003O3P3Q000202023R0000023S0000003T000000002c023U3V023W0S3X2<023Y00020202022<3Z3[3<023\\023]3^3_022g022Q1f3E3`3a00003b3c1f2Q1g00003d1f3>3>00023e00003f3g002c2c001F3h021f1f3i3B00000002022N00023i023i023j0N3k3l00000000000000023m3n3o2c40412Y422Y432Q2744454627474849274:4;4<272m4=004>4\?4@004A4B4C4D4E4F4G4H4I4J4K4L024M4N4O020K4P0000000000024Q4R00020K4S00024T4U4V1V4W4X0000000000024Y00000002024Z4[4\\4]00004^4_4`4a4b4c024d2Y021d0000004e0000024f4g4h4f4i4j4k00004l4m4n4o503Z3<1b00000000000000515253540000550000020202023>0000000202022X020202020202560000000000000000002Y02023U021X570202020202020202020202023R02024X00000000002^58000000000000021d1g3Z021g3Z59025:5;5<1X0000000000025=0000000000000202005>2g0002025\?015@00005A0202020202021f5B1g0000000202023i000000000000005C025D5E5F02020202020202020202023<0202025G5H000000000000000000003K015I4500000000000000005J5K5L000000005M000000000002025N025O5P5Q025R5S5T020202020202020202025U5V1P5N5N5W5W4g4g5X01015Y015Z5[5\\00001g5]0000000000005^5_025`5a000000025b5c0000000000000000002Y5d025e0000000000002Y5e0000000000002Y5f0000000000001g5g000000000000005h0202020202025i0002025j00000000005Q5k5l5m5n5o000002020202020202002<0202020202020202020202023=0202020202020202026002022<00000000002<0000000000000002020S02020202020202023>00000000010101010101013G0300114052222267522222600080098022222622:;22:000230<000011112=;>0\?6=2222>222222222222>22@1;2222222225222222226A02230B1111111111CDC00222222676000000011E022F11111114;G22222222H1I1JKL11LM0000N2222222111111E522222O11P00011L2222222F11:8Q22222OR11SS40000222222S02260222222520T1122O11111C111111112222222222222OU1111S122OV115222S52MM22222=2<;:U1IIW0T0>OV11:00XB567M22222=2=Y:KETI4Q05<0V11LZ00B52>>22222=2=5:U1CC43000OV1100H1B52MM2221II40B0>OV11A000[56;=:Y=736;22:VEVK43T000V1100001G2==22222=222:U1KK40D6:OV110000S52==22222=225:U1KK40D06OV11\\000122==222222222FU1KKW0F07OV1100;2B52226;22222>22A26]T1^110V11V000522222222222N1E02F1E1140Y=6222222_22N11P2<1E11423000004011400`QV225222222223B1111K2S11B11111111a0]00000022F1111b11402OLOUJ1LSG22O11R11142>0A22222222226222=:26=:22=:22222222=:26=:2226222222=:222222226B00B140002222000022222:2:222M2222226;22302222O4072222Oa002222O000222=c000222221111111170Z1140000000TC11402222223022d0222222222:0022222226111011100V112222222:23002220222222:011E022222F1022222S1E1111111I114011400700111C11111114111000001G2222221G23114000T11000b2222222S11L11L22O11100021111100114511L22222222:222222650000E11111GN2JW02:2:22__22222=2<;=232;202223;=23000400000000000Ta0000a000000A007000022230000111aQB11a00087;22A2:0<=222:205:8000022300000237FL0002207000T22222600262626260500000052O15:23222226e2222222F2052222222226000000002222222300002223222211L00000222F011f2222222O2222400000000722;222222222M222222222222300005222ggF22222F10a000022222000L2222222140011401111L27\\2O1422222F1110002222F111a00711402N2211L622S11E00F2241140222226\?L2222UJGOd000007:22F1;h00565656002626222222:02222F1E41140200022222672222222222220222:2222222222:02600720i22=2262<>=2222222222:000000072222222;2222200000000002220111100001111Ta00000B000000002=22000011405222226T0j222222;2;2;2;3222522222622226>222:222:22222260222223000000000Q22223000a00000000005222222222OE020225:001140222222222022220022222000226222626>22>222>2>32>2222222222=2602:=2222222222>3M22226:002222220;SD01255222222:ET2h00000022226000210011402:Bf22222:00000022@a:000;2000000000000V1070022222O11a000O400000023000000222222111E0000000V11JP0T222211E0]0002222223011402F111K110k0022222222F800G3BK11W32222>2222221110[Z000000026=>222>223022222222222F11E01140152MM22222=2=5@U1II43T05OV1a1a0022>8222222222>11^`E1l000D000000022222S111b60114[:00000001>001140222F1411a0000024a300114022F1113011401111100000001110114026000000222111E01140000726A22Y2222221CIbU000114022;222222222S1V1ma000000S1b222222222F1RE0T00S11222O1114A110000003000114022=22222222F1E110000;2222222V11111B11E0026>222222222SE]C1R0011402>=2222222OEC1302222FE00R222=222222221EVE00011E00000300020000000GF11140011111140222:1a0022221E00200011407222220522231140222222M2226TS111110Tb222>a00L600000000070000252Y6000800000006A000200222222602223223022:D111411110B4BE0T1EB10000000V40000Va00000022222=222222222=8Y5=22>5252222222>652=2=222222>62<;2=2222:222222=222226222262222622V111111111ET1111a0Q000a0000T1B1110000056000001E1111I1CKE02222222:0000000T000022231b2:11480000222n000022211140222OS1E0Fg2O2Z0;262Y222623001E0021b01140YM5262_087_5YM__YM62625<22>2222055>222203000222220508::2080284:00:222::806:48045544151:69:851496155:286::59040566504950552218260098601118844105925624958:961894:699998:1000000000000000000200000555550008::::::::::::2088::::::::::::20000000000000000000000020000840200:::::::::::2:::::::::::::::2::::";
+static uint32_t zw_uni_class(int32_t c) {
+  if (c < 0) return 0;
+  uint32_t cp = (uint32_t)c, i;
+  if (cp < 256) return ((((uint32_t)(unsigned char)zw_uni_data[((cp >> 1) + 6297)]) >> ((cp & 1) << 1)) & 3);
+  if ((cp >> 11) >= 449) return 0;
+  i = (((uint32_t)(unsigned char)zw_uni_data[((cp >> 11))]) - 48); if (i < 3) return i;
+  i = (((((uint32_t)(unsigned char)zw_uni_data[((((i << 3) + ((cp >> 8) & 7)) << 1) + 401)]) << 6) + ((uint32_t)(unsigned char)zw_uni_data[((((i << 3) + ((cp >> 8) & 7)) << 1) + 402)])) - 3120); if (i < 3) return i;
+  i = (((((uint32_t)(unsigned char)zw_uni_data[((((i << 3) + ((cp >> 5) & 7)) << 1) + 1041)]) << 6) + ((uint32_t)(unsigned char)zw_uni_data[((((i << 3) + ((cp >> 5) & 7)) << 1) + 1042)])) - 3120); if (i < 3) return i;
+  i = (((uint32_t)(unsigned char)zw_uni_data[(((i << 3) + ((cp >> 2) & 7)) + 3097)]) - 48); if (i < 3) return i;
+  return ((((uint32_t)(unsigned char)zw_uni_data[((i << 1) + ((cp & 3) >> 1) + 6171)]) >> ((cp & 1) << 1)) & 3);
+}
+static bool zw_word_char(int32_t c) { return c == 36 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 123) || c == 125 || (c > 127 && zw_uni_class(c) >= 1); }
 // The non-literal tokens the next character may start, one bit each:
 //   0: Ident
 //   1: HexNumber
@@ -147,35 +159,37 @@ static bool zw_word_char(int32_t c) { return c == 36 || (c >= 48 && c <= 57) || 
 //   3: BinaryNumber
 //   4: BigInt
 //   5: Number
-//   6: String
-//   7: Template
-//   8: JSXSelfClose
-//   9: JSXClose
-//   10: JSXText
-//   11: JSXString
-//   12: Regex
-//   13: Decorator
-//   14: PrivateField
+//   6: LegacyNumber
+//   7: String
+//   8: Template
+//   9: JSXSelfClose
+//   10: JSXClose
+//   11: JSXText
+//   12: JSXString
+//   13: Regex
+//   14: Decorator
+//   15: PrivateField
 static uint64_t zw_token_candidates(int32_t c) {
   uint64_t m = 0;
-  if (c == 36 || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 122)) m |= (uint64_t)1 << 0;
+  if (c == 36 || (c >= 65 && c <= 90) || c == 92 || c == 95 || (c >= 97 && c <= 122) || (c > 127 && zw_uni_class(c) >= 2)) m |= (uint64_t)1 << 0;
   if (c == 48) m |= (uint64_t)1 << 1;
   if (c == 48) m |= (uint64_t)1 << 2;
   if (c == 48) m |= (uint64_t)1 << 3;
   if ((c >= 48 && c <= 57)) m |= (uint64_t)1 << 4;
   if (c == 46 || (c >= 48 && c <= 57)) m |= (uint64_t)1 << 5;
-  if (c == 34 || c == 39) m |= (uint64_t)1 << 6;
-  if (c == 96) m |= (uint64_t)1 << 7;
-  if (c == 47) m |= (uint64_t)1 << 8;
-  if (c == 60) m |= (uint64_t)1 << 9;
-  if ((c >= 0 && c <= 59) || c == 61 || (c >= 63 && c <= 122) || c == 124 || (c >= 126 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
-  if (c == 34 || c == 39) m |= (uint64_t)1 << 11;
-  if (c == 47) m |= (uint64_t)1 << 12;
-  if (c == 64) m |= (uint64_t)1 << 13;
-  if (c == 35) m |= (uint64_t)1 << 14;
+  if (c == 48) m |= (uint64_t)1 << 6;
+  if (c == 34 || c == 39) m |= (uint64_t)1 << 7;
+  if (c == 96) m |= (uint64_t)1 << 8;
+  if (c == 47) m |= (uint64_t)1 << 9;
+  if (c == 60) m |= (uint64_t)1 << 10;
+  if ((c >= 0 && c <= 59) || c == 61 || (c >= 63 && c <= 122) || c == 124 || (c >= 126 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
+  if (c == 34 || c == 39) m |= (uint64_t)1 << 12;
+  if (c == 47) m |= (uint64_t)1 << 13;
+  if (c == 64) m |= (uint64_t)1 << 14;
+  if (c == 35) m |= (uint64_t)1 << 15;
   return m;
 }
-// The literals, by id: 0 "!", 1 "!=", 2 "!==", 3 "%", 4 "%=", 5 "&", 6 "&&", 7 "&&=", 8 "&=", 9 "(", 10 ")", 11 "*", 12 "**", 13 "**=", 14 "*=", 15 "+", 16 "++", 17 "+=", 18 ",", 19 "-", 20 "--", 21 "-=", 22 ".", 23 "...", 24 "/", 25 "/=", 26 ":", 27 ";", 28 "<", 29 "<<", 30 "<<=", 31 "<=", 32 "=", 33 "==", 34 "===", 35 "=>", 36 ">", 37 ">=", 38 ">>", 39 ">>=", 40 ">>>", 41 ">>>=", 42 "?", 43 "?.", 44 "??", 45 "??=", 46 "[", 47 "]", 48 "^", 49 "^=", 50 "accessor", 51 "as", 52 "async", 53 "await", 54 "break", 55 "case", 56 "catch", 57 "class", 58 "const", 59 "constructor", 60 "continue", 61 "debugger", 62 "default", 63 "delete", 64 "do", 65 "else", 66 "export", 67 "extends", 68 "false", 69 "finally", 70 "for", 71 "from", 72 "function", 73 "get", 74 "if", 75 "import", 76 "in", 77 "instanceof", 78 "let", 79 "meta", 80 "new", 81 "null", 82 "of", 83 "return", 84 "set", 85 "static", 86 "super", 87 "switch", 88 "target", 89 "this", 90 "throw", 91 "true", 92 "try", 93 "typeof", 94 "using", 95 "var", 96 "void", 97 "while", 98 "with", 99 "yield", 100 "{", 101 "|", 102 "|=", 103 "||", 104 "||=", 105 "}", 106 "~"
+// The literals, by id: 0 "!", 1 "!=", 2 "!==", 3 "%", 4 "%=", 5 "&", 6 "&&", 7 "&&=", 8 "&=", 9 "(", 10 ")", 11 "*", 12 "**", 13 "**=", 14 "*=", 15 "+", 16 "++", 17 "+=", 18 ",", 19 "-", 20 "--", 21 "-=", 22 ".", 23 "...", 24 "/", 25 "/=", 26 ":", 27 ";", 28 "<", 29 "<<", 30 "<<=", 31 "<=", 32 "=", 33 "==", 34 "===", 35 "=>", 36 ">", 37 ">=", 38 ">>", 39 ">>=", 40 ">>>", 41 ">>>=", 42 "?", 43 "?.", 44 "??", 45 "??=", 46 "[", 47 "]", 48 "^", 49 "^=", 50 "accessor", 51 "as", 52 "async", 53 "await", 54 "break", 55 "case", 56 "catch", 57 "class", 58 "const", 59 "constructor", 60 "continue", 61 "debugger", 62 "default", 63 "defer", 64 "delete", 65 "do", 66 "else", 67 "export", 68 "extends", 69 "false", 70 "finally", 71 "for", 72 "from", 73 "function", 74 "get", 75 "if", 76 "import", 77 "in", 78 "instanceof", 79 "let", 80 "meta", 81 "new", 82 "null", 83 "of", 84 "return", 85 "set", 86 "source", 87 "static", 88 "super", 89 "switch", 90 "target", 91 "this", 92 "throw", 93 "true", 94 "try", 95 "typeof", 96 "using", 97 "var", 98 "void", 99 "while", 100 "with", 101 "yield", 102 "{", 103 "|", 104 "|=", 105 "||", 106 "||=", 107 "}", 108 "~"
 // The skip tokens skipped here: 0 "#!" to the line end, 1 "//" to the line end, 2 "/*" to "*/"
 static bool zw_skip_comment(TSLexer *lexer, int k, bool *line_break) {   // past its end; false at an unterminated one
   switch (k) {
@@ -744,6 +758,15 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       break;
                   }
                   break;
+                case 101:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 114:
+                      skip(lexer);
+                      if (!zw_word_char(lexer->lookahead)) best = 63;
+                      break;
+                  }
+                  break;
               }
               break;
             case 108:
@@ -757,7 +780,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 101:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 63;
+                          if (!zw_word_char(lexer->lookahead)) best = 64;
                           break;
                       }
                       break;
@@ -769,7 +792,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           break;
         case 111:
           skip(lexer);
-          if (!zw_word_char(lexer->lookahead)) best = 64;
+          if (!zw_word_char(lexer->lookahead)) best = 65;
           break;
       }
       break;
@@ -784,7 +807,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 101:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 65;
+                  if (!zw_word_char(lexer->lookahead)) best = 66;
                   break;
               }
               break;
@@ -804,7 +827,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 116:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 66;
+                          if (!zw_word_char(lexer->lookahead)) best = 67;
                           break;
                       }
                       break;
@@ -826,7 +849,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                           switch (lexer->lookahead) {
                             case 115:
                               skip(lexer);
-                              if (!zw_word_char(lexer->lookahead)) best = 67;
+                              if (!zw_word_char(lexer->lookahead)) best = 68;
                               break;
                           }
                           break;
@@ -854,7 +877,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                   switch (lexer->lookahead) {
                     case 101:
                       skip(lexer);
-                      if (!zw_word_char(lexer->lookahead)) best = 68;
+                      if (!zw_word_char(lexer->lookahead)) best = 69;
                       break;
                   }
                   break;
@@ -879,7 +902,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                           switch (lexer->lookahead) {
                             case 121:
                               skip(lexer);
-                              if (!zw_word_char(lexer->lookahead)) best = 69;
+                              if (!zw_word_char(lexer->lookahead)) best = 70;
                               break;
                           }
                           break;
@@ -896,7 +919,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           switch (lexer->lookahead) {
             case 114:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 70;
+              if (!zw_word_char(lexer->lookahead)) best = 71;
               break;
           }
           break;
@@ -908,7 +931,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 109:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 71;
+                  if (!zw_word_char(lexer->lookahead)) best = 72;
                   break;
               }
               break;
@@ -934,7 +957,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                               switch (lexer->lookahead) {
                                 case 110:
                                   skip(lexer);
-                                  if (!zw_word_char(lexer->lookahead)) best = 72;
+                                  if (!zw_word_char(lexer->lookahead)) best = 73;
                                   break;
                               }
                               break;
@@ -958,7 +981,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           switch (lexer->lookahead) {
             case 116:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 73;
+              if (!zw_word_char(lexer->lookahead)) best = 74;
               break;
           }
           break;
@@ -969,7 +992,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
       switch (lexer->lookahead) {
         case 102:
           skip(lexer);
-          if (!zw_word_char(lexer->lookahead)) best = 74;
+          if (!zw_word_char(lexer->lookahead)) best = 75;
           break;
         case 109:
           skip(lexer);
@@ -985,7 +1008,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 116:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 75;
+                          if (!zw_word_char(lexer->lookahead)) best = 76;
                           break;
                       }
                       break;
@@ -997,7 +1020,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           break;
         case 110:
           skip(lexer);
-          if (!zw_word_char(lexer->lookahead)) best = 76;
+          if (!zw_word_char(lexer->lookahead)) best = 77;
           switch (lexer->lookahead) {
             case 115:
               skip(lexer);
@@ -1022,7 +1045,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                                       switch (lexer->lookahead) {
                                         case 102:
                                           skip(lexer);
-                                          if (!zw_word_char(lexer->lookahead)) best = 77;
+                                          if (!zw_word_char(lexer->lookahead)) best = 78;
                                           break;
                                       }
                                       break;
@@ -1050,7 +1073,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           switch (lexer->lookahead) {
             case 116:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 78;
+              if (!zw_word_char(lexer->lookahead)) best = 79;
               break;
           }
           break;
@@ -1067,7 +1090,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 97:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 79;
+                  if (!zw_word_char(lexer->lookahead)) best = 80;
                   break;
               }
               break;
@@ -1083,7 +1106,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           switch (lexer->lookahead) {
             case 119:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 80;
+              if (!zw_word_char(lexer->lookahead)) best = 81;
               break;
           }
           break;
@@ -1095,7 +1118,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 108:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 81;
+                  if (!zw_word_char(lexer->lookahead)) best = 82;
                   break;
               }
               break;
@@ -1108,7 +1131,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
       switch (lexer->lookahead) {
         case 102:
           skip(lexer);
-          if (!zw_word_char(lexer->lookahead)) best = 82;
+          if (!zw_word_char(lexer->lookahead)) best = 83;
           break;
       }
       break;
@@ -1129,7 +1152,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 110:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 83;
+                          if (!zw_word_char(lexer->lookahead)) best = 84;
                           break;
                       }
                       break;
@@ -1149,7 +1172,31 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           switch (lexer->lookahead) {
             case 116:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 84;
+              if (!zw_word_char(lexer->lookahead)) best = 85;
+              break;
+          }
+          break;
+        case 111:
+          skip(lexer);
+          switch (lexer->lookahead) {
+            case 117:
+              skip(lexer);
+              switch (lexer->lookahead) {
+                case 114:
+                  skip(lexer);
+                  switch (lexer->lookahead) {
+                    case 99:
+                      skip(lexer);
+                      switch (lexer->lookahead) {
+                        case 101:
+                          skip(lexer);
+                          if (!zw_word_char(lexer->lookahead)) best = 86;
+                          break;
+                      }
+                      break;
+                  }
+                  break;
+              }
               break;
           }
           break;
@@ -1167,7 +1214,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 99:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 85;
+                          if (!zw_word_char(lexer->lookahead)) best = 87;
                           break;
                       }
                       break;
@@ -1188,7 +1235,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                   switch (lexer->lookahead) {
                     case 114:
                       skip(lexer);
-                      if (!zw_word_char(lexer->lookahead)) best = 86;
+                      if (!zw_word_char(lexer->lookahead)) best = 88;
                       break;
                   }
                   break;
@@ -1210,7 +1257,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 104:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 87;
+                          if (!zw_word_char(lexer->lookahead)) best = 89;
                           break;
                       }
                       break;
@@ -1239,7 +1286,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 116:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 88;
+                          if (!zw_word_char(lexer->lookahead)) best = 90;
                           break;
                       }
                       break;
@@ -1257,7 +1304,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 115:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 89;
+                  if (!zw_word_char(lexer->lookahead)) best = 91;
                   break;
               }
               break;
@@ -1269,7 +1316,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                   switch (lexer->lookahead) {
                     case 119:
                       skip(lexer);
-                      if (!zw_word_char(lexer->lookahead)) best = 90;
+                      if (!zw_word_char(lexer->lookahead)) best = 92;
                       break;
                   }
                   break;
@@ -1285,13 +1332,13 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 101:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 91;
+                  if (!zw_word_char(lexer->lookahead)) best = 93;
                   break;
               }
               break;
             case 121:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 92;
+              if (!zw_word_char(lexer->lookahead)) best = 94;
               break;
           }
           break;
@@ -1309,7 +1356,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                       switch (lexer->lookahead) {
                         case 102:
                           skip(lexer);
-                          if (!zw_word_char(lexer->lookahead)) best = 93;
+                          if (!zw_word_char(lexer->lookahead)) best = 95;
                           break;
                       }
                       break;
@@ -1335,7 +1382,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                   switch (lexer->lookahead) {
                     case 103:
                       skip(lexer);
-                      if (!zw_word_char(lexer->lookahead)) best = 94;
+                      if (!zw_word_char(lexer->lookahead)) best = 96;
                       break;
                   }
                   break;
@@ -1353,7 +1400,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
           switch (lexer->lookahead) {
             case 114:
               skip(lexer);
-              if (!zw_word_char(lexer->lookahead)) best = 95;
+              if (!zw_word_char(lexer->lookahead)) best = 97;
               break;
           }
           break;
@@ -1365,7 +1412,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 100:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 96;
+                  if (!zw_word_char(lexer->lookahead)) best = 98;
                   break;
               }
               break;
@@ -1387,7 +1434,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                   switch (lexer->lookahead) {
                     case 101:
                       skip(lexer);
-                      if (!zw_word_char(lexer->lookahead)) best = 97;
+                      if (!zw_word_char(lexer->lookahead)) best = 99;
                       break;
                   }
                   break;
@@ -1403,7 +1450,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
               switch (lexer->lookahead) {
                 case 104:
                   skip(lexer);
-                  if (!zw_word_char(lexer->lookahead)) best = 98;
+                  if (!zw_word_char(lexer->lookahead)) best = 100;
                   break;
               }
               break;
@@ -1425,7 +1472,7 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
                   switch (lexer->lookahead) {
                     case 100:
                       skip(lexer);
-                      if (!zw_word_char(lexer->lookahead)) best = 99;
+                      if (!zw_word_char(lexer->lookahead)) best = 101;
                       break;
                   }
                   break;
@@ -1437,23 +1484,23 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
       break;
     case 123:
       skip(lexer);
-      best = 100;
+      best = 102;
       break;
     case 124:
       skip(lexer);
-      best = 101;
+      best = 103;
       switch (lexer->lookahead) {
         case 61:
           skip(lexer);
-          best = 102;
+          best = 104;
           break;
         case 124:
           skip(lexer);
-          best = 103;
+          best = 105;
           switch (lexer->lookahead) {
             case 61:
               skip(lexer);
-              best = 104;
+              best = 106;
               break;
           }
           break;
@@ -1461,11 +1508,11 @@ static int zw_literal(TSLexer *lexer) {   // the longest literal id; -10 - k: sk
       break;
     case 125:
       skip(lexer);
-      best = 105;
+      best = 107;
       break;
     case 126:
       skip(lexer);
-      best = 106;
+      best = 108;
       break;
   }
   return best;
@@ -1475,201 +1522,201 @@ static uint64_t zw_lit_tokens(int lit, int32_t c) {
   uint64_t m = 0;
   switch (lit) {
     case 0:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 1:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 2:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 3:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 4:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 5:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 6:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 7:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 8:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 9:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 10:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 11:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 12:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 13:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 14:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 15:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 16:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 17:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 18:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 19:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 20:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 21:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 22:
       if ((c >= 48 && c <= 57)) m |= (uint64_t)1 << 5;
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 23:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 24:
-      if (c == 62) m |= (uint64_t)1 << 8;
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
-      if ((c >= 0 && c <= 9) || (c >= 11 && c <= 12) || (c >= 14 && c <= 41) || (c >= 43 && c <= 46) || (c >= 48 && c <= 8231) || (c >= 8234 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 12;
+      if (c == 62) m |= (uint64_t)1 << 9;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
+      if ((c >= 0 && c <= 9) || (c >= 11 && c <= 12) || (c >= 14 && c <= 41) || (c >= 43 && c <= 46) || (c >= 48 && c <= 8231) || (c >= 8234 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 13;
       break;
     case 25:
-      m |= (uint64_t)1 << 10;
-      m |= (uint64_t)1 << 12;
+      m |= (uint64_t)1 << 11;
+      m |= (uint64_t)1 << 13;
       break;
     case 26:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 27:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 28:
-      if (c == 47) m |= (uint64_t)1 << 9;
+      if (c == 47) m |= (uint64_t)1 << 10;
       break;
     case 32:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 33:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 34:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 35:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 42:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 43:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 44:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 45:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 46:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 47:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 48:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 49:
-      m |= (uint64_t)1 << 10;
-      break;
-    case 101:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
-      break;
-    case 102:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
       break;
     case 103:
-      m |= (uint64_t)1 << 10;
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
     case 104:
-      m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
+      break;
+    case 105:
+      m |= (uint64_t)1 << 11;
       break;
     case 106:
-      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 10;
+      m |= (uint64_t)1 << 11;
+      break;
+    case 108:
+      if ((c >= 0 && c <= 1114111) || c > 0xffff) m |= (uint64_t)1 << 11;
       break;
   }
   return m;
 }
 typedef struct { int symbol; bool line_end; bool line_break; bool after_end; uint64_t after_tok, cont_tok, ahead_tok; const bool *after_exact, *after_lit, *cont_lit, *ahead_lit; } ZeroWidth;
-static const bool _SAME_LINE_1_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_1_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_1_CONT[] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0 };
-static const bool _SAME_LINE_1_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_2_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_2_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_2_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_2_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _LINE_END_1_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1 };
-static const bool _LINE_END_1_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1 };
-static const bool _LINE_END_1_CONT[] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0 };
-static const bool _LINE_END_1_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
-static const bool _SAME_LINE_3_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1 };
-static const bool _SAME_LINE_3_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1 };
-static const bool _SAME_LINE_3_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_3_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_4_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_4_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_4_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_4_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_5_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_5_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_5_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_5_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_6_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_6_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_6_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const bool _SAME_LINE_6_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_1_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_1_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_1_CONT[] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0 };
+static const bool _SAME_LINE_1_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_2_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _LINE_END_1_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1 };
+static const bool _LINE_END_1_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1 };
+static const bool _LINE_END_1_CONT[] = { 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0 };
+static const bool _LINE_END_1_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
+static const bool _SAME_LINE_3_AFTER_EXACT[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1 };
+static const bool _SAME_LINE_3_AFTER[] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1 };
+static const bool _SAME_LINE_3_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_3_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_4_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_5_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_AFTER_EXACT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_AFTER[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_CONT[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+static const bool _SAME_LINE_6_AHEAD[] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static const ZeroWidth ZERO_WIDTH[] = {
-  { _SAME_LINE_1, false, false, false, 0x0ull, 0x80ull, 0x0ull, _SAME_LINE_1_AFTER_EXACT, _SAME_LINE_1_AFTER, _SAME_LINE_1_CONT, _SAME_LINE_1_AHEAD },
+  { _SAME_LINE_1, false, false, false, 0x0ull, 0x100ull, 0x0ull, _SAME_LINE_1_AFTER_EXACT, _SAME_LINE_1_AFTER, _SAME_LINE_1_CONT, _SAME_LINE_1_AHEAD },
   { _SAME_LINE_2, false, false, false, 0x1ull, 0x0ull, 0x0ull, _SAME_LINE_2_AFTER_EXACT, _SAME_LINE_2_AFTER, _SAME_LINE_2_CONT, _SAME_LINE_2_AHEAD },
-  { _LINE_END_1, true, true, true, 0x70ffull, 0x80ull, 0x0ull, _LINE_END_1_AFTER_EXACT, _LINE_END_1_AFTER, _LINE_END_1_CONT, _LINE_END_1_AHEAD },
-  { _SAME_LINE_3, false, false, false, 0x70ffull, 0x0ull, 0x0ull, _SAME_LINE_3_AFTER_EXACT, _SAME_LINE_3_AFTER, _SAME_LINE_3_CONT, _SAME_LINE_3_AHEAD },
-  { _SAME_LINE_4, false, false, false, 0x407full, 0x0ull, 0x0ull, _SAME_LINE_4_AFTER_EXACT, _SAME_LINE_4_AFTER, _SAME_LINE_4_CONT, _SAME_LINE_4_AHEAD },
-  { _SAME_LINE_5, false, false, false, 0x407full, 0x0ull, 0x0ull, _SAME_LINE_5_AFTER_EXACT, _SAME_LINE_5_AFTER, _SAME_LINE_5_CONT, _SAME_LINE_5_AHEAD },
+  { _LINE_END_1, true, true, true, 0xe1ffull, 0x100ull, 0x0ull, _LINE_END_1_AFTER_EXACT, _LINE_END_1_AFTER, _LINE_END_1_CONT, _LINE_END_1_AHEAD },
+  { _SAME_LINE_3, false, false, false, 0xe1ffull, 0x0ull, 0x0ull, _SAME_LINE_3_AFTER_EXACT, _SAME_LINE_3_AFTER, _SAME_LINE_3_CONT, _SAME_LINE_3_AHEAD },
+  { _SAME_LINE_4, false, false, false, 0x80ffull, 0x0ull, 0x0ull, _SAME_LINE_4_AFTER_EXACT, _SAME_LINE_4_AFTER, _SAME_LINE_4_CONT, _SAME_LINE_4_AHEAD },
+  { _SAME_LINE_5, false, false, false, 0x80ffull, 0x0ull, 0x0ull, _SAME_LINE_5_AFTER_EXACT, _SAME_LINE_5_AFTER, _SAME_LINE_5_CONT, _SAME_LINE_5_AHEAD },
   { _SAME_LINE_6, false, false, false, 0x0ull, 0x0ull, 0x0ull, _SAME_LINE_6_AFTER_EXACT, _SAME_LINE_6_AFTER, _SAME_LINE_6_CONT, _SAME_LINE_6_AHEAD },
 };
 typedef struct { int cond; int lit, tok, second; bool same_line; } StartPath;
 static const StartPath START_PATHS[] = {
-  { 0, 100, -1, -1, false },
-  { 1, 100, -1, -1, false },
-  { 1, 72, -1, -1, false },
+  { 0, 102, -1, -1, false },
+  { 1, 102, -1, -1, false },
+  { 1, 73, -1, -1, false },
   { 1, 57, -1, -1, false },
-  { 1, -1, 13, -1, false },
-  { 1, 52, -1, 72, true },
-  { 1, 78, -1, 46, false },
-  { 2, 78, -1, 46, false },
-  { 3, 78, -1, -1, false },
-  { 3, 52, -1, 82, false },
-  { 4, 78, -1, -1, false },
+  { 1, -1, 14, -1, false },
+  { 1, 52, -1, 73, true },
+  { 1, 79, -1, 46, false },
+  { 2, 79, -1, 46, false },
+  { 3, 79, -1, -1, false },
+  { 3, 52, -1, 83, false },
+  { 4, 79, -1, -1, false },
 };
 typedef struct { int symbol; int lit, tok; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;
 static const int16_t _STARTS_1_CONDS[] = { 0 };
@@ -1684,17 +1731,17 @@ static const int16_t _STARTS_9_CONDS[] = { 2, 2, 3 };
 static const int16_t _STARTS_10_CONDS[] = { 2, 2, 3 };
 static const int16_t _STARTS_11_CONDS[] = { 4 };
 static const StartMarker START_MARKERS[] = {
-  { _STARTS_1, 100, -1, _STARTS_1_CONDS, 1, 1u },
-  { _STARTS_2, 100, -1, _STARTS_2_CONDS, 1, 1u },
-  { _STARTS_3, 72, -1, _STARTS_3_CONDS, 1, 1u },
+  { _STARTS_1, 102, -1, _STARTS_1_CONDS, 1, 1u },
+  { _STARTS_2, 102, -1, _STARTS_2_CONDS, 1, 1u },
+  { _STARTS_3, 73, -1, _STARTS_3_CONDS, 1, 1u },
   { _STARTS_4, 57, -1, _STARTS_4_CONDS, 1, 1u },
-  { _STARTS_5, -1, 13, _STARTS_5_CONDS, 1, 1u },
+  { _STARTS_5, -1, 14, _STARTS_5_CONDS, 1, 1u },
   { _STARTS_6, 52, -1, _STARTS_6_CONDS, 1, 1u },
-  { _STARTS_7, 78, -1, _STARTS_7_CONDS, 1, 1u },
-  { _STARTS_8, 78, -1, _STARTS_8_CONDS, 3, 4u },
-  { _STARTS_9, 78, -1, _STARTS_9_CONDS, 3, 7u },
+  { _STARTS_7, 79, -1, _STARTS_7_CONDS, 1, 1u },
+  { _STARTS_8, 79, -1, _STARTS_8_CONDS, 3, 4u },
+  { _STARTS_9, 79, -1, _STARTS_9_CONDS, 3, 7u },
   { _STARTS_10, 52, -1, _STARTS_10_CONDS, 3, 4u },
-  { _STARTS_11, 78, -1, _STARTS_11_CONDS, 1, 1u },
+  { _STARTS_11, 79, -1, _STARTS_11_CONDS, 1, 1u },
 };
 // The literal after the first one (past whitespace and the comments skipped here); -1: none, or a
 // comment opener to defer (the parse is then the unmarked one).

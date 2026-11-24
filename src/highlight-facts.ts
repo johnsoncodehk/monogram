@@ -1015,7 +1015,7 @@ export function detectDeclarations(grammar: CstGrammar): DeclInfo[] {
     : e.type === 'sep' ? containsBlockRef(e.element) : false;
   const isBody = (e: RuleExpr) => isLit('{')(e) || containsBlockRef(e);
   const isParams = (e: RuleExpr) => containsLiteral(e, '(');
-  const isGuard = (e: RuleExpr) => e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore' || e.type === 'notLeftLeaf';
+  const isGuard = (e: RuleExpr) => e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore' || e.type === 'notLeftLeaf' || e.type === 'target';
   const tpRuleOf = (e: RuleExpr): string | null => {
     if (e.type !== 'ref' || tokenNames.has(e.name)) return null;
     const rule = grammar.rules.find(r => r.name === e.name);
@@ -1547,7 +1547,7 @@ export function ruleIsNullable(e: RuleExpr, byName: Map<string, RuleExpr>, seen 
     case 'alt': return e.items.some(i => ruleIsNullable(i, byName, seen));
     case 'quantifier': return e.kind === '*' || e.kind === '?';
     case 'group': return ruleIsNullable(e.body, byName, seen);
-    case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': return true;  // zero-width assertions
+    case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target': return true;  // zero-width assertions
     case 'ref': { if (seen.has(e.name)) return false; seen.add(e.name); const b = byName.get(e.name); return b ? ruleIsNullable(b, byName, seen) : false; }
     default: return false;                                     // literal / token / op / prefix / postfix / sep
   }
@@ -2012,7 +2012,7 @@ export function keywordFollowers(grammar: CstGrammar): Map<string, { literals: S
   const byName = new Map(grammar.rules.map(r => [r.name, r.body] as const));
   const { tokenNames } = highlightFacts(grammar);
   const precOps = new Set(grammar.precs.flatMap(l => l.operators.map(o => o.value)));
-  const zeroWidth = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'not'].includes(e.type);
+  const zeroWidth = (e: RuleExpr) => ['sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target', 'not'].includes(e.type);
   // the token references that may begin an expression (refs followed at start positions only)
   const firstTokens = (e: RuleExpr, out: Set<string>, seen = new Set<string>()): void => {
     switch (e.type) {
