@@ -3153,6 +3153,7 @@ const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
   // A reader-applied top's read under the attribute = true (its operands are an index expression
   // and an int: evaluated more than once).
   slotValT: ([i, m]) => `(_tb[${i}] ? _topR(${i}, ${m === '0' ? `_hs[${i}]` : `slotValV(${i}, ${m})`}) : ${m === '0' ? `_hs[${i}]` : `slotValV(${i}, ${m})`})`,
+  topBit: ([c]) => `(_tbit = ${c})`,
   slotAt: ([i, lo, hi, t0, t1]) => `((${i}) >= ${lo} && (${i}) < ${hi} && _tg[${i}]! >= ${t0} && _tg[${i}]! <= ${t1} ? ${i} : -1)`,
 };
 const tsLowering: Lowering = {
@@ -3683,6 +3684,12 @@ export function emitTs(grammar: CstGrammar, opts?: { shape?: ShapeSpec }): strin
 // _keep's copy of a slot's variant and synthesized attributes.
 const synKept = (plan: ShapePlan): number[] => plan.syn.flatMap((a, k) => (a.slotRead ? [k] : []));
 const shapeKeepTs = (plan: ShapePlan): string => ` _h1[b] = _h1[c]; _tb[b] = _tb[c];${synKept(plan).map((k) => ` _sy[${k}]![b] = _sy[${k}]![c];`).join('')}`;
+// finS / finPS: the value of the re-parsed attribute a slot was built under (one attribute: stored
+// for every slot, read only off a spine rule's left).
+const buStoreTs = (plan: ShapePlan): string => {
+  const ks = [...new Set(plan.restarts.map((x) => x.k))];
+  return ks.length === 0 ? '' : ks.length === 1 ? ` _bu[b] = _iv[${ks[0]}];` : ' { const k = _BK[id]!; if (k >= 0) _bu[b] = _iv[k]; }';
+};
 function shapeRuntimeTs(plan: ShapePlan): string {
   const K = plan.nodeKeys;
   return `export type ShapeNode = { [key: string]: ShapeValue };
@@ -3818,7 +3825,7 @@ function finS(id: number, b: number, save: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, save, ho, he);
-  _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${plan.restarts.length ? ' { const k = _BK[id]!; if (k >= 0) _bu[b] = _iv[k]; }' : ''}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
+  _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${buStoreTs(plan)}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 function finPS(id: number, b: number): void {
   let off = 0, end = 0, ts = pos, ho = 0, he = 0;
@@ -3826,7 +3833,7 @@ function finPS(id: number, b: number): void {
   const v = _construct(id, b, off, end);
   _n = b;
   _slot(v, 1, off, end, ts, ho, he);
-  _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${plan.restarts.length ? ' { const k = _BK[id]!; if (k >= 0) _bu[b] = _iv[k]; }' : ''}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
+  _ar[b] = id; _h1[b] = _alt; _tb[b] = _tbit;${buStoreTs(plan)}${synKept(plan).map((k) => ` if (_SYE[${k}]![id]) _sy[${k}]![b] = _ys[${k}];`).join('')}
 }
 // The engine methods of the construct plans (src/shape-plan.ts EXTERNS).
 function slotTag(i: number): number { return _tg[i]!; }
