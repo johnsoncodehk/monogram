@@ -43,6 +43,9 @@ export interface TreeSitterOutput {
   /** The keywords the generated grammar reads both as the keyword and as the word token (contextual
    *  keywords: renderWordStep). Absent for a grammar without a word token. */
   contextualKeywords?: string[];
+  /** planStartMarkers: every dropped negative lookahead met at an alternative's start, with the paths
+   *  rendered as a start marker and the ones left (with the reason). */
+  startMarkers?: StartMarkerPlan['report'];
 }
 
 /** How grammar.js renders a zero-width assertion. `reserved-set`: a one-token exclusion of word-shaped
@@ -205,6 +208,13 @@ interface GrammarJsContext {
   externalSnake: Set<string>;
   /** planZeroWidth: the line-break assertions rendered as zero-width external tokens. */
   zeroWidth: ZeroWidthPlan;
+  /** planStartMarkers: a negative lookahead at an alternative's start, as an optional zero-width
+   *  token before the other alternatives that start with what it excludes. */
+  startMarkers: StartMarkerPlan;
+  /** The marker site renderExpr is writing (its inner rendering must not wrap it again). */
+  renderedMarkers: Set<RuleExpr>;
+  /** The marker sites renderExpr has written (every planned one must be: buildGrammarJs checks). */
+  writtenMarkers: Set<RuleExpr>;
   /** original token name → external scanner token name (snake) if scanner-provided */
   scannerTokenFor: Map<string, string>;
   /** flow-delimiter LITERAL char (`[` `]` `{` `}`) → synthetic external scanner token (snake). These
@@ -676,6 +686,15 @@ function collectWordLiterals(grammar: CstGrammar, isWordLiteral: (text: string) 
 }
 
 function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard): string {
+  // A start marker (planStartMarkers) stands optionally before its site.
+  const marks = ctx.startMarkers.markerOf.get(expr);
+  if (marks && !ctx.renderedMarkers.has(expr)) {
+    ctx.renderedMarkers.add(expr);
+    try {
+      const m = marks.map(s => `$.${s}`);
+      return `seq(optional(${m.length === 1 ? m[0] : `choice(${m.join(', ')})`}), ${renderExpr(expr, ctx, wordGuard)})`;
+    } finally { ctx.renderedMarkers.delete(expr); ctx.writtenMarkers.add(expr); }
+  }
   const dyn = ctx.dynamicPrecedence?.get(expr);
   if (dyn !== undefined) {
     ctx.dynamicPrecedence!.delete(expr);   // once: the wrapped rendering below is the same node
@@ -1895,7 +1914,7 @@ interface TsLeafGraph extends LeafGraph {
 }
 
 function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
-  zeroWidth: Map<RuleExpr, string>): TsLeafGraph {
+  zeroWidth: Map<RuleExpr, string>, startMarkers: Map<RuleExpr, string[]> = new Map()): TsLeafGraph {
   const sym: string[] = [], nt: number[] = [], rule: number[] = [], follow: number[][] = [], isLast: boolean[] = [];
   const node: (RuleExpr | null)[] = [];
   const ruleNames: string[] = [];
@@ -1919,7 +1938,14 @@ function treeSitterLeafGraph(grammar: CstGrammar, tokenNames: Set<string>, scann
   const alt = (gs: G[]): G => ({ first: gs.flatMap(g => g.first), last: gs.flatMap(g => g.last), nullable: gs.length === 0 || gs.some(g => g.nullable) });
   const star = (g: G): G => { link(g.last, g.first); return { ...g, nullable: true }; };
   const pureAssertion = (e: RuleExpr) => { const v = tsView(e); return (v.type === 'seq' ? v.items : [v]).every(i => ASSERTION_KINDS.has(tsView(i).type)); };
+  // A start marker (planStartMarkers): an optional terminal before its site.
   const build = (e: RuleExpr): G => {
+    const marks = startMarkers.get(e) ?? startMarkers.get(tsView(e));
+    if (!marks) return buildSite(e);
+    const m = alt(marks.map(s => leaf(s, null, -1)));
+    return seq([{ ...m, nullable: true }, buildSite(e)]);
+  };
+  const buildSite = (e: RuleExpr): G => {
     // A named tsRelax group is its own rule (renderExpr references it; its body renders once, from
     // the first occurrence: collectTsSharedRules), so it is a reference here, not its body inlined.
     if (e.type === 'group' && e.tsRuleName) return leaf(e.tsRuleName, null, ruleOf(e.tsRuleName));
@@ -2028,7 +2054,7 @@ interface ZeroWidthPlan {
 
 
 function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerTokens: Set<string>, prattRules: Set<string>,
-  isWordLiteral: (text: string) => boolean, reserved: Set<string>): ZeroWidthPlan {
+  isWordLiteral: (text: string) => boolean, reserved: Set<string>, startMarkers: Map<RuleExpr, string[]>): ZeroWidthPlan {
   const plan: ZeroWidthPlan = { tokens: [], tokenOf: new Map(), lowered: new Set() };
   // A grammar with its own line handling (NEWLINE tokens, indentation) has its own scanner rules.
   if (grammar.indent || grammar.newline) return plan;
@@ -2088,7 +2114,7 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
   // every other candidate renders as nothing (as a dropped one will) ──
   const analyze = (live: Set<number>) => {
   const termOf = new Map(cands.flatMap((c, i) => live.has(i) ? [[c.node, `@zw${i}`] as [RuleExpr, string]] : []));
-  const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf);
+  const graph = treeSitterLeafGraph(grammar, tokenNames, scannerTokens, prattRules, termOf, startMarkers);
   const lr = buildLr(graph);
   const after = cands.map(() => new Set<string>()), cont = cands.map(() => new Set<string>());
   const together: number[][] = [];   // the candidates valid in one state, per state where several are
@@ -2214,6 +2240,203 @@ function planZeroWidth(grammar: CstGrammar, tokenNames: Set<string>, scannerToke
     plan.tokenOf.set(c.node, tok);
     for (const a of c.asserts) plan.lowered.add(a);
   });
+  return plan;
+}
+
+// ── Start markers: a negative lookahead at the start of an alternative (planStartMarkers) ──
+// `alt(A, B, …)` where A begins with a dropped `not(X)` and a sibling B begins with what X matches
+// (the expression statement's `not('{' | 'function' | 'class' | Decorator)` beside Block and Decl;
+// the concise body's `not('{')` beside its Block): the CFG reads both A and B up to where they part,
+// and tree-sitter decides there, often at LEX time (a zero-width line-end token valid for A's
+// reading is returned after `function f() {}`, and with it as the lookahead B has no action), so a
+// declaration became an expression statement and a block an object literal. The spec states the
+// condition at A's FIRST token, and so is it rendered: a zero-width external token `_starts_<n>`,
+// returned by the scanner where X follows, stands OPTIONALLY before the left-corner item of every
+// OTHER alternative that can start as the input does (with the literal, or with the word token
+// where the literal is word-shaped). Where the token is valid and X follows, the parse takes it and
+// the reading without it (A's) has no action for it: A dies at its first token, as the grammar says,
+// and every other alternative goes on. Where it is not valid (only an expression is, `x = {}`)
+// nothing changes; where X does not follow, nothing is returned and the parse is today's.
+// One zero-width token is lexed per position, so a choice with several such arms (a for head:
+// `not(["let" "["])` on two arms, `not("let" | ["async" "of"])` on a third) gets one token per SET
+// of arms the input excludes (`let [` excludes all three, `let x` the third alone), each before the
+// alternatives outside its set; and one per first token, so that a token is valid only where an
+// alternative that starts with that token is (after `export` the declaration statement is a copy
+// that starts with no `{`, so no `{` marker is valid there and the export list keeps its `{`).
+// X is read as paths of at most two literals, `sameLine` between them allowed (`async` [no line
+// break] `function`, `let` `[`), or one non-literal token known by its first character (a
+// Decorator: `@`). A path with a rule reference, a longer one, or one no other alternative can
+// start with is not rendered; its `not` stays recorded. A `not` every path of which renders is
+// exact (`lowered`).
+type StartElem = { lit: string } | { tok: string };
+interface StartPath { first: StartElem; second?: string; sameLine?: boolean }
+export interface StartMarkerToken {
+  snake: string;
+  /** The conditions of its choice (indices into StartMarkerPlan.conds) and the ones it stands for
+   *  (bit i: conds[i] holds): returned where exactly those hold. */
+  conds: number[];
+  killed: number;
+  /** The first token of the inputs it stands for. */
+  first: StartElem;
+}
+interface StartMarkerPlan {
+  tokens: StartMarkerToken[];
+  /** Per condition (an arm's leading negative lookaheads): its paths. */
+  conds: StartPath[][];
+  /** The node a marker stands before (an alternative's left-corner item) → its tokens' snakes. */
+  markerOf: Map<RuleExpr, string[]>;
+  /** The `not` nodes rendered exactly (the ledger's `lowered`). */
+  lowered: Set<RuleExpr>;
+  /** Per `not` node met at an alternative's start: the paths rendered and the ones left (why). */
+  report: { rule: string; text: string; rendered: string[]; left: string[]; exact: boolean }[];
+}
+
+function planStartMarkers(grammar: CstGrammar, tokenNames: Set<string>, sets: TerminalSets,
+  recordOf: Map<RuleExpr, AssertionRecord[]>, isWordLiteral: (text: string) => boolean): StartMarkerPlan {
+  const plan: StartMarkerPlan = { tokens: [], conds: [], markerOf: new Map(), lowered: new Set(), report: [] };
+  if (grammar.indent || grammar.newline) return plan;
+  const word = grammar.tokens.find(t => t.identifier)?.name;
+  const armItems = (a: RuleExpr) => { const v = tsView(a); return v.type === 'seq' ? v.items : [v]; };
+  const isAssertion = (e: RuleExpr) => ASSERTION_KINDS.has(tsView(e).type);
+  const elemKey = (e: StartElem) => 'lit' in e ? `'${e.lit}` : e.tok;
+  const show = (p: StartPath) => ('lit' in p.first ? p.first.lit : p.first.tok) + (p.second !== undefined ? (p.sameLine ? ' [same line] ' : ' ') + p.second : '');
+  // The paths of a lookahead body, or the reason it has none the scanner reads.
+  const pathsOf = (body: RuleExpr): StartPath[] | string => {
+    const out: StartPath[] = [];
+    const v0 = tsView(body);
+    for (const a of v0.type === 'alt' ? v0.items : [v0]) {
+      const items = armItems(a).map(tsView);
+      const els: StartElem[] = []; let sameLine = false;
+      for (const it of items) {
+        if (it.type === 'sameLine' && els.length === 1) { sameLine = true; continue; }
+        if (it.type === 'literal') { els.push({ lit: it.value }); continue; }
+        if (it.type === 'ref' && tokenNames.has(it.name) && it.name !== word && items.length === 1) { els.push({ tok: it.name }); continue; }
+        return it.type === 'ref' ? `${it.name} is no literal (or no single token)` : `a ${it.type} in the lookahead`;
+      }
+      if (!els.length || els.length > 2) return els.length ? 'a path of more than two tokens' : 'an empty path';
+      out.push(els.length === 1 ? { first: els[0] } : { first: els[0], second: (els[1] as { lit: string }).lit, sameLine });
+    }
+    return out;
+  };
+  // Can `e` start with what starts with `f` (the literal itself, or the word token reading it)?
+  const startsWith = (e: RuleExpr, f: StartElem): boolean => {
+    const s = sets.firstOf(e);
+    return s.has(elemKey(f)) || ('lit' in f && !!word && isWordLiteral(f.lit) && s.has(word));
+  };
+  // The left-corner items of `e` that can start with `f`: where the marker stands.
+  const corner = (e: RuleExpr, f: StartElem, out: RuleExpr[]): void => {
+    const v = e.type === 'group' && !e.tsRuleName ? tsView(e) : e;
+    if (v.type === 'alt') { for (const i of v.items) if (startsWith(i, f)) corner(i, f, out); return; }
+    if (v.type === 'seq') {
+      const i = v.items.findIndex(x => !isAssertion(x));
+      if (i >= 0 && !sets.nullable(v.items[i])) return corner(v.items[i], f, out);
+    }
+    if (!out.includes(v)) out.push(v);
+  };
+  const byKey = new Map<string, StartMarkerToken>();
+  const condByKey = new Map<string, number>();
+  const reported = new Set<RuleExpr>();
+  const unstartable = new Map<RuleExpr, string[]>();
+  let owner = '';
+  const visit = (alt: RuleExpr & { type: 'alt' }) => {
+    // the conditions: per arm, its leading dropped negative lookaheads' paths
+    const conds: { arm: number; nots: RuleExpr[]; paths: { p: StartPath; not: RuleExpr }[] }[] = [];
+    alt.items.forEach((a, ai) => {
+      const nots: RuleExpr[] = [];
+      for (const it of armItems(a)) {
+        if (!isAssertion(it)) break;
+        const v = tsView(it);
+        if (v.type !== 'not') continue;
+        const body = tsView(v.body);
+        if (body.type === 'not' || body.type === 'sameLine') continue;        // a positive lookahead / a line condition
+        const recs = recordOf.get(v) ?? [];
+        if (recs.length && recs.every(r => r.cls === 'lookahead1' || r.cls === 'lookahead')) nots.push(v);
+      }
+      const paths: { p: StartPath; not: RuleExpr }[] = [];
+      for (const n of nots) {
+        const ps = pathsOf((n as RuleExpr & { type: 'not' }).body);
+        if (typeof ps === 'string') { if (!reported.has(n)) { reported.add(n); plan.report.push({ rule: owner, text: assertionText(n), rendered: [], left: [ps], exact: false }); } continue; }
+        // Only what the alternative itself can start with: a path it cannot (a lookahead before an
+        // arm that consumes nothing there, `[not('{'), asi()]`, `not('this' | 'new')` alone) guards
+        // its zero-width arms, which no start marker decides; it stays recorded.
+        for (const p of ps) {
+          if (startsWith(a, p.first)) paths.push({ p, not: n });
+          else unstartable.set(n, [...unstartable.get(n) ?? [], `${show(p)}: the alternative cannot start with it`]);
+        }
+        if (!paths.some(x => x.not === n) && !reported.has(n)) { reported.add(n); plan.report.push({ rule: owner, text: assertionText(n), rendered: [], left: unstartable.get(n)!, exact: false }); }
+      }
+      if (paths.length) conds.push({ arm: ai, nots, paths });
+    });
+    if (!conds.length) return;
+    if (conds.length > 32) throw new Error(`gen-treesitter: ${conds.length} start conditions in one choice (${owner})`);
+    // the input classes: a first element, and (for a two-literal path) the second and a line break
+    type Cls = { f: StartElem; s?: string; lb: boolean };
+    const classes: Cls[] = [];
+    const firsts = new Map<string, StartElem>();
+    for (const c of conds) for (const { p } of c.paths) firsts.set(elemKey(p.first), p.first);
+    for (const [k, f] of firsts) {
+      classes.push({ f, lb: false });
+      const seconds = new Set(conds.flatMap(c => c.paths.filter(({ p }) => elemKey(p.first) === k && p.second !== undefined).map(({ p }) => p.second!)));
+      for (const s of seconds) for (const lb of [false, true]) classes.push({ f, s, lb });
+    }
+    const matches = (p: StartPath, c: Cls) => elemKey(p.first) === elemKey(c.f) && (p.second === undefined || (p.second === c.s && (!p.sameLine || !c.lb)));
+    const rendered = new Set<StartPath>();
+    const condIds = conds.map(c => {
+      // by its paths: a token means only which conditions hold, so equal choices share it
+      const key = c.paths.map(({ p }) => show(p)).join(',');
+      let id = condByKey.get(key);
+      if (id === undefined) { condByKey.set(key, id = plan.conds.length); plan.conds.push(c.paths.map(({ p }) => p)); }
+      return id;
+    });
+    for (const cl of classes) {
+      let killed = 0;
+      conds.forEach((c, i) => { if (c.paths.some(({ p }) => matches(p, cl))) killed |= 1 << i; });
+      if (!killed) continue;
+      const killedArms = new Set(conds.filter((_, i) => killed & (1 << i)).map(c => c.arm));
+      const sites: RuleExpr[] = [];
+      alt.items.forEach((b, bi) => { if (!killedArms.has(bi) && startsWith(b, cl.f)) corner(b, cl.f, sites); });
+      if (!sites.length) continue;                                    // the token would end every reading
+      conds.forEach((c, i) => { if (killed & (1 << i)) for (const { p } of c.paths) if (matches(p, cl)) rendered.add(p); });
+      // one token per first element too: a token valid where the choice is reached only through
+      // some of its alternatives (a FIRST-filtered copy: `export`'s declaration statement) must not
+      // be returned for an input those cannot start with (`export {`, the export list)
+      const key = condIds.join(',') + '|' + killed + '|' + elemKey(cl.f);
+      let tok = byKey.get(key);
+      if (!tok) {
+        tok = { snake: `_starts_${byKey.size + 1}`, conds: condIds, killed, first: cl.f };
+        byKey.set(key, tok);
+        plan.tokens.push(tok);
+      }
+      for (const s of sites) {
+        const l = plan.markerOf.get(s) ?? [];
+        if (!l.includes(tok.snake)) l.push(tok.snake);
+        plan.markerOf.set(s, l);
+      }
+    }
+    for (const c of conds) for (const n of c.nots) {
+      if (reported.has(n)) continue;
+      reported.add(n);
+      const mine = c.paths.filter(x => x.not === n).map(x => x.p);
+      const left = [...unstartable.get(n) ?? [], ...mine.filter(p => !rendered.has(p)).map(p => `${show(p)}: no other alternative can start with it`)];
+      const exact = !left.length;
+      if (exact) plan.lowered.add(n);
+      plan.report.push({ rule: owner, text: assertionText(n), rendered: mine.filter(p => rendered.has(p)).map(show), left, exact });
+    }
+  };
+  const walked = new Set<RuleExpr>();
+  const walk = (e: RuleExpr): void => {
+    if (walked.has(e)) return;
+    walked.add(e);
+    switch (e.type) {
+      case 'alt': visit(e); e.items.forEach(walk); return;
+      case 'seq': e.items.forEach(walk); return;
+      case 'quantifier': walk(e.body); return;
+      case 'group': walk(e.tsRelaxed ?? e.body); return;
+      case 'sep': walk(e.element); return;
+    }
+  };
+  for (const r of grammar.rules) { owner = r.name; walk(r.body); }
+  for (const [n, b] of collectTsSharedRules(grammar)) { owner = n; walk(b); }
   return plan;
 }
 
@@ -2635,6 +2858,7 @@ function externalSymbols(ctx: GrammarJsContext): string[] {
   if (ctx.templatePlan) syms.push(ctx.templatePlan.charsSnake);
   for (const ip of ctx.interpolationPlans) syms.push(ip.charsSnake);
   for (const t of ctx.zeroWidth.tokens) syms.push(t.snake);
+  for (const t of ctx.startMarkers.tokens) syms.push(t.snake);
   return syms;
 }
 
@@ -2839,8 +3063,11 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   for (const { sym, char } of flowSyntheticTokens(grammar)) flowLiteralTokens.set(char, sym);
 
   const terminalSets = computeTerminalSets(grammar, tokenNames);
+  const startMarkers = planStartMarkers(grammar, tokenNames, terminalSets, assertions.recordOf, assertions.isWordLiteral);
+  for (const n of startMarkers.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
+  for (const t of startMarkers.tokens) externalSnake.add(t.snake);
   const zeroWidth = planZeroWidth(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, assertions.isWordLiteral,
-    new Set(assertions.reservedSets.sets[0]?.words ?? []));
+    new Set(assertions.reservedSets.sets[0]?.words ?? []), startMarkers.markerOf);
   for (const n of zeroWidth.lowered) for (const rec of assertions.recordOf.get(n)!) rec.cls = 'lowered';
   for (const t of zeroWidth.tokens) externalSnake.add(t.snake);
   const wordTok = grammar.tokens.find(t => t.identifier)?.name;
@@ -2851,7 +3078,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   const names = declared === undefined || declared === 'all' ? wordLiterals : declared;
   const contextual = wordTok && names.length
     ? planContextualWords(grammar,
-      treeSitterLeafGraph(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, new Map([...zeroWidth.tokenOf].map(([n, t]) => [n, t.snake]))),
+      treeSitterLeafGraph(grammar, tokenNames, new Set(scannerTokenFor.keys()), prattRules, new Map([...zeroWidth.tokenOf].map(([n, t]) => [n, t.snake])), startMarkers.markerOf),
       wordTok, names, assertions.isWordLiteral)
     : null;
   if (Array.isArray(declared)) {
@@ -2861,6 +3088,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   }
   const ctx: GrammarJsContext = {
     grammar, tokenNames, ruleSnake, tokenSnake, prattRules, externalSnake, scannerTokenFor, zeroWidth,
+    startMarkers, renderedMarkers: new Set(), writtenMarkers: new Set(),
     flowLiteralTokens,
     nullableNonStart,
     terminalSets,
@@ -2883,7 +3111,7 @@ function buildTokenTreeSitter(source: CstGrammar, grammarName: string): Omit<Tre
   const highlightsScm = buildHighlightsScm(source, ctx, nameFields.byRule);
   const { scannerC, externalTokens } = buildScannerC(grammar, ctx, grammarName);
 
-  return { grammarJs, highlightsScm, scannerC, externalTokens, assertions: assertions.records, ...(ctx.reserved.word ? { contextualKeywords: ctx.bothReadings } : {}) };
+  return { grammarJs, highlightsScm, scannerC, externalTokens, assertions: assertions.records, ...(ctx.reserved.word ? { contextualKeywords: ctx.bothReadings } : {}), startMarkers: startMarkers.report };
 }
 
 function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
@@ -2975,6 +3203,10 @@ function buildGrammarJs(ctx: GrammarJsContext, grammarName: string): string {
     sharedEntries.push(`    ${name}: $ => ${renderExpr(body, ctx)}`);
   }
   if (sharedEntries.length) ruleEntries.splice(1, 0, ...sharedEntries);
+  // Every start-marker site must be written: a site the rendering reached by no path (a node a
+  // rewrite copied) would leave its `not` recorded as rendered while grammar.js lacks it.
+  for (const site of ctx.startMarkers.markerOf.keys())
+    if (!ctx.writtenMarkers.has(site)) throw new Error(`gen-treesitter: a start-marker site was not rendered (${assertionText(site)})`);
 
   // Token rules (named) — those not provided by the scanner. Skip tokens are
   // included so `extras` references resolve.
@@ -3799,12 +4031,15 @@ function cCharSetTest(set: CSet, v: string): string {
 function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { helpers: string[]; call: string[] } {
   const { grammar } = ctx;
   const tokens = ctx.zeroWidth.tokens;
-  if (!tokens.length) return { helpers: [], call: [] };
+  const starts = ctx.startMarkers.tokens;
+  if (!tokens.length && !starts.length) return { helpers: [], call: [] };
+  if (!tokens.length) throw new Error('gen-treesitter: start markers without zero-width tokens (the scanner reads them in scan_zero_width)');
   const word = ctx.reserved.word;
   const isWordLit = ctx.reserved.isWordLiteral;
   // ── kinds: literals (longest match), skip openers, tokens by first character ──
   const lits = new Set<string>([...ctx.renderedLiterals]);
   for (const t of tokens) for (const s of [t.after, t.cont, t.ahead]) for (const x of s) if (x.startsWith("'")) lits.add(x.slice(1));
+  for (const ps of ctx.startMarkers.conds) for (const p of ps) { if ('lit' in p.first) lits.add(p.first.lit); if (p.second !== undefined) lits.add(p.second); }
   const literals = [...lits].sort();
   const litId = new Map(literals.map((l, i) => [l, i]));
   const SKIP = -2;
@@ -3954,9 +4189,72 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
     H.push(`  { ${S}, ${t.kind === 'line-end'}, ${t.lineBreak}, ${t.after.has(END)}, ${mask(t.after)}, ${mask(t.cont)}, ${mask(t.ahead)}, ${S}_AFTER_EXACT, ${S}_AFTER, ${S}_CONT, ${S}_AHEAD },`);
   }
   H.push('};');
+  // Start markers (planStartMarkers): per condition its paths (a first literal id, or a non-literal
+  // token's candidate bit; a second literal id or -1), per marker its choice's conditions and the set it
+  // stands for. zw_literal reads the longest literal and leaves the input after it only when no longer
+  // literal goes on with the same characters, so the first literal of a two-literal path must be the
+  // prefix of no other literal.
+  const startPaths = ctx.startMarkers.conds.flatMap((ps, cond) => ps.map(p => {
+    const first = 'lit' in p.first ? p.first.lit : null;
+    if (first !== null && p.second !== undefined && literals.some(l => l !== first && l.startsWith(first)))
+      throw new Error(`gen-treesitter: start marker path ${first} ${p.second}: ${first} is the prefix of another literal`);
+    const tok = 'tok' in p.first ? kindTokens.indexOf(p.first.tok) : -1;
+    if ('tok' in p.first && tok < 0) throw new Error(`gen-treesitter: start marker path token ${p.first.tok} is no candidate token`);
+    return { cond, lit: first === null ? -1 : litId.get(first)!, tok, second: p.second === undefined ? -1 : litId.get(p.second)!, sameLine: !!p.sameLine };
+  }));
+  if (starts.length) {
+    H.push('typedef struct { int cond; int lit, tok, second; bool same_line; } StartPath;');
+    H.push('static const StartPath START_PATHS[] = {');
+    for (const p of startPaths) H.push(`  { ${p.cond}, ${p.lit}, ${p.tok}, ${p.second}, ${p.sameLine} },`);
+    H.push('};');
+    H.push('typedef struct { int symbol; int lit, tok; const int16_t *conds; unsigned count; uint32_t killed; } StartMarker;');
+    for (const t of starts) H.push(`static const int16_t ${t.snake.toUpperCase()}_CONDS[] = { ${t.conds.join(', ')} };`);
+    H.push('static const StartMarker START_MARKERS[] = {');
+    for (const t of starts) {
+      const S = t.snake.toUpperCase();
+      const lit = 'lit' in t.first ? litId.get(t.first.lit)! : -1, tok = 'tok' in t.first ? kindTokens.indexOf(t.first.tok) : -1;
+      H.push(`  { ${S}, ${lit}, ${tok}, ${S}_CONDS, ${t.conds.length}, ${t.killed >>> 0}u },`);
+    }
+    H.push('};');
+    H.push('// The literal after the first one (past whitespace and the comments skipped here); -1: none, or a');
+    H.push('// comment opener to defer (the parse is then the unmarked one).');
+    H.push('static int zw_second_literal(TSLexer *lexer, bool *line_break) {');
+    H.push('  for (;;) {');
+    H.push('    while (iswspace(lexer->lookahead)) { if (zw_line_terminator(lexer->lookahead)) *line_break = true; skip(lexer); }');
+    H.push('    if (lexer->eof(lexer)) return -1;');
+    H.push('    int l = zw_literal(lexer);');
+    H.push('    if (l > -10) return l < 0 ? -1 : l;');
+    H.push('    if (!zw_skip_comment(lexer, -10 - l, line_break)) return -1;');
+    H.push('  }');
+    H.push('}');
+    H.push('// The start marker whose choice\'s conditions hold exactly as it stands for (-1: none). A condition');
+    H.push('// holds where one of its paths begins the input; a second literal is read only when one is asked.');
+    H.push('static int scan_starts(TSLexer *lexer, const bool *valid_symbols, int lit, uint64_t cand) {');
+    H.push('  int lit2 = -3; bool line_break2 = false;');
+    H.push(`  for (unsigned i = 0; i < ${starts.length}; i++) {`);
+    H.push('    const StartMarker *m = &START_MARKERS[i];');
+    H.push('    if (!valid_symbols[m->symbol]) continue;');
+    H.push('    if (m->lit >= 0 ? m->lit != lit : (lit >= 0 || !((cand >> m->tok) & 1))) continue;   // its first token');
+    H.push('    uint32_t held = 0;');
+    H.push('    for (unsigned j = 0; j < m->count; j++)');
+    H.push(`      for (unsigned k = 0; k < ${startPaths.length}; k++) {`);
+    H.push('        const StartPath *p = &START_PATHS[k];');
+    H.push('        if (p->cond != m->conds[j]) continue;');
+    H.push('        if (p->lit >= 0 ? p->lit != lit : (lit >= 0 || !((cand >> p->tok) & 1))) continue;');
+    H.push('        if (p->second >= 0) {');
+    H.push('          if (lit2 == -3) lit2 = zw_second_literal(lexer, &line_break2);');
+    H.push('          if (p->second != lit2 || (p->same_line && line_break2)) continue;');
+    H.push('        }');
+    H.push('        held |= (uint32_t)1 << j; break;');
+    H.push('      }');
+    H.push('    if (held && held == m->killed) return m->symbol;');
+    H.push('  }');
+    H.push('  return -1;');
+    H.push('}');
+  }
   H.push('// A line-end token where its assertion holds (a line break or the end of the input, or a lookahead');
   H.push('// arm\'s token next); a same-line marker where no line break comes first. Either only when the next');
-  H.push('// token may follow it (AFTER) and does not continue what precedes it (CONT).');
+  H.push('// token may follow it (AFTER) and does not continue what precedes it (CONT). A start marker first.');
   H.push('// 1: returned; 0: declined; 2: declined before anything but whitespace was read, `/` next (regex).');
   H.push('static int scan_zero_width(TSLexer *lexer, const bool *valid_symbols) {');
   H.push('  lexer->mark_end(lexer);');
@@ -3967,11 +4265,21 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   if (regexSym) H.push(`    if (valid_symbols[${regexSym}] && lexer->lookahead == '/') return 2;`);
   H.push('    end = lexer->eof(lexer);');
   H.push('    cand = 0; lit = -1;');
+  // A start marker stands where the next token starts, so the node it begins starts there and not at the
+  // whitespace before it: where one is valid, the end is marked past the whitespace and comments (a
+  // line-end token returned in the same state then spans them too: the two meet only in merged states).
+  if (starts.length) H.push(`    if (${starts.map(t => `valid_symbols[${t.snake.toUpperCase()}]`).join(' || ')}) lexer->mark_end(lexer);`);
   H.push('    if (!end) { cand = zw_token_candidates(lexer->lookahead); lit = zw_literal(lexer); }');
   H.push('    if (lit > -10) break;');
   H.push('    if (!zw_skip_comment(lexer, -10 - lit, &line_break)) return 0;');
   H.push('  }');
   H.push(`  if (lit == ${SKIP}) return 0;`);
+  H.push('  int32_t next = lexer->lookahead;   // the character after the literal (scan_starts may read on)');
+  if (starts.length) {
+    H.push('  // A start marker before every other token: where it is valid and its condition holds, the');
+    H.push('  // alternative it excludes is the one a line-end or same-line token here would end or continue.');
+    H.push('  if (!end) { int s = scan_starts(lexer, valid_symbols, lit, cand); if (s >= 0) { lexer->result_symbol = s; return 1; } }');
+  }
   H.push('  // Two passes: a keyword the token names itself first, then a keyword read as the word token.');
   H.push('  for (int pass = 0; pass < 2; pass++)');
   H.push(`  for (unsigned i = 0; i < ${tokens.length}; i++) {`);
@@ -3980,7 +4288,7 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('    bool ahead = !end && (lit >= 0 ? z->ahead_lit[lit] : (cand & z->ahead_tok) != 0);');
   H.push('    bool holds = z->line_end ? ((z->line_break && (line_break || end)) || ahead) : (!line_break && !end);');
   H.push('    if (!holds) continue;');
-  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) || (zw_lit_tokens(lit, lexer->lookahead) & z->after_tok) != 0 : (cand & z->after_tok) != 0;');
+  H.push('    bool after = end ? z->after_end : lit >= 0 ? (pass == 0 ? z->after_exact[lit] : z->after_lit[lit]) || (zw_lit_tokens(lit, next) & z->after_tok) != 0 : (cand & z->after_tok) != 0;');
   H.push('    bool cont = !end && (lit >= 0 ? z->cont_lit[lit] : (cand & z->cont_tok) != 0);');
   H.push('    if (after && !cont) { lexer->result_symbol = z->symbol; return 1; }');
   H.push('  }');
@@ -3988,8 +4296,8 @@ function zeroWidthScannerC(ctx: GrammarJsContext, regexSym: string | null): { he
   H.push('}');
   H.push('');
   const C: string[] = [];
-  C.push('  // Zero-width tokens (a line-end alternative, a same-line marker) where one is valid.');
-  C.push(`  if (${tokens.map(t => `valid_symbols[${t.snake.toUpperCase()}]`).join(' || ')}) {`);
+  C.push('  // Zero-width tokens (a line-end alternative, a same-line marker, a start marker) where one is valid.');
+  C.push(`  if (${[...tokens, ...starts].map(t => `valid_symbols[${t.snake.toUpperCase()}]`).join(' || ')}) {`);
   C.push('    int zw = scan_zero_width(lexer, valid_symbols);');
   C.push('    if (zw == 1) return true;');
   C.push('    if (zw == 0) return false;');
