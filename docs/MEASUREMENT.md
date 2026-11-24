@@ -62,6 +62,29 @@ performance claim in a pull request or in the README comes from one of these, ru
   (`parse_with`) against one `Allocator` `reset()` before each parse. Fresh mode (a new builder /
   allocator per parse) is reported beside it.
 
+### What moves the Pratt loop's instruction count
+The Rust LED loop (`Expr_bp`, and `Expr_bp'2`, Callgrind's name for its recursive calls) moved by
+1-5% between builds that did nearly the same work. Per-line Callgrind and objdump of the profiled
+binaries (2026-11-24; full profiles 45324707067, 45324710405, 45324753624, tools
+`$SHARED/scratch/sound-8/cgfn.py` / `cgdiff.py`) found three causes. None of them is noise: each
+repeats exactly.
+1. **An inlining flip.** `Expr_bin(op)` (the binary-operator `match`) was inlined while it had one
+   call site. A second call site (a composite-lead helper) made LLVM call it instead: +10 Ir per
+   operator read, 102,865 calls on checker.ts, net +0.72%. Callgrind shows the function as a new
+   callee.
+2. **Lid renumbering.** Adding one literal shifts every lid. `Expr_post`'s `match op { 27 | 28 }`
+   became `{ 24 | 25 }`, which LLVM lowers as `(op & 0xfffe) == 24` folded branch-free into the
+   neighbouring conditions: 8 instructions where `op - 27 < 2` + `jae` was 5. That is +4 Ir per
+   operator read (dense-plus +4.2M, typescript.js +1.7M) with no change in work.
+3. **A real compare on every read.** A second composite lead compared in the operator read
+   (`t.lid != GT_LID && t.lid != GT_LID2`) costs +3 Ir on every operator read, not only on `<`.
+How to read a +1% in this function: compare the callee lists (a new callee is an inlining flip),
+then the per-line delta keyed by source text (cgdiff.py). Lines that only exist in one build, or
+"line 0" (spills) moving against them, are codegen. A rise on a line the change did not touch,
+with identical call counts, is renumbering or register allocation.
+The remedy is the operator row (emit-portable `prattOpRow`): one masked table load per LED
+iteration, whatever the lids and however many call sites there are.
+
 ## The harnesses
 
 | What | Where | When |
