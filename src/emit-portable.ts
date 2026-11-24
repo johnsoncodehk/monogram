@@ -1919,7 +1919,11 @@ export type PrattLowering = {
   // steps as conditions in the inner lowering (the connector, the self operand, L2, the rest), sepLid
   // is L2's literal id.
   rebind(p: { open: string; operand: string; sep: string; rest: string; sepLid: number }): string;  // led i's block: its node over the left operand, else undone (and the loop left when exit; clean: PrattRule.ledClean, no builder checkpoint)
-  ledSwitch(cases: { key: number; arms: string[] }[]): string;      // the led groups, by the token's lid
+  // The buffered token's operator row (prattOpRow) as `row`: the loop's one table load, after
+  // bpOpen; the led switch, postfixOp and binary read it.
+  opRow: string;
+  // the led groups, by the row's dense led index (idx = row >> OP_ROW.ledShift, 1..k; key: the group's lid)
+  ledSwitch(cases: { key: number; idx: number; arms: string[] }[]): string;
   postfixToks(kids: number[]): string;           // the postfix tokens, by the token's kid
   postfixTpl(hole: string): string;              // the postfix interpolated template
   postfixOp: string;                             // the postfix operator
@@ -1993,14 +1997,15 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'tokens' | 'tpl' | '
     const st = b.steps;
     return L.rebind({ open: stepExpr(st[0]!, outer), operand: stepExpr(st[1]!, outer), sep: stepExpr(st[2]!, outer), rest: conjOf(st.slice(3), outer), sepLid: lidOf(ids, sep) });
   });
+  const { ledIdx } = prattOpRow(r, ids);
   const leds = r.leds.length === 0 ? '' : L.ledSwitch(groupByPreserveOrder(r.leds, (b) => lidOf(ids, b.first)).map((g) => {
     const lid = g.key as number;
-    return { key: lid, arms: g.members.map(({ item: b, index: i }, j) =>
+    return { key: lid, idx: ledIdx.get(lid)!, arms: g.members.map(({ item: b, index: i }, j) =>
       `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null, r.ledCapsFromTail[i]!)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
-  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), leds, postToks, L.postfixOp, L.binary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0), L.opRow, leds, postToks, L.postfixOp, L.binary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
   // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
   // decides it, its guard's remaining tests, a capped arm's binding power.
   const tests = (t: CommitTest): string[] => {
@@ -2698,33 +2703,48 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
 
 /** A Pratt rule's operator read as ONE table load: a u32 row per literal id, the table's length a
  *  power of two (`size`, so `lid & (size - 1)` is in range by construction: no bounds check), and
- *  every operator test of the LED loop a bit or field of the row. Why a row and not a `match` per
- *  table: how a compiler lowers a match on the lid (a lookup table, a range compare, compares folded
- *  into neighbouring conditions) and whether it inlines a match function depend on the lid VALUES
- *  and on the call sites, so a renumbering or a second call site moved the Rust loop by 1-5% with
- *  the same work (docs/MEASUREMENT.md "What moves the Pratt loop's instruction count"). Fields:
- *  bits 0-7 the binary lbp (0: not a binary operator; every lbp is >= 1 and min_bp >= 0, so
- *  `lbp <= min_bp` also refuses a non-operator), 8-15 its rbp, 16 its test bit (binTestsLeft),
- *  17 noUnaryLhs, 18-23 the postfix lbp (0: none), 24 the postfix requireTarget, 25 a composite
- *  lead (the lid a composite operator such as `>>` begins with: the operator read extends it). */
-export const OP_ROW = { lbpMask: 0xff, rbpShift: 8, test: 1 << 16, noUnary: 1 << 17, postShift: 18, postMask: 0x3f, postTgt: 1 << 24, lead: 1 << 25 } as const;
-export function prattOpRow(ops: PrattOpTables, plan: LexIdPlan): { size: number; rows: number[] } {
+ *  every operator test of the LED loop a bit or field of the row, the led group the lid selects
+ *  included. Why a row and not a `match` per table: how a compiler lowers a match on the lid (a
+ *  lookup table, a range compare, compares folded into neighbouring conditions) and whether it
+ *  inlines a match function depend on the lid VALUES and on the call sites, so a renumbering or a
+ *  second call site moved the Rust loop by 1-5% with the same work (docs/MEASUREMENT.md "What moves
+ *  the Pratt loop's instruction count"). The loop loads the row of the buffered token once
+ *  (PrattLowering.opRow) and every test reads it. Fields (OP_ROW):
+ *  bits 0-5 the binary lbp (0: not a binary operator; every lbp is >= 1 and min_bp >= 0, so
+ *  `lbp <= min_bp` also refuses a non-operator), 6-11 its rbp, 12-17 the postfix lbp (0: none; the
+ *  same `plbp > min_bp` test), 18 the binary test bit (binTestsLeft), 19 noUnaryLhs, 20 the postfix
+ *  requireTarget, 21 a composite lead (the lid a composite operator such as `>>` begins with: the
+ *  operator read extends it), 22-26 free (a lane adds a per-operator flag here), 27-31 the led
+ *  group's dense index (1..k in the rule's group order, 0: no led starts with the lid): the led
+ *  switch is `row >> 27`, cases 1..k, so its lowering is a dense jump table whatever the lids. */
+export const OP_ROW = { bpMask: 0x3f, rbpShift: 6, postShift: 12, test: 1 << 18, noUnary: 1 << 19, postTgt: 1 << 20, lead: 1 << 21, ledShift: 27, ledMax: 31 } as const;
+export type PrattOpRow = { size: number; rows: number[]; ledIdx: Map<number, number> };
+export function prattOpRow(r: PrattRule, plan: LexIdPlan): PrattOpRow {
+  const ops = prattOpTables(r, plan);
   let size = 1;
   while (size < ops.size) size <<= 1;
   const rows = new Array<number>(size).fill(0);
+  const fits = (bp: number) => bp >= 0 && bp <= OP_ROW.bpMask;
   for (const b of ops.bin) {
-    if (b.lbp < 1 || b.lbp > 0xff || b.rbp < 0 || b.rbp > 0xff) throw new Error(`portable: binary lid ${b.lid}: binding powers ${b.lbp}/${b.rbp} do not fit the operator row`);
+    if (b.lbp < 1 || !fits(b.lbp) || !fits(b.rbp)) throw new Error(`portable: ${r.name}: binary lid ${b.lid}: binding powers ${b.lbp}/${b.rbp} do not fit the operator row (1..${OP_ROW.bpMask})`);
     rows[b.lid] |= b.lbp | (b.rbp << OP_ROW.rbpShift) | (binTestsLeft(b) ? OP_ROW.test : 0) | (b.noUnary ? OP_ROW.noUnary : 0);
   }
   for (const p of ops.post) {
-    if (p.lbp < 1 || p.lbp > OP_ROW.postMask) throw new Error(`portable: postfix lid ${p.lid}: lbp ${p.lbp} does not fit the operator row`);
+    if (p.lbp < 1 || !fits(p.lbp)) throw new Error(`portable: ${r.name}: postfix lid ${p.lid}: lbp ${p.lbp} does not fit the operator row (1..${OP_ROW.bpMask})`);
     rows[p.lid] |= (p.lbp << OP_ROW.postShift) | (p.tgt ? OP_ROW.postTgt : 0);
   }
   for (const c of plan.gtComps) {
     const lead = plan.lids.indexOf(c[0]!);
     if (lead > 0) rows[lead] |= OP_ROW.lead;
   }
-  return { size, rows: rows.map((r) => r >>> 0) };
+  const ledIdx = new Map<number, number>();
+  for (const g of groupByPreserveOrder(r.leds, (b) => lidOf(plan, b.first))) {
+    const lid = g.key as number;
+    if (ledIdx.size === OP_ROW.ledMax) throw new Error(`portable: ${r.name}: more than ${OP_ROW.ledMax} led groups do not fit the operator row`);
+    ledIdx.set(lid, ledIdx.size + 1);
+    rows[lid] |= ledIdx.size << OP_ROW.ledShift;
+  }
+  return { size, rows: rows.map((x) => x >>> 0), ledIdx };
 }
 
 /** The table's test bit of a binary operator: its left operand's form is read (requireTarget, or a

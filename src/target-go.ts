@@ -1126,14 +1126,14 @@ func lexInto(src string, buf []Tok, stk *lexStacks) ([]Tok, *lexErr) {
 
 // The operator row of a Pratt rule (emit-portable prattOpRow) at the lid in \`lid\`: the index masked
 // to the table's power-of-two length, so the compiler proves it in range (no bounds check).
-const goRowAt = (r: PrattRule, ids: LexIdPlan, lid: string): string => `row_${r.name}[${lid}&${prattOpRow(prattOpTables(r, ids), ids).size - 1}]`;
-// The binary operator read through the row: the composite read (gtOp) only at a lead lid (the row's
-// lead bit), then that operator's row; lbp 0 is no operator (every lbp is >= 1, minBp >= 0).
+const goRowAt = (r: PrattRule, ids: LexIdPlan, lid: string): string => `row_${r.name}[${lid}&${prattOpRow(r, ids).size - 1}]`;
+// The binary operator read through the row (`row`, loaded at the loop's top: PrattLowering.opRow):
+// the composite read (gtOp) only at a lead lid (the row's lead bit), then that operator's row; lbp 0
+// is no operator (every lbp is >= 1, minBp >= 0).
 function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean): string {
   // opLid is read by the composite read and by a target context's switch (binLeftOps) only
   const lid = ids.gtComps.length > 0 || binLeftOps(prattOpTables(r, ids)).length > 0;
-  const head = `\t\trow := ${goRowAt(r, ids, 't.Lid')}
-\t\t${lid ? 'opLid, ' : ''}opN${withEnd ? ', opEnd' : ''} := ${lid ? 't.Lid, ' : ''}1${withEnd ? ', t.End' : ''}
+  const head = `\t\t${lid ? 'opLid, ' : ''}opN${withEnd ? ', opEnd' : ''} := ${lid ? 't.Lid, ' : ''}1${withEnd ? ', t.End' : ''}
 `;
   const lead = ids.gtComps.length === 0 ? '' : `\t\tif row&${OP_ROW.lead} != 0 {
 \t\t\topLid, opN, ${withEnd ? 'opEnd' : '_'} = gtOp(p.toks, p.pos)
@@ -1141,9 +1141,9 @@ function goRowOpRead(r: PrattRule, ids: LexIdPlan, withEnd: boolean): string {
 \t\t\trow = ${goRowAt(r, ids, 'opLid')}
 \t\t}
 `;
-  return `${head}${lead}\t\tlbp := int(row & ${OP_ROW.lbpMask})
+  return `${head}${lead}\t\tlbp := int(row & ${OP_ROW.bpMask})
 \t\tif lbp <= minBp { break }
-\t\tinfoTgt, infoNoUnary, infoRbp := row&${OP_ROW.test} != 0, row&${OP_ROW.noUnary} != 0, int((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.lbpMask})`;
+\t\tinfoTgt, infoNoUnary, infoRbp := row&${OP_ROW.test} != 0, row&${OP_ROW.noUnary} != 0, int((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.bpMask})`;
 }
 // The binary operator read at p.pos (t = p.toks[p.pos]): opLid, its token count opN and (withEnd)
 // its end offset opEnd. A '>' read counts the tokens it inspected toward maxLook.
@@ -1406,9 +1406,10 @@ ${headUse}\tfor {
 // The Go spelling of a Pratt rule's shell (emit-portable.ts, prattShell), common to its two
 // engines. Every frame is printed in place, not called: Go inlines no function past its budget,
 // and a helper over the loop's locals is past it.
-const goPrattBase = (r: PrattRule, leftLeaf: (words: string) => string) => {
+const goPrattBase = (r: PrattRule, ids: LexIdPlan, leftLeaf: (words: string) => string) => {
   const d = r.nudDispatch;
   return {
+    opRow: `\t\trow := ${goRowAt(r, ids, 't.Lid')}`,
     ifAll: ifGo,
     kidIs: (k: number) => `t.Kid == ${k}`,
     lidIs: (l: number) => `t.Lid == ${l}`,
@@ -1424,8 +1425,9 @@ const goPrattBase = (r: PrattRule, leftLeaf: (words: string) => string) => {
       notSuppressed: (set: number) => `p.suppressCur != ${set}`,
       ifAll: (parts: string[]) => (parts.length ? `if ${parts.join(' && ')} ` : ''),
     },
-    ledSwitch: (cases: { key: number; arms: string[] }[]) => `\t\tswitch t.Lid {
-${cases.map((c) => `\t\tcase ${c.key}:\n${c.arms.map((a) => `\t\t\t${a}`).join('\n')}`).join('\n')}
+    // on the row's dense led index (cases 1..k): a jump table whatever the lids
+    ledSwitch: (cases: { key: number; idx: number; arms: string[] }[]) => `\t\tswitch row >> ${OP_ROW.ledShift} {
+${cases.map((c) => `\t\tcase ${c.idx}:\n${c.arms.map((a) => `\t\t\t${a}`).join('\n')}`).join('\n')}
 \t\t}`,
     nudPeek: `\tp.capped = false
 \tt := p.peek()`,
@@ -1467,7 +1469,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
     `bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; nb = len(p.nodes); kb = len(p.kids)`;
   const lost = lostGo;
   const fin = `p.finish(${rid}, sb, int(p.nodes[left].Offset), int(p.nodes[left].TokStart))`;
-  const B = goPrattBase(r, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
+  const B = goPrattBase(r, ids, (ws) => `!_inW(${ws}, p.headLeafText(left))`);
   const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
@@ -1526,7 +1528,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\tnode := p.matchTemplate_${hole}()
 \t\t\tif node >= 0 { sb := len(p.scratch); p.scratch = append(p.scratch, left, node); left = ${fin}; form = ${T.tpl}; continue LedLoop }
 \t\t}`,
-    postfixOp: `\t\tif row := ${goRowAt(r, ids, 't.Lid')}; row&${OP_ROW.postMask << OP_ROW.postShift} != 0 && !tailClosed && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.postMask}) > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+    postfixOp: `\t\tif int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return -1 }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left); p.pushLeaf(${ttIdOf(ar, '$operator')}, uint32(p.pos)); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue
@@ -1605,7 +1607,7 @@ func binKeep_${r.name}(tgt bool, op uint16, form uint8) uint8 {
 \t}
 \treturn 0
 }`}`;
-  const row = prattOpRow(ops, ids);
+  const row = prattOpRow(r, ids);
   // the operator row (emit-portable prattOpRow), its nonzero entries keyed by lid
   const rowInit = row.rows.flatMap((v, lid) => (v ? [`${lid}: ${v}`] : [])).join(', ');
   return `var row_${r.name} = [${row.size}]uint32{${rowInit}}${fns}
@@ -2098,7 +2100,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan,
     `found = true; bestPos = p.pos;${markGo(d, i)} bf, bt, bc = ${form}, ${tail}, ${capped}; ${arenaMark()}`;
   const lost = lostGoW(recv);
   const fin = `p.finishW(${rid}, sb, int(left.off), int(left.tokStart))`;
-  const B = goPrattBase(r, (ws) => `!p.nllBlockedW(${ws}, left)`);
+  const B = goPrattBase(r, ids, (ws) => `!p.nllBlockedW(${ws}, left)`);
   const fail = '{ return p.nudNone() }';
   const L: PrattLowering = {
     ...B,
@@ -2157,7 +2159,7 @@ ${kids.map((k) => `\t\tcase ${k}:
 \t\t\t\tleft = ${fin}; form = ${T.tpl}; continue LedLoop
 \t\t\t}
 \t\t}`,
-    postfixOp: `\t\tif row := ${goRowAt(r, ids, 't.Lid')}; row&${OP_ROW.postMask << OP_ROW.postShift} != 0 && !tailClosed && int((row >> ${OP_ROW.postShift}) & ${OP_ROW.postMask}) > minBp${r.postfixSameLine ? ' && !t.Nl' : ''} {
+    postfixOp: `\t\tif int((row >> ${OP_ROW.postShift}) & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.Nl' : ''} {
 \t\t\tif row&${OP_ROW.postTgt} != 0 && ${T.lf('form')} != 0 { return spanned{}, false }
 \t\t\tsb := len(p.scratch); p.scratch = append(p.scratch, left.h); p.pushLeafW(${ttIdOf(ar, '$operator')}, uint32(p.pos), t.Off, t.End); p.pos++; tailClosed = true
 \t\t\tleft = ${fin}; form = ${T.post}; continue

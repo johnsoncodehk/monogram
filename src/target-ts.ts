@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ReusePlanA, type ShapeInhVal, type TargetsIR } from './emit-portable.ts';
-import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, buildArenaIdPlan, withReservedRules, tplHoleRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP } from './recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -985,23 +985,22 @@ ${headUse}  for (;;) {
   });
 }
 
-/** A Pratt rule's operator tables (emit-portable prattOpTables), keyed by the operator's lid. TS:
- *  an object literal with integer keys, which V8 keeps as indexed elements (no hashing); the
+/** A Pratt rule's operator tables: the operator row (emit-portable prattOpRow) as a Uint32Array
+ *  indexed by lid, and the prefix tables (emit-portable prattOpTables) keyed by the operator's lid:
+ *  an object literal with integer keys, which V8 keeps as indexed elements (no hashing). The
  *  typed-AST printers read the same tables. */
 function tsPrattOpTables(r: PrattRule, ids: LexIdPlan): string {
   const ops = prattOpTables(r, ids);
   const rec = <T extends { lid: number }>(xs: T[], v: (x: T) => string | number) => `{ ${xs.map((x) => `${x.lid}: ${v(x)}`).join(', ')} }`;
   const set = <T extends { lid: number; tgt: boolean }>(xs: T[]) => `new Set<number>([${xs.filter((x) => x.tgt).map((x) => x.lid).join(', ')}])`;
-  return `const ${r.name}_BIN: Record<number, { lbp: number; rbp: number; tgt: boolean; noUnary: boolean }> = ${rec(ops.bin, (b) => `{ lbp: ${b.lbp}, rbp: ${b.rbp}, tgt: ${binTestsLeft(b)}, noUnary: ${b.noUnary} }`)};
+  return `const ${r.name}_ROW = new Uint32Array([${prattOpRow(r, ids).rows.join(', ')}]);
 const ${r.name}_PRE: Record<number, number> = ${rec(ops.pre, (p) => p.rbp)};
 const ${r.name}_PRE_FORM: Record<number, number> = ${rec(ops.pre, (p) => p.form)};
-const ${r.name}_PRE_TGT = ${set(ops.pre)};
-const ${r.name}_POST: Record<number, number> = ${rec(ops.post, (p) => p.lbp)};
-const ${r.name}_POST_TGT = ${set(ops.post)};`;
+const ${r.name}_PRE_TGT = ${set(ops.pre)};`;
 }
 
 /** A Pratt rule in building form, over the child stack (emit-portable prattShell): its operator
- *  tables ${name}_BIN / _PRE / _POST, then `X_bpW` / `X_nudW`, which return whether they matched;
+ *  row ${name}_ROW and tables _PRE, then `X_bpW` / `X_nudW`, which return whether they matched;
  *  matched, the node is the one slot left at the height `b` they found, else the stack is back at
  *  `b`. In the led loop the left operand is slot `b`: a led appends its other children after it,
  *  and `finP` finishes them all into slot `b`, the new left operand. */
@@ -1022,7 +1021,7 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
   const leftOps = binLeftOps(prattOpTables(r, ids));
   const tgtFail = `(${leftOps.map((o) => `opLid === ${o.lid} ? ${o.ctx ? `(form & ${o.ctx}) !== ${o.ctx}` : 'false'} : `).join('')}${lf('form')} !== 0)`;
   const keep = leftOps.filter((o) => o.acc);
-  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (info.tgt ? ${keep.map((o) => `opLid === ${o.lid} ? form & ${o.acc} : `).join('')}0 : 0)` : ''}` : '1';
+  const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | ((info & ${OP_ROW.test}) !== 0 ? ${keep.map((o) => `opLid === ${o.lid} ? form & ${o.acc} : `).join('')}0 : 0)` : ''}` : '1';
   // A NUD arm that won: its node at slot c finished (`fin`), _keep moves it over the best it beat.
   const won = (i: number, fin: string, form: string, tail: boolean, capped: string) =>
     `${fin === 'finR' ? finRTs(r.name, `nud${i}`, 'c', 'save') : finPTs(r.name, `nud${i}`, 'c')}; _keep(b, c); bestPos = pos;${markTs(d, i)} bf = ${form}; bt = ${tail}; bc = ${capped};`;
@@ -1090,8 +1089,10 @@ function prattRuleW(r: PrattRule, ir: ParserIR, ids: LexIdPlan): string {
     }`;
     },
     rebind: (p) => `rbScan(${rbSite(ids, [p.open, p.operand, p.sep, p.rest])}, ${p.sepLid}, 0)`,
-    ledSwitch: (cases) => `    switch (t.lid) {
-${cases.map((c) => `      case ${c.key}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
+    opRow: `    const row = ${r.name}_ROW[t.lid]!;`,
+    // on the row's dense led index (cases 1..k)
+    ledSwitch: (cases) => `    switch (row >>> ${OP_ROW.ledShift}) {
+${cases.map((c) => `      case ${c.idx}:\n${c.arms.map((a) => `      ${a}`).join('\n')}\n        break;`).join('\n')}
     }`,
     postfixToks: (kids) => `    switch (t.kid) {
 ${kids.map((k) => `      case ${k}:
@@ -1100,20 +1101,21 @@ ${kids.map((k) => `      case ${k}:
     }`,
     postfixTpl: (hole) => `
     if (!tailClosed && t.kid === ${kidOf(ids, '$templateHead')}) { if (matchTemplateW(parse${hole}W)) { ${finPTs(r.name, ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0', 'b')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue ledLoop; } }`,
-    postfixOp: `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
-      if (${lf('form')} !== 0 && ${r.name}_POST_TGT.has(t.lid)) { _n = b; return false; }
+    // a postfix lbp of 0 is no postfix operator (minBp >= 0)
+    postfixOp: `    if ((row >>> ${OP_ROW.postShift} & ${OP_ROW.bpMask}) > minBp && !tailClosed${r.postfixSameLine ? ' && !t.nl' : ''}) {
+      if (${lf('form')} !== 0 && (row & ${OP_ROW.postTgt}) !== 0) { _n = b; return false; }
       leafSlotW('$operator', t); pos++; ${finPTs(r.name, 'postop', 'b')}; tailClosed = true; form = ${r.postForm ?? 1}; continue;
     }`,
-    binary: `    const opLid = _opLid(t);
-    const info = ${r.name}_BIN[opLid];
-    if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && ${leftOps.length ? tgtFail : `${lf('form')} !== 0`} || info.noUnary && ${lf('form')} === 2) { _n = b; return false; }
+    // the composite read (_opLid) only at a lead lid (the row's lead bit); an lbp of 0 is no operator
+    binary: `${ids.gtComps.length === 0 ? `    const opLid = t.lid, info = row; _opN = 1; _opEnd = t.end;` : `    let opLid = t.lid, info = row;
+    if ((row & ${OP_ROW.lead}) !== 0) { opLid = _opLid(t); info = ${r.name}_ROW[opLid]!; } else { _opN = 1; _opEnd = t.end; }`}
+    if ((info & ${OP_ROW.bpMask}) <= minBp) break;
+    if ((info & ${OP_ROW.test}) !== 0 && ${leftOps.length ? tgtFail : `${lf('form')} !== 0`} || (info & ${OP_ROW.noUnary}) !== 0 && ${lf('form')} === 2) { _n = b; return false; }
     const ledSave = pos;
     opLeafW(t, opLid);
     pos += _opN;${rsOf(r.name) ? `
     { const lv = ${(() => { const bn = rsOf(r.name)!.bin; return 'fn' in bn ? `${bn.fn}(b, 0, 0)` : J(bn.c); })()}; ${rsCheck(r.name, 'lv', 'ledSave').replace(/\}$/, ' _opLid(t); opLeafW(t, opLid); pos += _opN; }')} }` : ''}
-    if (!${rsCall(r.name, 'right', `${r.name}_bpW(info.rbp)`)}) { back(ledSave); _n = b + 1; break; }
+    if (!${rsCall(r.name, 'right', `${r.name}_bpW(info >>> ${OP_ROW.rbpShift} & ${OP_ROW.bpMask})`)}) { back(ledSave); _n = b + 1; break; }
     ${finPTs(r.name, 'bin', 'b')};
     if (_capped) { _form = ${binF}; return true; }
     form = ${binF}; tailClosed = true;
@@ -2795,13 +2797,19 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     postfixTokSwitch = `    switch (t.kid) {\n${cases}\n    }${tplPart}`;
   }
 
+  // The operator row (tsPrattOpTables' ${name}_ROW, emit-portable prattOpRow): a postfix lbp of 0
+  // is no postfix operator, a binary lbp of 0 no binary one (minBp >= 0).
+  const postRead = `    const prow = ${r.name}_ROW[t.lid]!;
+    if (!tailClosed && (prow >>> ${OP_ROW.postShift} & ${OP_ROW.bpMask}) > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
+      if (form !== 0 && (prow & ${OP_ROW.postTgt}) !== 0) return null;`;
+  const binRead = `    const info = ${r.name}_ROW[_opLid(t)]!;
+    if ((info & ${OP_ROW.bpMask}) <= minBp) break;
+    if ((info & ${OP_ROW.test}) !== 0 && form !== 0 || (info & ${OP_ROW.noUnary}) !== 0 && form === 2) return null;`;
   let postfixCode = '';
   if (postfixSlot) {
     if (postfixSlot.kind === 'node') {
       const node = postfixSlot as NodeShape;
-      postfixCode = `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
-      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
+      postfixCode = `${postRead}
       const opText = _src.slice(t.off, t.end);
       pos++;
       const spOff = leftOff;
@@ -2812,9 +2820,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       tailClosed = true; form = 1; continue;
     }`;
     } else if (postfixSlot.kind === 'custom') {
-      postfixCode = `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
-      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
+      postfixCode = `${postRead}
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;
       left = ${customFinish((postfixSlot as CustomShape).fn, '[]', 'save', '[]', 'left', 'opText')} as ${retType};
@@ -2822,9 +2828,7 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
       tailClosed = true; form = 1; continue;
     }`;
     } else {
-      postfixCode = `    const post = ${r.name}_POST[t.lid];
-    if (!tailClosed && post !== undefined && post > minBp${r.postfixSameLine ? ' && !t.nl' : ''}) {
-      if (form !== 0 && ${r.name}_POST_TGT.has(t.lid)) return null;
+      postfixCode = `${postRead}
       const opText = _src.slice(t.off, t.end);
       const save = pos; pos++;
       const _kids = [left, opText];
@@ -2841,13 +2845,11 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
   if (binarySlot) {
     if (binarySlot.kind === 'node') {
       const binaryNode = binarySlot as NodeShape;
-      binaryCode = `    const info = ${r.name}_BIN[_opLid(t)];
-    if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
+      binaryCode = `${binRead}
     const ledSave = pos;
     const opText = _src.slice(t.off, _opEnd);
     pos += _opN;
-    const right = parseAst${r.name}_bp(info.rbp);
+    const right = parseAst${r.name}_bp(info >>> ${OP_ROW.rbpShift} & ${OP_ROW.bpMask});
     if (right === null) { pos = ledSave; break; }
     const spOff = leftOff;
     const end = pos > 0 ? toks[pos - 1]!.end : spOff;
@@ -2856,24 +2858,20 @@ ${hasBin ? '' : (j === g.members.length - 1 ? '        break ledLoop;' : '')}
     leftOff = spOff;
     leftEnd = end;`;
     } else if (binarySlot.kind === 'custom') {
-      binaryCode = `    const info = ${r.name}_BIN[_opLid(t)];
-    if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
+      binaryCode = `${binRead}
     const ledSave = pos;
     const opText = _src.slice(t.off, _opEnd);
     pos += _opN;
-    const right = parseAst${r.name}_bp(info.rbp);
+    const right = parseAst${r.name}_bp(info >>> ${OP_ROW.rbpShift} & ${OP_ROW.bpMask});
     if (right === null) { pos = ledSave; break; }
     left = ${customFinish((binarySlot as CustomShape).fn, '[right]', 'ledSave', '[]', 'left', 'opText')} as ${retType};
     leftEnd = pos > 0 ? toks[pos - 1]!.end : leftEnd;`;
     } else {
-      binaryCode = `    const info = ${r.name}_BIN[_opLid(t)];
-    if (info === undefined || info.lbp <= minBp) break;
-    if (info.tgt && form !== 0 || info.noUnary && form === 2) return null;
+      binaryCode = `${binRead}
     const ledSave = pos;
     const opText = _src.slice(t.off, _opEnd);
     pos += _opN;
-    const right = parseAst${r.name}_bp(info.rbp);
+    const right = parseAst${r.name}_bp(info >>> ${OP_ROW.rbpShift} & ${OP_ROW.bpMask});
     if (right === null) { pos = ledSave; break; }
     const _kids = [left, opText, right];
     left = ${keepFinish('_kids', 'ledSave')} as ${retType};
