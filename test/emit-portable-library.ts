@@ -98,6 +98,10 @@ for (const [mode, path] of [['markup', '../html.ts'], ['indent', '../yaml.ts']])
   d.edit([EDIT]);
   m.tokenize(B);
   check('ts: createDoc edit with tokenize interleaved ≡ fresh parse', json(d.root()) === json(m.parse(EDITED)));
+  // a Doc exists for a text that does not lex: no tree, and the lexer error tokenize reports
+  const dBad = m.createDoc(BAD_LEX);
+  const be = dBad.lexError();
+  check('ts: createDoc of an unlexable text has no tree and its lexError()', dBad.root() === null && be !== null && be.message === refLexError && be.off === BAD_LEX.indexOf('#') && d.lexError() === null, json(be));
 }
 
 // ── Go ──
@@ -178,6 +182,11 @@ func main() {
 \tparser.ParseWith(${lit(NLL_OTHER)}, &parser.CstBuilder{})
 \tdNull.Edit([]parser.Edit{{Start: ${NLL.length}, End: ${NLL.length}, Text: " "}})
 \townSrc := dNull.Root() < 0 && parser.NewDoc(${lit(NLL + ' ')}).Root() < 0 && parser.NewDoc(${lit(NLL_OTHER + ' ')}).Root() >= 0
+\tvar badDocs []any
+\tfor _, bd := range []parser.Document{parser.NewDoc(${lit(BAD_LEX)}), parser.NewDocWith(${lit(BAD_LEX)}, &parser.SlimBuilder{})} {
+\t\tif e := bd.LexError(); e != nil && bd.Root() < 0 { badDocs = append(badDocs, map[string]any{"msg": e.Msg, "off": e.Off}) }
+\t}
+\tbadDocs = append(badDocs, dA.LexError() == nil)
 \tvar wg sync.WaitGroup
 \tvar badConc atomic.Int32
 \tfor g := 0; g < 8; g++ {
@@ -203,7 +212,7 @@ func main() {
 \t\tif _, ok := parser.ParseWith(s, &parser.SlimBuilder{}); !ok { ltRejected = append(ltRejected, s) }
 \t}
 \tjson.NewEncoder(os.Stdout).Encode(map[string]any{"ltRejected": ltRejected, "ok": ok, "unchanged": unchanged, "same": same, "tokensA": tA, "tokensB": t2, "badNil": bad == nil, "lexMsg": lexMsg, "lexOff": lexOff,
-\t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "ownSrc": ownSrc, "badConc": badConc.Load()})
+\t\t"isoA": isoA, "isoBig": isoBig, "ownB": ownB, "ownSrc": ownSrc, "badConc": badConc.Load(), "badDocs": badDocs})
 }
 `);
     try {
@@ -223,6 +232,8 @@ func main() {
       check('go: a Doc edit after other Docs / ParseWith ≡ a fresh Doc, with reuse', out.isoA === true && out.isoBig === true);
       check('go: NewDocWith(*CstBuilder) builds its tree into that builder', out.ownB === true);
       check('go: a Doc reparsing after a rejected text reads its own source, not the last parsed one', out.ownSrc === true);
+      const badDoc = { msg: refLexError, off: BAD_LEX.indexOf('#') };
+      check('go: NewDoc / NewDocWith of an unlexable text have no tree and their LexError()', json(out.badDocs) === json([badDoc, badDoc, true]), json(out.badDocs));
       check(`go: Docs on concurrent goroutines ≡ sequential results (race detector ${race ? 'on' : 'unavailable'})`, out.badConc === 0, `${out.badConc} mismatches`);
     } catch (e) {
       check('go: external package builds and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
@@ -334,7 +345,9 @@ fn main() {
     let edit_eq = d.cst_json().is_some() && d.cst_json() == fresh.cst_json();
     let lex_msg = match tokenize(${lit(BAD_LEX)}) { Ok(_) => String::new(), Err(e) => e.msg };
     let after_panic = toks_json(&tokenize(b).unwrap());
-    println!("{{\\"unchanged\\":{},\\"editEq\\":{},\\"tokensA\\":{},\\"tokensB\\":{},\\"lexMsg\\":{:?},\\"afterPanic\\":{}}}", unchanged, edit_eq, toks_json(&tokenize(a).unwrap()), toks_json(&t2), lex_msg, after_panic);
+    let bad: Doc = Doc::new(${lit(BAD_LEX)}.to_string());
+    let bad_doc = match bad.lex_error() { Some(e) if bad.root_handle().is_none() && d.lex_error().is_none() => format!("{{\\"msg\\":{:?},\\"off\\":{}}}", e.msg, e.off), _ => "null".to_string() };
+    println!("{{\\"unchanged\\":{},\\"editEq\\":{},\\"tokensA\\":{},\\"tokensB\\":{},\\"lexMsg\\":{:?},\\"afterPanic\\":{},\\"badDoc\\":{}}}", unchanged, edit_eq, toks_json(&tokenize(a).unwrap()), toks_json(&t2), lex_msg, after_panic, bad_doc);
 }
 `);
   try {
@@ -348,6 +361,7 @@ fn main() {
     check('rust: Doc edit with tokenize interleaved ≡ fresh Doc', out.editEq === true);
     check('rust: tokenize returns Err(LexError) with the lexer message on malformed input', out.lexMsg === refLexError, out.lexMsg);
     check('rust: tokenize works after a lexer error', json(out.afterPanic) === json(ref(B)));
+    check('rust: Doc::new of an unlexable text has no tree and its lex_error()', json(out.badDoc) === json({ msg: refLexError, off: BAD_LEX.indexOf('#') }), json(out.badDoc));
   } catch (e) {
     check('rust: library crate builds, links and runs', false, String((e as { stderr?: Buffer }).stderr ?? e).slice(0, 800));
   }
