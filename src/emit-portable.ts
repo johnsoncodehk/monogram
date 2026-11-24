@@ -2696,6 +2696,37 @@ export function prattOpTables(r: PrattRule, plan: LexIdPlan): PrattOpTables {
   };
 }
 
+/** A Pratt rule's operator read as ONE table load: a u32 row per literal id, the table's length a
+ *  power of two (`size`, so `lid & (size - 1)` is in range by construction: no bounds check), and
+ *  every operator test of the LED loop a bit or field of the row. Why a row and not a `match` per
+ *  table: how a compiler lowers a match on the lid (a lookup table, a range compare, compares folded
+ *  into neighbouring conditions) and whether it inlines a match function depend on the lid VALUES
+ *  and on the call sites, so a renumbering or a second call site moved the Rust loop by 1-5% with
+ *  the same work (docs/MEASUREMENT.md "What moves the Pratt loop's instruction count"). Fields:
+ *  bits 0-7 the binary lbp (0: not a binary operator; every lbp is >= 1 and min_bp >= 0, so
+ *  `lbp <= min_bp` also refuses a non-operator), 8-15 its rbp, 16 its test bit (binTestsLeft),
+ *  17 noUnaryLhs, 18-23 the postfix lbp (0: none), 24 the postfix requireTarget, 25 a composite
+ *  lead (the lid a composite operator such as `>>` begins with: the operator read extends it). */
+export const OP_ROW = { lbpMask: 0xff, rbpShift: 8, test: 1 << 16, noUnary: 1 << 17, postShift: 18, postMask: 0x3f, postTgt: 1 << 24, lead: 1 << 25 } as const;
+export function prattOpRow(ops: PrattOpTables, plan: LexIdPlan): { size: number; rows: number[] } {
+  let size = 1;
+  while (size < ops.size) size <<= 1;
+  const rows = new Array<number>(size).fill(0);
+  for (const b of ops.bin) {
+    if (b.lbp < 1 || b.lbp > 0xff || b.rbp < 0 || b.rbp > 0xff) throw new Error(`portable: binary lid ${b.lid}: binding powers ${b.lbp}/${b.rbp} do not fit the operator row`);
+    rows[b.lid] |= b.lbp | (b.rbp << OP_ROW.rbpShift) | (binTestsLeft(b) ? OP_ROW.test : 0) | (b.noUnary ? OP_ROW.noUnary : 0);
+  }
+  for (const p of ops.post) {
+    if (p.lbp < 1 || p.lbp > OP_ROW.postMask) throw new Error(`portable: postfix lid ${p.lid}: lbp ${p.lbp} does not fit the operator row`);
+    rows[p.lid] |= (p.lbp << OP_ROW.postShift) | (p.tgt ? OP_ROW.postTgt : 0);
+  }
+  for (const c of plan.gtComps) {
+    const lead = plan.lids.indexOf(c[0]!);
+    if (lead > 0) rows[lead] |= OP_ROW.lead;
+  }
+  return { size, rows: rows.map((r) => r >>> 0) };
+}
+
 /** The table's test bit of a binary operator: its left operand's form is read (requireTarget, or a
  *  declared target context's `left`); an operator without it reads nothing more. */
 export const binTestsLeft = (b: PrattOpTables['bin'][number]): boolean => b.tgt || b.left !== undefined;

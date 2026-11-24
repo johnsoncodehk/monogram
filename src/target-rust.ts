@@ -13,7 +13,7 @@
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './emit-portable.ts';
 import type { ArmForm } from './declared-targets.ts';
-import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
+import { hasRebind, nudLowForm, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './emit-portable.ts';
 import type { CstGrammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-target.ts';
 import type { EmitOptions } from './target.ts';
@@ -1501,7 +1501,10 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   // The operator tables (emit-portable prattOpTables) as `match` functions: LLVM compiles a match
   // on the lid returning constants to a lookup table, no hashing.
   const ops = prattOpTables(r, ids);
-  const binArms = ops.bin.map((b) => `${b.lid} => Some((${b.lbp}, ${b.rbp}, ${binTestsLeft(b)}, ${b.noUnary}))`).join(', ');
+  // The operator row (emit-portable prattOpRow): one load per LED iteration, the index masked to the
+  // table's power-of-two length (in range by construction: no bounds check).
+  const row = prattOpRow(ops, ids);
+  const rowAt = (lid: string) => `Self::${r.name}_ROW[(${lid} as usize) & ${row.size - 1}]`;
   // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
@@ -1515,7 +1518,6 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const keep = leftOps.filter((o) => o.acc);
   const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : '1';
   const preArms = ops.pre.map((p) => `${p.lid} => Some((${p.rbp}, ${p.tgt}, ${p.form}))`).join(', ');
-  const postArms = ops.post.map((p) => `${p.lid} => Some((${p.lbp}, ${p.tgt}))`).join(', ');
   // `won` records the node just finished as the best so far and moves `ck` past it; `lost` drops
   // what the arm built. A sequence arm's frame is the `cand!` macro (candRs).
   const won = (i: number, form: string, tail: boolean, capped: boolean) =>
@@ -1599,10 +1601,13 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
             }`,
     postfixTpl: (hole) => `
             if !tail_closed && t.kid == ${kidOf(ids, '$templateHead')} { if let Some(n) = self.match_template(Self::parse_${hole}) { let sb = self.scratch.len(); if left.present { self.scratch.push(left.h); } if n.present { self.scratch.push(n.h); } left = ${finK(ir.tpl ? postKey(kidOf(ids, ir.tpl.token)) : 'post0')}; form = ${ir.tpl ? postTokForm(kidOf(ids, ir.tpl.token)) : 0}; continue; } }`,
-    postfixOp: `            if let Some((plbp, ptgt)) = Self::${r.name}_post(t.lid) { if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; } }`,
-    binary: `            let (op_lid, op_n, op_end) = self.op_read(t);
-            let (lbp, rbp, tgt, no_unary) = match Self::${r.name}_bin(op_lid) { Some(x) => x, None => break };
+    postfixOp: `            let row = ${rowAt('t.lid')};
+            if row & ${OP_ROW.postMask << OP_ROW.postShift} != 0 { let plbp = ((row >> ${OP_ROW.postShift}) & ${OP_ROW.postMask}) as i64; let ptgt = row & ${OP_ROW.postTgt} != 0; if !tail_closed && plbp > min_bp${r.postfixSameLine ? ' && !t.nl' : ''} { if ptgt && ${lf('form')} != 0 { return None; } let sb = self.scratch.len(); self.scratch.push(left.h); self.push_leaf(${ttIdOf(ar, '$operator')}, self.pos as u32, t.off, t.end); self.pos += 1; left = ${finK('postop')}; tail_closed = true; form = ${r.postForm ?? 1}; continue; } }`,
+    binary: `            let row = ${rowAt('t.lid')};
+            let (op_lid, op_n, op_end, row) = if row & ${OP_ROW.lead} != 0 { let (l, n, e) = self.op_read(t); (l, n, e, ${rowAt('l')}) } else { (t.lid, 1, t.end, row) };
+            let lbp = (row & ${OP_ROW.lbpMask}) as i64;
             if lbp <= min_bp { break; }
+            let rbp = ((row >> ${OP_ROW.rbpShift}) & ${OP_ROW.lbpMask}) as i64; let tgt = row & ${OP_ROW.test} != 0; let no_unary = row & ${OP_ROW.noUnary} != 0;
             if tgt && ${tgtFail} || no_unary && ${lf('form')} == 2 { return None; }
             let led_save = self.pos;
             let sb = self.scratch.len(); self.scratch.push(left.h);
@@ -1622,9 +1627,10 @@ ${kids.map((k) => `                ${k} => { if !tail_closed { let sb = self.scr
         self.suppress_cur = prev;
         r
     }
-    fn ${r.name}_bin(op: u16) -> Option<(i64, i64, bool, bool)> { match op { ${binArms}${binArms ? ', ' : ''}_ => None } }
+    /// The operator row per lid (emit-portable prattOpRow: binary lbp / rbp / flags, postfix lbp / target, composite lead).
+    const ${r.name}_ROW: [u32; ${row.size}] = [${row.rows.join(', ')}];
     fn ${r.name}_pre(op: u16) -> Option<(i64, bool, u8)> { match op { ${preArms}${preArms ? ', ' : ''}_ => None } }
-    fn ${r.name}_post(op: u16) -> Option<(i64, bool)> { match op { ${postArms}${postArms ? ', ' : ''}_ => None } }`,
+`,
     // Rust's `loop` takes no label here: a led's `continue` / `break` are the innermost loop's.
     bpOpen: () => `    fn ${r.name}_bp(&mut self, min_bp: i64) -> Option<Spanned<B::H>> {
         let mut left = self.${r.name}_nud(min_bp)?;
