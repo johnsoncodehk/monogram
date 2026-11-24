@@ -290,7 +290,20 @@ const riRule = method('riRule', [['r', 'int'], ['d', 'int']], ['bool'], [
   run('enSetSt', n(ST_SUP_CUR), v('prev')),
   ret(v('ok')),
 ]);
-const newBest = (pos: Expr): Expr => ({ k: 'mkRec', rec: 'BestCand', fields: { pos, off: n(0), won: n(0), form: n(0), tail: n(0), capped: n(0), h0: call('enRmLen'), hb: call('enRmLen') } });
+// Mark k undone (the position, the list, the builder and the repair memory as they were) and dropped.
+const riUndo = method('riUndo', [['k', 'int']], [], [run('enReset', v('k')), run('enUnmark', v('k'))]);
+const undo = (k: string): Stmt => run('riUndo', v(k));
+// A best candidate won: it ended at pos, its node at off with form, tail and capped flag.
+const riBestSet = method('riBestSet', [['pos', 'int'], ['off', 'int'], ['form', 'int'], ['tail', 'int'], ['capped', 'int']], [], [
+  { k: 'setField', name: 'best', f: 'pos', e: v('pos') },
+  { k: 'setField', name: 'best', f: 'off', e: v('off') },
+  { k: 'setField', name: 'best', f: 'won', e: n(1) },
+  { k: 'setField', name: 'best', f: 'form', e: v('form') },
+  { k: 'setField', name: 'best', f: 'tail', e: v('tail') },
+  { k: 'setField', name: 'best', f: 'capped', e: v('capped') },
+]);
+riBestSet.params.push({ name: 'best', ty: 'rec_BestCand', ref: true });
+const newBest = (pos: Expr): Expr =>({ k: 'mkRec', rec: 'BestCand', fields: { pos, off: n(0), won: n(0), form: n(0), tail: n(0), capped: n(0), h0: call('enRmLen'), hb: call('enRmLen') } });
 // The position after a longest match: where its best candidate ended (each candidate went back to save).
 const wonPos: Stmt[] = [if_(gt(fld(v('best'), 'won'), n(0)), [run('enSetPos', fld(v('best'), 'pos'))])];
 // A candidate of rule r's longest match tried from token `save` (the list from height sb), its
@@ -312,13 +325,9 @@ const riCand = method('riCand', [['r', 'int'], ['sb', 'int'], ['save', 'int'], [
     run('enWin', v('r'), v('c'), v('save'), v('sb')),
     if_(gt(v('x'), fld(v('best'), 'h0')), [run('riRmDrop', fld(v('best'), 'h0'), v('x'))]),
     { k: 'setField', name: 'best', f: 'hb', e: call('enRmLen') },
-    { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
-    { k: 'setField', name: 'best', f: 'off', e: call('enFinOff') },
-    { k: 'setField', name: 'best', f: 'won', e: n(1) },
-    { k: 'setField', name: 'best', f: 'form', e: v('form') },
-    { k: 'setField', name: 'best', f: 'tail', e: v('tail') },
-    { k: 'setField', name: 'best', f: 'capped', e: v('capped') },
-  ], [run('enReset', v('k')), run('enUnmark', v('k'))]),
+    let_('o', call('enFinOff')),
+    run('riBestSet', call('enPos'), v('o'), v('form'), v('tail'), v('capped'), v('best')),
+  ], [undo('k')]),
   run('enBack', v('save')),
 ]);
 riCand.params.push({ name: 'best', ty: 'rec_BestCand', ref: true });
@@ -355,17 +364,24 @@ const riList = method('riList', [['l', 'int'], ['d', 'int']], ['bool'], [
   while_(lt(v('i'), v('nn')), [if_(not(call('riStep', R(add(add(v('l'), n(1)), v('i'))), v('d'))), [ret(fls)]), inc('i')]),
   ret(tru),
 ]);
-// An attempt undone when it fails (a repetition body, an optional, an ordered branch).
-const attempt = (ok: string, e: Expr, onFail: Stmt[] = [], onOk: Stmt[] = []): Stmt[] => [
-  let_('k', call('enMark')), let_(ok, e, 'bool'),
-  if_(v(ok), [run('enUnmark', v('k')), ...onOk], [run('enReset', v('k')), run('enUnmark', v('k')), ...onFail]),
-];
 // Steps run as a probe (an optional, a repetition's element, an ordered branch, an element after a
 // separator): no repair fires in them before they consumed a token (RM_PROBE: where the innermost
 // began). `pr` names the local that keeps the outer probe.
 const probe = (pr: string, body: Stmt[]): Stmt[] => [
   let_(pr, call('enRm', n(RM_PROBE))), run('enRmSet', n(RM_PROBE), call('enPos')), ...body, run('enRmSet', n(RM_PROBE), v(pr)),
 ];
+// An attempt undone when it fails (a repetition body, an optional, an ordered branch, an element
+// after a separator): step x (lst: step list x) with d levels, run as a probe when pb.
+const riTry = method('riTry', [['x', 'int'], ['d', 'int'], ['lst', 'bool'], ['pb', 'bool']], ['bool'], [
+  let_('pr', call('enRm', n(RM_PROBE))),
+  if_(v('pb'), [run('enRmSet', n(RM_PROBE), call('enPos'))]),
+  let_('k', call('enMark')),
+  let_('ok', fls, 'bool'),
+  if_(v('lst'), [set('ok', call('riList', v('x'), v('d')))], [set('ok', call('riStep', v('x'), v('d')))]),
+  if_(v('ok'), [run('enUnmark', v('k'))], [undo('k')]),
+  run('enRmSet', n(RM_PROBE), v('pr')),
+  ret(v('ok')),
+]);
 const op = (k: number, body: Stmt[]): Stmt => if_(eq(v('op'), n(k)), body);
 const S1 = at(v('s'), 1), S2 = at(v('s'), 2), S3 = at(v('s'), 3), S1R = atR(v('s'), 1), S2R = atR(v('s'), 2), S3R = atR(v('s'), 3);
 // A body guard that refuses: a failure at the position, as the body's attempt would have been (a
@@ -374,16 +390,11 @@ const guarded = (body: Stmt[]): Stmt => if_(and(ge(S1, n(0)), not(call('enAhead'
 const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   run('enTick'),
   let_('op', T(v('s'))),
-  op(REC_S_LIT, [ret(or(call('enLit', S1), call('riMiss', n(REC_S_LIT), S1)))]),
-  op(REC_S_COMP, [ret(or(call('enComp', S1), call('riMiss', n(REC_S_COMP), S1)))]),
-  op(REC_S_TOK, [ret(or(call('enTok', S1), call('riMiss', n(REC_S_TOK), S1)))]),
+  // (REC_S_LIT, REC_S_COMP, REC_S_TOK: riMatch)
+  if_(bin('le', v('op'), n(REC_S_TOK)), [ret(or(call('riMatch', v('op'), S1), call('riMiss', v('op'), S1)))]),
   op(REC_S_TPLTOK, [ret(or(call('enTok', S1), call('enTpl', S2)))]),
   op(REC_S_RULE, [ret(call('riRule', S1, v('d')))]),
-  op(REC_S_RULEBP, [
-    if_(le0('d'), [ret(call('enBp', S1, S2))]),
-    if_(call('riNat', S1, S2), [ret(tru)]),
-    ret(call('riBp', S1, T(add(n(2), S1)), S2, sub(v('d'), n(1)))),
-  ]),
+  op(REC_S_RULEBP, [ret(call('riOperand', S1, T(add(n(2), S1)), S2, v('d')))]),
   // A repetition stops at a body that matches nothing (an interpreted loop drops a zero-width
   // iteration: termination T1); the native loop never meets one on input it accepts.
   // Recovering, an element that fails where a repair fires (riRep) may follow an extra token: the
@@ -393,22 +404,21 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       let_('p0', call('enPos')),
       let_('ok', fls, 'bool'),
       if_(and(ge(S1, n(0)), not(call('enAhead', S1, tru))), [run('riFail', v('p0'))], [
-        ...probe('pr', attempt('o1', call('riStep', S2R, v('d')))),
-        set('ok', v('o1')),
+        set('ok', call('riTry', S2R, v('d'), fls, tru)),
       ]),
       if_(and(not(v('ok')), ge(call('enPeekKid'), n(0)), call('riRep', v('p0'))), [
         let_('ke', call('enMark')),
         let_('ce', call('enSh')),
         run('enLeafKid'),
         run('riErrNode', v('ce'), v('p0')),
-        ...probe('pr', [set('ok', call('riStep', S2R, v('d')))]),
-        if_(v('ok'), [run('enUnmark', v('ke'))], [run('enReset', v('ke')), run('enUnmark', v('ke'))]),
+        set('ok', call('riTry', S2R, v('d'), fls, tru)),
+        if_(v('ok'), [run('enUnmark', v('ke'))], [undo('ke')]),
       ]),
       if_(or(not(v('ok')), eq(call('enPos'), v('p0'))), [brk]),
     ]),
     ret(tru),
   ]),
-  op(REC_S_OPT, [guarded([ret(tru)]), ...probe('pr', attempt('ok', call('riList', S2R, v('d')))), ret(tru)]),
+  op(REC_S_OPT, [guarded([ret(tru)]), ret(or(call('riTry', S2R, v('d'), tru, tru), tru))]),
   // elem (delim elem)*: a trailing delimiter stays matched. Recovering, where the delimiter is not
   // there and a repair fires (riRep): the token there is extra when the delimiter follows it (an
   // `$error` node), else the delimiter is missing (a `$missing` node) before an element that
@@ -416,8 +426,7 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
   op(REC_S_SEP, [
     guarded([ret(tru)]),
     let_('el', S2R),
-    ...probe('pr', attempt('ok', call('riStep', v('el'), v('d')))),
-    if_(not(v('ok')), [ret(tru)]),
+    if_(not(call('riTry', v('el'), v('d'), fls, tru)), [ret(tru)]),
     while_(tru, [
       let_('pd', call('enPos')),
       let_('km', call('enMark')),
@@ -432,10 +441,10 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
         if_(not(v('dl')), [run('enReset', v('km')), run('riRepNode', T(TR(1)), n(DK_MISS_LIT), S3), set('dl', tru)]),
       ]),
       if_(not(v('dl')), [run('enUnmark', v('km')), brk]),
-      let_('k2', call('enMark')),
-      ...probe('pr2', [let_('ok2', call('riStep', v('el'), v('d')), 'bool')]),
+      // (a failed element is undone by riTry; a repaired delimiter with it)
+      let_('ok2', call('riTry', v('el'), v('d'), fls, tru), 'bool'),
       if_(or(not(v('ok2')), and(v('rp'), bin('le', call('enPos'), v('pd')))), [
-        if_(v('rp'), [run('enReset', v('km'))], [run('enReset', v('k2'))]),
+        if_(v('rp'), [run('enReset', v('km'))]),
         run('enUnmark', v('km')), brk,
       ]),
       run('enUnmark', v('km')),
@@ -458,8 +467,7 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
       let_('adm', or(lt(v('f'), n(0)), call('riSig', v('f'))), 'bool'),
       if_(not(v('adm')), [run('riFail', call('enPos'))]),
       if_(v('adm'), [
-        ...probe('pr', attempt('ok', call('riList', atR(v('a'), 1), v('d')))),
-        if_(v('ok'), [ret(tru)]),
+        if_(call('riTry', atR(v('a'), 1), v('d'), tru, tru), [ret(tru)]),
         if_(eq(S1, n(1)), [brk]),
       ]),
       inc('i'),
@@ -476,8 +484,7 @@ const riStep = method('riStep', [['s', 'int'], ['d', 'int']], ['bool'], [
         let_('a2', add(add(v('s'), n(3)), add(v('i'), v('i')))),
         let_('f2', atR(v('a2'), 0)),
         if_(and(ge(v('f2'), n(0)), not(call('riSig', v('f2')))), [
-          ...attempt('o2', call('riList', atR(v('a2'), 1), v('d'))),
-          if_(v('o2'), [ret(tru)]),
+          if_(call('riTry', atR(v('a2'), 1), v('d'), tru, fls), [ret(tru)]),
         ]),
         inc('i'),
       ]),
@@ -555,6 +562,8 @@ const nudCand = (ok: Expr, form: Expr, tail: Expr, capped: Expr, fromTail?: Expr
 // cappedSeq: the grammar has a capped prefix operator (cappedPrefix), lowered to a sequence arm with a
 // cap: each REC_N_SEQ entry then carries one more cell, the cap (-1: none). Absent, the code and the
 // tables are as before.
+// The engine's capped flag, form and tail (ST_CAPPED, ST_FORM, ST_TAIL) as f0, f1, f2.
+const ST_LETS = [let_('f0', call('enSt', n(ST_CAPPED))), let_('f1', call('enSt', n(ST_FORM))), let_('f2', call('enSt', n(ST_TAIL)))];
 const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec', 'int'], ['minBp', 'int'], ['d', 'int']], ['bool', 'int'], [
   run('enSetSt', n(ST_CAPPED), n(0)),
   let_('kid', call('enPeekKid')),
@@ -586,7 +595,7 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
           let_('ok', operand(at(v('p'), 1)), 'bool'),
           // An operand that is not the target the operator requires fails the whole Pratt call.
           if_(and(v('ok'), isT(v('p'), 2), ne(call('enSt', n(ST_FORM)), n(0))), [
-            run('enReset', v('k')), run('enUnmark', v('k')), run('enSetSt', n(ST_CAPPED), n(0)), ret(fls, n(0)),
+            undo('k'), run('enSetSt', n(ST_CAPPED), n(0)), ret(fls, n(0)),
           ]),
           let_('pf', at(v('p'), 3)),
           run('riCand', v('r'), v('sb'), v('save'), v('c'), v('k'), v('ok'), v('pf'), n(1), n(0), v('best')),
@@ -627,18 +636,14 @@ const riNudOf = (cappedSeq: boolean): Fn => method('riNud', [['r', 'int'], ['rec
       ]),
       if_(v('oke'), [
         run('enUnmark', v('ke')),
-        { k: 'setField', name: 'best', f: 'pos', e: call('enPos') },
-        { k: 'setField', name: 'best', f: 'off', e: v('eo') },
-        { k: 'setField', name: 'best', f: 'won', e: n(1) },
-        { k: 'setField', name: 'best', f: 'form', e: call('enSt', n(ST_FORM)) },
-        { k: 'setField', name: 'best', f: 'tail', e: call('enSt', n(ST_TAIL)) },
-        { k: 'setField', name: 'best', f: 'capped', e: call('enSt', n(ST_CAPPED)) },
-      ], [run('enReset', v('ke')), run('enUnmark', v('ke'))]),
+        ...ST_LETS,
+        run('riBestSet', call('enPos'), v('eo'), v('f1'), v('f2'), v('f0'), v('best')),
+      ], [undo('ke')]),
     ]),
     if_(eq(fld(v('best'), 'won'), n(0)), [
       run('riRepNode', T(TR(1)), n(DK_MISS_RULE), v('r')),
-      { k: 'setField', name: 'best', f: 'off', e: call('enFinOff') },
-      { k: 'setField', name: 'best', f: 'won', e: n(1) },
+      let_('mo', call('enFinOff')),
+      run('riBestSet', fld(v('best'), 'pos'), v('mo'), n(0), n(0), n(0), v('best')),
     ]),
   ]),
   // A sub-parse may leave the capped flag set: only a capped arm that won makes this node capped.
@@ -693,7 +698,7 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
           run('enUnmark', v('k')),
           ...ledWon,
         ], [
-          run('enReset', v('k')), run('enUnmark', v('k')),
+          undo('k'),
           ...(rebind ? [if_(ge(at(v('x'), 9), n(0)), [
             if_(call('riRbScan', v('x'), at(v('x'), 9), v('d')), ledWon),
           ])] : []),
@@ -721,7 +726,7 @@ const riBpOf = (rebind: boolean): Fn => method('riBpIn', [['r', 'int'], ['rec', 
       // (a mark, not a cut: an operand that fails may have recorded repairs, which go with it)
       let_('kb', call('enMark')),
       run('enLeafOpN'),
-      if_(not(operand(at(v('b'), 2))), [run('enReset', v('kb')), run('enUnmark', v('kb')), brk]),
+      if_(not(operand(at(v('b'), 2))), [undo('kb'), brk]),
       run('enUnmark', v('kb')),
       ...finLed(n(1)),
       // A capped right operand caps this node: it returns at once, still capped (PrattLowering.binary).
@@ -815,7 +820,7 @@ const riMiss = method('riMiss', [['op', 'int'], ['x', 'int']], ['bool'], [
     run('enLeafKid'),
     run('riErrNode', v('c'), v('p')),
     if_(call('riMatch', v('op'), v('x')), [run('enUnmark', v('k')), ret(tru)]),
-    run('enReset', v('k')), run('enUnmark', v('k')),
+    undo('k'),
   ]),
   let_('kind', n(DK_MISS_LIT)),
   if_(eq(v('op'), n(REC_S_TOK)), [set('kind', n(DK_MISS_TOK))]),
@@ -838,7 +843,7 @@ const riNat = method('riNat', [['r', 'int'], ['bp', 'int']], ['bool'], [
   let_('x', call('enLookEnd')),
   if_(gt(v('lk'), v('x')), [run('enLookSet', v('lk'))], [run('enLookSet', v('x'))]),
   if_(and(v('ok'), not(call('riBarIn', v('start'), add(v('x'), n(2))))), [run('enUnmark', v('k')), ret(tru)]),
-  run('enReset', v('k')), run('enUnmark', v('k')),
+  undo('k'),
   ...ST_ALL.map((st) => run('enSetSt', n(st), v(`st${st}`))),
   ret(fls),
 ]);
@@ -885,7 +890,7 @@ const riAttempts = method('riAttempts', [['el', 'int'], ['upto', 'int']], ['bool
     if_(gt(sub(rm(RM_ATT), v('a0')), rm(RM_AMAX)), [run('enRmSet', n(RM_AMAX), sub(rm(RM_ATT), v('a0')))]),
     let_('k', call('enMark')),
     if_(call('riUnit', v('el'), v('upto')), [run('enUnmark', v('k')), ret(tru)]),
-    run('enReset', v('k')), run('enUnmark', v('k')),
+    undo('k'),
     let_('f', rm(RM_FAIL)),
     let_('nb', rm(RM_NB)),
     if_(or(lt(v('f'), n(0)), ge(v('nb'), n(RM_MAX_BARS))), [brk]),
@@ -910,7 +915,7 @@ const riSkip = method('riSkip', [['el', 'int'], ['sync', 'int']], [], [
       let_('k', call('enMark')),
       let_('ok', call('riStep', v('el'), n(0)), 'bool'),
       let_('p2', call('enPos')),
-      run('enReset', v('k')), run('enUnmark', v('k')),
+      undo('k'),
       if_(and(v('ok'), gt(v('p2'), v('p1'))), [brk]),
     ]),
     run('enLeafKid'),
@@ -990,7 +995,7 @@ const riRbStep = method('riRbStep', [['x', 'int'], ['k', 'int'], ['d', 'int']], 
 // `rebind`: the grammar has a re-bind (the interpreter's then calls the engine's rbBracket and
 // marks, printed with the native forms).
 export function recoveryFamilyFns(rebind: boolean, ids?: LexIdPlan, cappedSeq = false, labels: [number, string][] = []): Fn[] {
-  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBp, riBpOf(rebind),
+  return [rejectDiag, repairDiag, diagMessageOf(labels), diagRelated, riRef, riSig, riIn, riGuard, riGuardIn, riRule, riUndo, riBestSet, riTry, riCand, riRd, riRdIn, riList, riStep, riOperand, riOp, riNudOf(cappedSeq), riBp, riBpOf(rebind),
     riRmDrop, riBarIn, riFail, riMatch, riRep, riNear, riErrNode, riRepNode, riMiss, riNat, riUnit, riAttempts, riSkip, riTotal, ...ENGINE_EXTERNS, ...TEXT_EXTERNS,
     ...(rebind ? [riRbStep, RI_RB_SCAN, rbBracketFn(ids!), ...REBIND_EXTERNS, ...RB_EXTERNS_INTERP] : [])];
 }
