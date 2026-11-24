@@ -3242,6 +3242,9 @@ const tsBlock = (lines: string[]): string[] => lines.map((l) => TS_IND + l);
 const SHAPE_SLOT_TS: Record<string, (a: string[]) => string> = {
   slotVal: ([i]) => `_hs[${i}]`, slotTag: ([i]) => `_tg[${i}]!`, slotTop: () => '_n',
   slotOff: ([i]) => `_sp[(${i}) * _SW]!`, slotEnd: ([i]) => `_sp[(${i}) * _SW + 1]!`, srcText: ([a, b]) => `_src.slice(${a}, ${b})`,
+  textSpan: ([a, b]) => `_src.slice(${a}, ${b})`,
+  // An IdentifierName with no escape is its text (the cook's own check is the slow path's).
+  cookIdentSpan: ([a, b]) => `(_esc.length === 0 || !_esc.includes(${a}) ? _src.slice(${a}, ${b}) : cook_identifierName(_src.slice(${a}, ${b})))`,
   // The one-slot check (its operands are an index expression and locals: evaluated more than once).
   // A reader-applied top's read under the attribute = true (its operands are an index expression
   // and an int: evaluated more than once).
@@ -3572,6 +3575,7 @@ export function parse(src: string): ShapeValue | null {
   _src = src;
   _iv = _IV0.slice();
   toks = lex(src);
+  _esc = escScan(src, toks, ${J(SHAPE.identCookTokens.map((t) => { const k = ids.kids.indexOf(t); if (k < 0) throw new Error(`tsTarget: the cooked token ${t} has no kind id`); return k; }))});
   const root = runW(_shapeBuilder);
   if (root instanceof _Missing) throw new ShapeMissing(root.where, root.why);
   return root;
@@ -3988,6 +3992,21 @@ function slotFindLast(lo: number, hi: number, t0: number, t1: number): number { 
 function slotAt(i: number, lo: number, hi: number, t0: number, t1: number): number { if (i < lo || i >= hi) return -1; const t = _tg[i]!; return t >= t0 && t <= t1 ? i : -1; }
 function namedEnd(lo: number, hi: number): number { for (let i = hi - 1; i >= lo; i--) { const t = _tg[i]!; if (t >= 0 && (t & 1) === 0) return _sp[i * _SW + 1]!; } return -1; }
 function srcText(a: number, b: number): string { return _src.slice(a, b); }
+// The offsets of the tokens of the kinds cookIdentSpan cooks with a backslash in this source
+// (escScan, per parse), ascending: almost always none.
+let _esc: number[] = [];
+// The tokens of the kinds ks that contain a backslash: each backslash of the source is looked up
+// in the token table (sorted by offset); a token's other backslashes are skipped.
+function escScan(src: string, ts: Tok[], ks: number[]): number[] {
+  const out: number[] = [];
+  if (ks.length === 0) return out;
+  for (let p = src.indexOf('\\\\'); p >= 0;) {
+    let lo = 0, hi = ts.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (ts[m]!.end <= p) lo = m + 1; else hi = m; }
+    if (lo < ts.length && ts[lo]!.off <= p) { if (ks.includes(ts[lo]!.kid)) out.push(ts[lo]!.off); p = src.indexOf('\\\\', ts[lo]!.end); } else p = src.indexOf('\\\\', p + 1);
+  }
+  return out;
+}
 const _isNode = (x: any): boolean => x !== null && typeof x === 'object' && !Array.isArray(x) && ${J(K.kind)} in x;
 function valStart(x: any, dflt: number): number { return _isNode(x) ? x[${J(K.start)}] : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[0][${J(K.start)}] : dflt; }
 function valEnd(x: any, dflt: number): number { return _isNode(x) ? x[${J(K.end)}] : Array.isArray(x) && _isNode(x[0]) && _isNode(x[x.length - 1]) ? x[x.length - 1][${J(K.end)}] : dflt; }
