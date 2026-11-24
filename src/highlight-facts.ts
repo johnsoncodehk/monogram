@@ -2026,12 +2026,22 @@ export function keywordFollowers(grammar: CstGrammar): Map<string, { literals: S
       case 'sep': firstTokens(e.element, out, seen); break;
     }
   };
+  // A word right after a member-access text (`import.source`, `new.target`) is a name there (the
+  // member rule reads it), not the keyword: such an occurrence says nothing about what follows
+  // the keyword.
+  const member = new Set(highlightFacts(grammar).memberAccessTexts);
+  const preds: number[][] = g.node.map(() => []);
+  g.follow.forEach((ns, q) => { for (const n of ns) preds[n].push(q); });
+  const atStart = new Set(g.first.flat());
+  const afterMember = (p: number) => !atStart.has(p) && preds[p].length > 0
+    && preds[p].every(q => { const x = g.node[q]; return x.type === 'literal' && member.has(x.value); });
   const out = new Map<string, { literals: Set<string>; tokens: Set<string> } | null>();
   for (let p = 0; p < g.node.length; p++) {
     const e = g.node[p];
     if (e.type !== 'literal' || !isKeywordLiteral(e.value)) continue;
     const k = e.value;
     if (out.get(k) === null) continue;
+    if (afterMember(p)) { if (!out.has(k)) out.set(k, { literals: new Set(), tokens: new Set() }); continue; }
     if (precOps.has(k)) { out.set(k, null); continue; }
     const f = out.get(k) ?? { literals: new Set<string>(), tokens: new Set<string>() };
     let open = false;

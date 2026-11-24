@@ -2165,6 +2165,14 @@
           "name": "variable.other.readwrite.js.jsx"
         },
         {
+          "match": "\\b(target|meta|from|as)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
+          "name": "entity.name.function.js.jsx"
+        },
+        {
+          "match": "\\b(target|meta|from|as)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
+          "name": "variable.other.readwrite.js.jsx"
+        },
+        {
           "match": "\\b(class|try|finally)\\b(?!\\s*(?:\\{))(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
           "name": "entity.name.function.js.jsx"
         },
@@ -2258,14 +2266,6 @@
         },
         {
           "match": "\\b(export)\\b(?!\\s*(?:\\.\\.\\.|\\(|\\*|;|<|\\[|\\{))(?=\\s*[!%&()*+,\\-:;<=>?\\[\\]\\^{|}~])",
-          "name": "variable.other.readwrite.js.jsx"
-        },
-        {
-          "match": "\\b(from|as)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])(?=\\s*\\()",
-          "name": "entity.name.function.js.jsx"
-        },
-        {
-          "match": "\\b(from|as)\\b(?=\\s*[!%&()*+,\\-./:;<=>?\\[\\]\\^{|}~])",
           "name": "variable.other.readwrite.js.jsx"
         },
         {
