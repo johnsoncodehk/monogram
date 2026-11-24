@@ -3108,6 +3108,9 @@ export const reservedRuleIds = (ar: ArenaIdPlan): [number, number] => [ar.ruleNa
 // The id plan of a module emitted with the option: the reserved names after the grammar's.
 export const withReservedRules = (ar: ArenaIdPlan): ArenaIdPlan => ({ ...ar, ruleNames: [...ar.ruleNames, ...RESERVED_RULES] });
 export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): RecoveryTables {
+  // Declared target contexts are not in the recovery encoding yet (the interpreter would ignore
+  // their checks and accept what the parser rejects): refused by name.
+  if (ir.targets) throw new Error(`portable recovery: grammar ${ir.grammarName} declares target contexts (CstGrammar.targets), which total parsing does not encode yet`);
   const data: number[] = [];
   const cappedSeq = hasCappedSeq(ir);   // REC_N_SEQ entries carry their cap (recovery-family riNudOf)
   const rid = (name: string) => ruleIdOf(ar, name);
@@ -3163,7 +3166,7 @@ export function recoveryTables(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan): R
       case 'aheadCtx': return emit([REC_S_AHEADCTX, s.set, s.is ? 1 : 0]);
       case 'seq': { const b = list(s.steps); return emit([REC_S_SEQ, ref(b)]); }
       case 'sameLine': return emit([REC_S_SAMELINE]);
-      case 'target': throw new Error('portable recovery: declared target contexts are not encoded yet');
+      case 'target': throw new Error('portable recovery: unreachable (recoveryTables refuses target contexts)');
       case 'suppress': { const b = list(s.steps); return emit([REC_S_SUPPRESS, s.set, ref(b)]); }
       case 'ctx': { const b = list(s.steps); return emit([REC_S_CTX, s.ctx, ref(b)]); }
     }
