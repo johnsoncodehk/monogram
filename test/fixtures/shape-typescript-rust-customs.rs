@@ -3018,11 +3018,18 @@ fn eval_spec(v: VSpec, pool: &mut Vec<(&'static str, u32, u32, String)>, off: u3
             let text = &src[off as usize..end as usize];
             if text.contains('(') {
                 let toks = lex(&src[off as usize..end as usize]);
+                // the callee: a Decorator token's name, or the token after a lone `@`
                 let mut callee = "null".to_string();
-                for t in &toks {
+                for (i, t) in toks.iter().enumerate() {
                     let tt = &src[off as usize + t.off as usize..off as usize + t.end as usize];
-                    if tt.starts_with('@') {
+                    if tt.len() > 1 && tt.starts_with('@') {
                         callee = format!("{{\"type\":\"Identifier\",\"name\":{}}}", leaf_json(&tt[1..]));
+                        break;
+                    }
+                    if tt == "@" {
+                        if let Some(n) = toks.get(i + 1) {
+                            callee = format!("{{\"type\":\"Identifier\",\"name\":{}}}", leaf_json(&src[off as usize + n.off as usize..off as usize + n.end as usize]));
+                        }
                         break;
                     }
                 }
@@ -3047,8 +3054,7 @@ fn eval_spec(v: VSpec, pool: &mut Vec<(&'static str, u32, u32, String)>, off: u3
                 let mut name = "null".to_string();
                 for t in toks {
                     let tt = &src[off as usize + t.off as usize..off as usize + t.end as usize];
-                    let s = tt.strip_prefix('@').unwrap_or(tt);
-                    name = leaf_json(s);
+                    name = leaf_json(tt.strip_prefix('@').unwrap_or(tt));
                 }
                 format!("{{\"type\":\"Identifier\",\"name\":{}}}", name)
             }

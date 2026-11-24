@@ -60,7 +60,8 @@ module.exports = grammar({
     $._starts_8,
     $._starts_9,
     $._starts_10,
-    $._starts_11
+    $._starts_11,
+    $._starts_12
   ],
 
   conflicts: $ => [
@@ -133,7 +134,7 @@ module.exports = grammar({
   rules: {
     program: $ => repeat(choice($.decl, $.stmt)),
 
-    decorator_expr: $ => seq($.decorator, optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"))),
+    decorator_expr: $ => choice(seq("@", "(", $.expr, repeat(seq(",", $.expr)), ")"), seq(choice($.decorator, seq("@", reserved("reserved_1", $.ident))), repeat(seq(".", choice(reserved("unreserved", $.ident), $.private_field))), optional(seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")")))),
 
     expr: $ => choice(
       prec.right(2, seq($.expr, field('operator', choice("=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "??=", "||=", "&&=")), $.expr)),
@@ -206,9 +207,9 @@ module.exports = grammar({
 
     class_heritage: $ => choice($.new_target, seq("class", optional(field('name', reserved("reserved_1", $.ident))), optional(seq("extends", $.class_heritage)), "{", repeat($.class_member), "}"), seq($.class_heritage, ".", choice(reserved("unreserved", $.ident), $.private_field)), seq($.class_heritage, "?.", choice(reserved("unreserved", $.ident), $.private_field, seq("(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq("[", $.expr, "]"), $.template)), seq($.class_heritage, "[", $.expr, repeat(seq(",", $.expr)), "]"), seq($.class_heritage, "(", optional(seq($.expr, repeat(seq(",", $.expr)), optional(","))), ")"), seq($.class_heritage, $.template)),
 
-    stmt: $ => choice(seq(optional($._starts_2), $.block), seq(choice(seq(optional($._starts_7), "let"), "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($._same_line_5, $.expr, repeat(seq(",", $.expr)))), choice(";", $._line_end_1)), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1)), seq("break", optional(seq($._same_line_6, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("continue", optional(seq($._same_line_6, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(seq(optional(choice($._starts_3, $._starts_4, $._starts_6, $._starts_7)), choice(reserved("reserved_1", $.ident), $._names_1)), ":", $.stmt), ";", seq("debugger", choice(";", $._line_end_1)), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional(seq("await", $._same_line_7)), "using", $._same_line_8, $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(optional(choice($._starts_3, $._starts_4, $._starts_5, $._starts_6)), $.decl), seq($.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1))),
+    stmt: $ => choice(seq(optional($._starts_2), $.block), seq(choice(seq(optional($._starts_8), "let"), "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq("if", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt, optional(seq("else", $.stmt))), seq("for", choice(seq("(", $.for_head, ")"), seq("await", "(", $.for_await_head, ")")), $.stmt), seq("while", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq("do", $.stmt, "while", "(", $.expr, repeat(seq(",", $.expr)), ")", optional(";")), seq("switch", "(", $.expr, repeat(seq(",", $.expr)), ")", "{", repeat($.switch_case), "}"), seq("return", optional(seq($._same_line_5, $.expr, repeat(seq(",", $.expr)))), choice(";", $._line_end_1)), seq("throw", $.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1)), seq("break", optional(seq($._same_line_6, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("continue", optional(seq($._same_line_6, reserved("reserved_1", $.ident))), choice(";", $._line_end_1)), seq("try", $.block, optional(seq("catch", optional(seq("(", $.catch_parameter, ")")), $.block)), optional(seq("finally", $.block))), seq(seq(optional(choice($._starts_3, $._starts_4, $._starts_7, $._starts_8)), choice(reserved("reserved_1", $.ident), $._names_1)), ":", $.stmt), ";", seq("debugger", choice(";", $._line_end_1)), seq("with", "(", $.expr, repeat(seq(",", $.expr)), ")", $.stmt), seq(optional(seq("await", $._same_line_7)), "using", $._same_line_8, $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(optional(choice($._starts_3, $._starts_4, $._starts_5, $._starts_6, $._starts_7)), $.decl), seq($.expr, repeat(seq(",", $.expr)), choice(";", $._line_end_1))),
 
-    _stmt_first_1: $ => choice(seq(choice(seq(optional($._starts_7), "let"), "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(alias($._ident_names_1, $.ident), ":", $.stmt)),
+    _stmt_first_1: $ => choice(seq(choice(seq(optional($._starts_8), "let"), "const", "var"), $.binding, repeat(seq(",", $.binding)), choice(";", $._line_end_1)), seq(alias($._ident_names_1, $.ident), ":", $.stmt)),
 
     _stmt_first_2: $ => alias($._decl_first_2, $.decl),
 
@@ -230,9 +231,9 @@ module.exports = grammar({
 
     catch_parameter: $ => choice(reserved("reserved_1", $.ident), $.binding_pattern),
 
-    for_head: $ => choice(choice(seq(choice(seq(optional(choice($._starts_8, $._starts_9)), "let"), "const", "var"), $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("in", $.expr, repeat(seq(",", $.expr))), seq("of", $.expr))), seq(choice("using", seq("await", $._same_line_7, "using")), $._same_line_8, $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("of", $.expr)))), seq(optional(choice($._starts_8, $._starts_10)), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))))), seq(seq(optional(choice($._starts_8, $._starts_10)), $.expr), "in", $.expr, repeat(seq(",", $.expr))), seq($.expr, "of", $.expr)),
+    for_head: $ => choice(choice(seq(choice(seq(optional(choice($._starts_9, $._starts_10)), "let"), "const", "var"), $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("in", $.expr, repeat(seq(",", $.expr))), seq("of", $.expr))), seq(choice("using", seq("await", $._same_line_7, "using")), $._same_line_8, $.for_binding, choice(seq(repeat(seq(",", $.for_binding)), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr))))), seq("of", $.expr)))), seq(optional(choice($._starts_9, $._starts_11)), seq(optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))), ";", optional(seq($.expr, repeat(seq(",", $.expr)))))), seq(seq(optional(choice($._starts_9, $._starts_11)), $.expr), "in", $.expr, repeat(seq(",", $.expr))), seq($.expr, "of", $.expr)),
 
-    for_await_head: $ => choice(choice(seq(choice(seq(optional($._starts_11), "let"), "const", "var"), $.for_binding, choice(seq("of", $.expr))), seq(choice("using", seq("await", $._same_line_7, "using")), $._same_line_8, $.for_binding, choice(seq("of", $.expr)))), seq($.expr, "of", $.expr)),
+    for_await_head: $ => choice(choice(seq(choice(seq(optional($._starts_12), "let"), "const", "var"), $.for_binding, choice(seq("of", $.expr))), seq(choice("using", seq("await", $._same_line_7, "using")), $._same_line_8, $.for_binding, choice(seq("of", $.expr)))), seq($.expr, "of", $.expr)),
 
     switch_case: $ => choice(seq("case", $.expr, repeat(seq(",", $.expr)), ":"), seq("default", ":"), $.stmt),
 
@@ -278,7 +279,7 @@ module.exports = grammar({
 
     string: $ => token(/"(?:[^"\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|\r|[^ux\r]))*"|'(?:[^'\\\n\r]|\\(?:u\{0*(?:[0-9A-Fa-f]{1,5}|10[0-9A-Fa-f]{4})\}|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2}|\r\n|\r|[^ux\r]))*'/),
 
-    decorator: $ => token(/@(?:(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\}|\.#(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})|\.)*)?/),
+    decorator: $ => token(/@(?:[a-zA-Z_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})(?:[a-zA-Z0-9_$]|\\u[0-9A-Fa-f]{4}|\\u\{[0-9A-Fa-f]+\})*/),
 
     private_field: $ => token(new RustRegex("(?:#(?:[a-zA-Z_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})(?:[a-zA-Z0-9_$]|\\\\u[0-9A-Fa-f]{4}|\\\\u\\{[0-9A-Fa-f]+\\})*)(?:" + UNI_IDENT.continueBeyondAscii + UNI_IDENT.continue + "*)?|#" + UNI_IDENT.startBeyondAscii + UNI_IDENT.continue + '*')),
 
