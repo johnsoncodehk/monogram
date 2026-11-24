@@ -147,7 +147,7 @@ export function generateCstMatch(grammar: Grammar): string {
   // (inside opt → 'opt', inside many/sep → 'many') applied to captures.
   function pushSteps(steps: Step[], it: RuleExpr, captures: Capture[], card: Card): void {
     switch (it.type) {
-      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'target':
+      case 'not': case 'sameLine': case 'noCommentBefore': case 'noMultilineFlowBefore': case 'notLeftLeaf': case 'assignTarget':
         return;   // zero-width: no children
       case 'literal':
         steps.push({ kind: 'lit', text: it.value, tt: ttOf(it.value), node: it });

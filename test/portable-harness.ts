@@ -533,7 +533,7 @@ export async function prepareAll(cases: Case[] = selectedCases()): Promise<Prepa
     const gfile = relative(ROOT_DIR, fileURLToPath(new URL(c.path, import.meta.url)));
     const emit = (t: Target, opts: EmitOptions = {}) => cachedEmit(gfile, t.name, opts, () => emitParser(grammar, t, opts), c.parts ?? null);
     // A grammar that declares target contexts has no total parsing yet (recoveryTables refuses it).
-    const rec = grammar.targets ? {} : RECOVERY;
+    const rec = grammar.assignTargets ? {} : RECOVERY;
     const tsLibSrc = emit(tsTarget, rec);
     const emitted: Prepared['emitted'] = [{ label: 'typescript', def: () => emit(tsTarget), rec: tsLibSrc }];
     const tsFile = `${dir}/p.ts`;

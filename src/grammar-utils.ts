@@ -11,7 +11,7 @@ import type { Grammar, RuleExpr } from './types.ts';
 /** The ZERO-WIDTH MARKERS of the grammar language: assertions that consume nothing and build no
  *  child (a negative lookahead, the line and comment conditions, the left-leaf gate, a declared
  *  target check). Every reader that skips or names them asks this one set. */
-export const ZERO_WIDTH_MARKERS: ReadonlySet<RuleExpr['type']> = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'target']);
+export const ZERO_WIDTH_MARKERS: ReadonlySet<RuleExpr['type']> = new Set<RuleExpr['type']>(['not', 'sameLine', 'noCommentBefore', 'noMultilineFlowBefore', 'notLeftLeaf', 'assignTarget']);
 export const isZeroWidthMarker = (t: RuleExpr['type']): boolean => ZERO_WIDTH_MARKERS.has(t);
 
 /** The grammar's context parameters (docs/GRAMMAR.md "Contexts: `when`"), one bit each of the

@@ -65,7 +65,7 @@ function slotsOfStep(s: Step, leaves: Record<string, TokenLeafPolicy>): Slot[] {
     case 'aheadCtx':
     case 'sameLine':
     case 'when':
-    case 'target':
+    case 'assignTarget':
       return [{ k: 'zw' }];
   }
 }

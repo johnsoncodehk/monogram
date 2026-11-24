@@ -26,7 +26,7 @@
 
 import {
   token, rule, defineGrammar,
-  left, right, none, noUnaryLhs, lhsTarget, prefixTarget, postfixTarget,
+  left, right, none, noUnaryLhs, lhsAssignTarget, prefixAssignTarget, postfixAssignTarget,
   op, prefix, postfix, sameLine,
   sep, opt, many, many1, alt, exclude, not, reservableNot, capExpr, treeSitterRelax, arm, field,
   awaitCtx, yieldCtx, asyncGenCtx, resetCtx, when,
@@ -386,7 +386,7 @@ const ecmaPrecWith = (awaitOp: string | ReturnType<typeof when>) => [
   // `x.y = 1`, `(x++) = 1` (a parenthesized cover) are fine. The logical assignments are three more
   // AssignmentExpression arms (13.15 `LeftHandSideExpression &&= AssignmentExpression`, `||=`, `??=`):
   // one level, so each operator's right operand is a full AssignmentExpression (`c ||= a = b`).
-  right(lhsTarget('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&=')),
+  right(lhsAssignTarget('=', '+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '??=', '||=', '&&=')),
   left('??'),
   left('||'),
   left('&&'),
@@ -404,13 +404,13 @@ const ecmaPrecWith = (awaitOp: string | ReturnType<typeof when>) => [
   // (`UpdateExpression : ++ UnaryExpression`) whose AssignmentTargetType must be simple — an
   // early error, like `a + b = c`, enforced by the same target check: `++-x`, `++x++`,
   // `++ ++x` reject (tsc reads the operand as a LeftHandSideExpression).
-  right(prefixTarget('++', '--')),
+  right(prefixAssignTarget('++', '--')),
   // postfix `++`/`--` operand IS a LeftHandSideExpression in the grammar
   // (`UpdateExpression : LeftHandSideExpression [no LT] ++`), so `++x++`, `x++ ++` are genuine
   // PRODUCTION-violations (operand `++x`/`x++` is an UpdateExpression, not a LHS) — no parse
   // tree exists, so the CST producer correctly rejects them. (Asymmetric with the prefix above
   // by the grammar's own slot types: prefix operand = UnaryExpression, postfix operand = LHS.)
-  left(postfixTarget('++', '--')),
+  left(postfixAssignTarget('++', '--')),
 ];
 export const ecmaPrec = ecmaPrecWith('await');
 // `await` is the operator (AwaitExpression) only where [+Await] holds; elsewhere it is an

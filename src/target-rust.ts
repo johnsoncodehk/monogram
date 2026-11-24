@@ -11,8 +11,8 @@
 // parser allocates ~nothing per parse. Rule fns return `i32` (-1 = fail); sub-sequence
 // combinators take non-capturing `fn(&mut Parser) -> bool` pointers. Arena lives in
 // `Parser.b` (CstBuilder by default); rule fns return `Option<Spanned<B::H>>`.
-import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type TargetsIR } from './parser-ir.ts';
-import type { ArmForm } from './declared-targets.ts';
+import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type RuleIR, type NudRef, type Step, type Alt, type Bracket, type LexTok, type TplCfg, type NewlineCfg, type FirstSig, type Guard, type LeadTest, type Dispatch, type LexFirstBytes, type LexIdPlan, type ArenaIdPlan, type ReusePlan, type ReusePlanA, type ReusePlanB, type AssignTargetsIR } from './parser-ir.ts';
+import type { ArmForm } from './assign-targets.ts';
 import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, elementTokens, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, buildLidTables, lidWordByte, buildArenaIdPlan, withReservedRules, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, ttIdOf, ruleIdOf, TT_SKIP_PUNCT, isFirstGuardable, groupByPreserveOrder, tokenSetBits, prattOpTables, prattOpRow, OP_ROW, binTestsLeft, binLeftOps, stepExpr as walkExpr, stepStmts as walkStmts, ruleShell, prattShell, entryShell, dispatchWalk, gtCompLit, compLeadLids, tplHoleRules, type PortableFacts, type StepLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from './parser-ir.ts';
 import type { Grammar } from './types.ts';
 import { defineParserTarget, type SharedAlgorithms } from './define-parser-target.ts';
@@ -1197,14 +1197,14 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
     rule: (name) => (r ? `${recv}.rec_${name}()` : `${recv}.call_rule(Parser::parse_${name})`),
     // Recognized, a Pratt rule runs its building form and its node is dropped (ParserIR.forms).
     ruleBp: (name, bp) => (r ? `${recv}.${name}_bp(${bp}).is_some()` : `${recv}.call_rule(|p| p.${name}_bp(${bp}))`),
-    // Declared target contexts (declared-targets.ts): computed only in the building form (a
+    // Declared target contexts (assign-targets.ts): computed only in the building form (a
     // recognized rd rule computes no form). A container arm's steps run in a fresh accumulator,
     // the enclosing one kept in a local of the frame (no stack: nothing allocated per parse).
     acc: (call, mask) => (r ? call : `(${call} && ${recv}.acc_k(${mask}))`),
     accSep: () => (r ? 'true' : `${recv}.acc_s()`),
     // A demand twin's Pratt child (DemandIR): the position before the call, then the call.
     dfix: (call) => (r ? call : `{ let _m = ${recv}.pos as isize; let _ok = ${call}; ${recv}.dfix(_m, _ok) }`),
-    target: (mask) => { if (r) throw new Error('rust: a target() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
+    assignTarget: (mask) => { if (r) throw new Error('rust: an assignTarget() step in a recognized body'); return `(${recv}.form & ${mask}) != 0`; },
     accRun: (cond, af) => (r ? cond : `{ let _a = ${recv}.acc; ${recv}.acc = ${af.init}; let _r = (${cond}); if _r { ${recv}.acc_out(${af.low}, ${af.last}); } ${recv}.acc = _a; _r }`),
     armForm: armFormRs,
     // A body guard (parser-ir.ts annotateSteps): star tests it before each attempt inside an
@@ -1268,17 +1268,17 @@ function rsSteps(ids: LexIdPlan, recv: 'self' | 'p', r: boolean, guards = true):
   return L;
 }
 const stepCond = (s: Step, ids: LexIdPlan, _ar: ArenaIdPlan): string => walkExpr(s, rsSteps(ids, 'self', false));
-// An arm's form when it won (declared-targets.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
+// An arm's form when it won (assign-targets.ts ArmForm), over `self` (a rule's frame): a Pratt arm keeps its own low bits over a unit arm's.
 const armFormRs = (af: ArmForm, pratt: boolean): string => (af.k === 'const' ? `${af.v}` : af.k === 'acc' ? 'self.acc_f' : pratt ? '(self.form & !3)' : 'self.form');
 // The low bits of a form (FORM_LOW), in a grammar with target contexts; the form itself otherwise.
-const lowRs = (ir: { targets?: TargetsIR }, f: string): string => (ir.targets ? `(${f} & 3)` : f);
+const lowRs = (ir: { assignTargets?: AssignTargetsIR }, f: string): string => (ir.assignTargets ? `(${f} & 3)` : f);
 // Declared target contexts' state on the parser (as target-ts.ts targetRuntimeTs): the open
 // container's accumulator (an enclosing one's is a local of its arm: accRun), acc_f the form of the container arm that just matched.
 // With a demand context also the re-parse in progress (its start; -1 none), the re-parses and those above the bound (src/reparse-family.ts).
-const targetFieldsRs = (ir: ParserIR): string => (ir.targets ? `\n    acc: u8,\n    acc_f: u8,${ir.targets.demand ? '\n    rp_at: isize,\n    rp_n: usize,\n    rp_over: usize,' : ''}` : '');
-const targetInitRs = (ir: ParserIR): string => (ir.targets ? ` acc: 0, acc_f: 0,${ir.targets.demand ? ' rp_at: -1, rp_n: 0, rp_over: 0,' : ''}` : '');
+const targetFieldsRs = (ir: ParserIR): string => (ir.assignTargets ? `\n    acc: u8,\n    acc_f: u8,${ir.assignTargets.demand ? '\n    rp_at: isize,\n    rp_n: usize,\n    rp_over: usize,' : ''}` : '');
+const targetInitRs = (ir: ParserIR): string => (ir.assignTargets ? ` acc: 0, acc_f: 0,${ir.assignTargets.demand ? ' rp_at: -1, rp_n: 0, rp_over: 0,' : ''}` : '');
 function targetRuntimeRs(ir: ParserIR): string {
-  const t = ir.targets;
+  const t = ir.assignTargets;
   if (!t) return '';
   return `
     fn acc_out(&mut self, low: u8, last: u8) { let q = self.acc & ${t.passes}; self.acc_f = q | low | ((q << 1) & last); }
@@ -1494,7 +1494,7 @@ function rbSite(ids: LexIdPlan, steps: string[]): number {
 // the twins, dfix, twin_form, reparse_from (src/reparse-family.ts) and its externs, and per rule
 // the cold demand_<rule>.
 function demandFnsRs(ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan, shared: SharedAlgorithms): string {
-  const D = ir.targets?.demand;
+  const D = ir.assignTargets?.demand;
   if (!D) return '';
   const S = rsSteps(ids, 'self', false);
   const twinOf = (f: string) => `((${f} >> ${DEFER_SHIFT}) & 7) as isize - 1`;
@@ -1557,7 +1557,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   // table's power-of-two length (in range by construction: no bounds check).
   const row = prattOpRow(r, ids);
   const rowAt = (lid: string) => `Self::${r.name}_ROW[(${lid} as usize) & ${row.size - 1}]`;
-  // Each arm's form (declared-targets.ts; without target contexts every one but the prefix arm's is 0).
+  // Each arm's form (assign-targets.ts; without target contexts every one but the prefix arm's is 0).
   const fm = (i: number) => (r.nudForm ? armFormRs(r.nudForm[i]!, true) : `${nudLowForm(r, i)}`);
   const postTokForm = (k: number) => r.postfixTokForm?.[r.postfixToks.findIndex((tok) => kidOf(ids, tok) === k)] ?? 0;
   const lf = (f: string) => lowRs(ir, f);
@@ -1570,7 +1570,7 @@ function prattRule(r: PrattRule, ir: ParserIR, ids: LexIdPlan, ar: ArenaIdPlan):
   const keep = leftOps.filter((o) => o.acc);
   // A demand operator (DemandIR): its node is ASSIGNED, a left operand with a twin number goes to
   // the cold demand_<rule> (demandFnsRs); p0 is the left operand's mark.
-  const D = ir.targets?.demand, dem = demandLids(r, ids, D);
+  const D = ir.assignTargets?.demand, dem = demandLids(r, ids, D);
   const binF = r.binForm ? `${1 | r.binForm.leaf}${keep.length ? ` | (if tgt { match op_lid { ${keep.map((o) => `${o.lid} => form & ${o.acc}, `).join('')}_ => 0 } } else { 0 })` : ''}` : dem.length ? `(if tgt && (${dem.map((l) => `op_lid == ${l}`).join(' || ')}) { ${1 | D!.assigned} } else { 1 })` : '1';
   const tgtDem = dem.length ? `(${lf('form')} != 0 || (form & ${D!.defer}) != 0 && !self.demand_${r.name}(op_lid as isize, form as isize, p0, self.pos as isize))` : tgtFail;
   // A gated prefix operator (`await`, PrattRule.prefix's `when`) is one only where the context word
@@ -3151,7 +3151,7 @@ function rustShapeFirstOfSteps(steps: Step[]): FirstSig {
       case 'look':
       case 'ahead':
       case 'aheadCtx':
-      case 'target':
+      case 'assignTarget':
       case 'when':
       case 'sameLine': return 'nullable'; // zero-width: consumes nothing
       case 'opt': return walkSeq(s.steps) === 'unknown' ? 'unknown' : 'nullable';
@@ -3441,7 +3441,7 @@ function emitRustAstRdAltSteps(
       case 'look':
       case 'ahead':
       case 'aheadCtx':
-      case 'target':
+      case 'assignTarget':
       case 'when':
       case 'sameLine': return false;
     }
@@ -3461,7 +3461,7 @@ function emitRustAstRdAltSteps(
       case 'altlit': return true;
       case 'sameLine': return true;
       case 'when': return true;
-      case 'target': return true;
+      case 'assignTarget': return true;
       case 'ahead': return true;
       case 'aheadCtx': return true;
       case 'look': return true;
@@ -3520,7 +3520,7 @@ function emitRustAstRdAltSteps(
       }
       case 'seq':
         return emitSteps(s.steps, okVar);
-      case 'target': throw new Error('rust typed AST: declared target contexts not printed yet');
+      case 'assignTarget': throw new Error('rust typed AST: declared target contexts not printed yet');
       case 'sameLine':
         return `if ${okVar} { match self.toks.get(self.pos) { Some(t) if !t.nl => {} _ => { ${okVar} = false; } } }`;
       case 'when':
@@ -4237,7 +4237,7 @@ function emitRustPrattMethod(
             let _op = self.current_span();
             self.pos += 1;
             let _argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => v,
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             };
@@ -4254,7 +4254,7 @@ function emitRustPrattMethod(
             let _op = self.current_text();
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => v,
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             };
@@ -4266,7 +4266,7 @@ function emitRustPrattMethod(
             let save = self.pos;
             self.pos += 1;
             match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => { *pf = ${prefix.form}; *pt = true; return Some(v); }
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => { *pf = ${prefix.form}; *pt = true; return Some(v); }
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             }
@@ -4277,7 +4277,7 @@ function emitRustPrattMethod(
             let _op = self.current_span();
             self.pos += 1;
             let argument = match self.parse_ast_${rule.name}_bp(${prefix.rbp}) {
-                Some(v) if !${prefix.requireTarget} || self.form == 0 => v,
+                Some(v) if !${prefix.requireAssignTarget} || self.form == 0 => v,
                 Some(_) => { *hard = true; self.pos = save; return None; }
                 None => { self.pos = save; return None; }
             };
@@ -4443,7 +4443,7 @@ function emitRustPrattMethod(
   const binarySlot = slotOf(ps.binary as { kind: string } | undefined, rule.binary.length > 0);
   if (binarySlot && rule.binary.length) {
     const binaryArms = rule.binary.map((b) =>
-      `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}, ${b.requireTarget}, ${b.noUnaryLhs}),`,
+      `Some(${lidOf(ids, b.op)}) => (${b.lbp}, ${b.rbp}, ${b.requireAssignTarget}, ${b.noUnaryLhs}),`,
     ).join('\n                ');
     if (binarySlot.kind === 'node') {
       binaryBody = `{
@@ -4521,7 +4521,7 @@ function emitRustPrattMethod(
   const postfixSlot = slotOf(ps.postfix as { kind: string } | undefined, rule.postfix.length > 0);
   if (postfixSlot && rule.postfix.length) {
     const postArms = rule.postfix.map((p) =>
-      `Some(${lidOf(ids, p.op)}) => (${p.lbp}, ${p.requireTarget}),`,
+      `Some(${lidOf(ids, p.op)}) => (${p.lbp}, ${p.requireAssignTarget}),`,
     ).join('\n                    ');
     if (postfixSlot.kind === 'node') {
       postfixCode = `{

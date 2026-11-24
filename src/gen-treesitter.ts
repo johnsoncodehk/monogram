@@ -72,7 +72,7 @@ export const EXACT_ASSERTION_CLASSES: readonly AssertionClass[] = ['lowered', 'v
 export interface AssertionRecord {
   /** grammar rule whose tree holds the assertion */
   rule: string;
-  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf' | 'target';
+  kind: 'not' | 'sameLine' | 'noCommentBefore' | 'noMultilineFlowBefore' | 'notLeftLeaf' | 'assignTarget';
   cls: AssertionClass;
   /** the assertion, written compactly (`not("{" | Ident)`), cut at 160 characters */
   text: string;
@@ -806,7 +806,7 @@ function renderExpr(expr: RuleExpr, ctx: GrammarJsContext, wordGuard?: WordGuard
     case 'noCommentBefore':
     case 'noMultilineFlowBefore':
     case 'notLeftLeaf':
-    case 'target':
+    case 'assignTarget':
       // A zero-width assertion consumes nothing and a CFG has no lookahead, so it renders to a
       // no-op. Never silently: classifyAssertions recorded it with whether the drop is exact (the
       // `assertions` ledger of the output); one it did not reach is a generator defect.
@@ -1530,7 +1530,7 @@ function classifyAssertions(grammar: Grammar, tokenNames: Set<string>, sets: Ter
 
   const classify = (e: RuleExpr, P: Set<string>, next: RuleExpr | undefined): AssertionClass => {
     if (e.type === 'sameLine' || e.type === 'noCommentBefore' || e.type === 'noMultilineFlowBefore') return 'scanner';
-    if (e.type === 'notLeftLeaf' || e.type === 'target') return 'left-context';   // a predicate over the node to its left
+    if (e.type === 'notLeftLeaf' || e.type === 'assignTarget') return 'left-context';   // a predicate over the node to its left
     if (e.type !== 'not') throw new Error(`classifyAssertions: ${e.type} is not an assertion`);
     const body = treeSitterView(e.body);
     if (body.type === 'sameLine') return 'scanner';                      // not(sameLine): a line terminator here
