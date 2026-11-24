@@ -779,10 +779,11 @@ function elementFns(ir: ParserIR, e: ElementPlan, b: LexScan): Fn[] {
           if (!nx.length) return if_(lt('hit', I(0)), [set('hit', I(i))]);
           return if_(lt('hit', I(0)), [
             let_(pv, e0), let_(ok, I(1)),
-            ...nx.map((l) => if_(ne(ok, I(0)), [
+            // the position moves past each literal but the last (nothing reads it after that)
+            ...nx.map((l, k) => if_(ne(ok, I(0)), [
               { k: 'setCall', names: [pv, 'look'], call: { k: 'call', fn: EL_TRIVIA_FN, args: [x('s'), x(pv), x('look')] } } as Stmt,
               if_(gt(add(add(pv, litLen(l.lit)), I(1)), 'far'), [set('far', add(add(pv, litLen(l.lit)), I(1)))]),
-              if_(l.word ? or(not(hasAt(pv, l.lit)), idc(add(pv, litLen(l.lit)))) : not(hasAt(pv, l.lit)), [set(ok, I(0))], [set(pv, add(pv, litLen(l.lit)))]),
+              if_(l.word ? or(not(hasAt(pv, l.lit)), idc(add(pv, litLen(l.lit)))) : not(hasAt(pv, l.lit)), [set(ok, I(0))], k < nx.length - 1 ? [set(pv, add(pv, litLen(l.lit)))] : undefined),
             ])),
             if_(ne(ok, I(0)), [set('hit', I(i))]),
           ]);

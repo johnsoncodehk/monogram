@@ -5650,7 +5650,10 @@ fn ${findAnyName(stops)}(b: &[u8], mut i: usize) -> usize {
   },
   stmt: {
     comment: (text) => [`// ${text}`],
-    let: (cx, s) => [`let ${s.mutable ? 'mut ' : ''}${s.id}${s.infer ? '' : `: ${cx.type(s.ty, 'local', s.owned)}`} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
+    // a local whose initial value is never read is declared unassigned (rustc checks every read follows an assignment)
+    let: (cx, s) => [s.deadInit
+      ? `let ${s.twice ? 'mut ' : ''}${s.id}: ${cx.type(s.ty, 'local', s.owned)};`
+      : `let ${s.mutable ? 'mut ' : ''}${s.id}${s.infer ? '' : `: ${cx.type(s.ty, 'local', s.owned)}`} = ${isNum(s.ty) ? cx.coerce(s.r, cx.nat(s.ty)) : s.r.c};`],
     set: (id, val) => [`${id} = ${val};`],
     if: (s) => {
       const head = `if ${s.c}`;

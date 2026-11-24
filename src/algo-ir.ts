@@ -335,7 +335,10 @@ export interface Lowering {
   stmt: {
     comment(text: string): Lines;
     // `infer`: the local's type may be left to the target's inference (`inferLocals`).
-    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean; infer: boolean }): Lines;
+    // `deadInit`: the initial value is never read (every read follows an assignment on its path: deadInit
+    // below), so a lowering may declare the local without it; then `twice` says whether a path may
+    // assign it more than once (a lowering whose locals are immutable unless declared otherwise).
+    let(cx: Cx, s: { id: string; ty: Ty; r: R; owned: boolean; mutable: boolean; reassigned: boolean; emptyList: boolean; infer: boolean; deadInit: boolean; twice: boolean }): Lines;
     set(id: string, val: string): Lines;
     // `inline` is the sole statement of a branch-free `if` printed on one line, when it is short.
     if(s: { c: string; then: Lines; else?: Lines; inline?: string; depth: number }): Lines;
@@ -736,10 +739,10 @@ class Printer implements Cx {
   }
 
   private block(body: Stmt[], depth: number): Lines {
-    return body.flatMap((s) => this.stmt(s, depth));
+    return body.flatMap((s, i) => this.stmt(s, depth, body, i));
   }
 
-  private stmt(s: Stmt, d: number): Lines {
+  private stmt(s: Stmt, d: number, body: Stmt[] = [s], at = 0): Lines {
     const L = this.L, S = L.stmt;
     switch (s.k) {
       case 'comment': return S.comment(s.text);
@@ -757,7 +760,8 @@ class Printer implements Cx {
         this.env.set(s.name, { ty: s.ty, owned });
         const emptyList = s.init.k === 'newList' && !s.init.cap;
         const infer = !!L.inferLocals && (s.ty === 'bool' || (isNum(s.ty) && !r.lit));
-        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name), reassigned: this.reassigned.has(s.name), emptyList, infer });
+        const deadInit = (isNum(s.ty) || s.ty === 'bool') && !mentions(s.init, (e) => e.k === 'call') && initDead(body.slice(at + 1), s.name);
+        return S.let(this, { id: this.id(s.name), ty: s.ty, r, owned, mutable: this.mutable.has(s.name) && JSON.stringify(body.slice(at + 1)).includes(JSON.stringify(s.name)), reassigned: this.reassigned.has(s.name), emptyList, infer, deadInit, twice: deadInit && assignsTwice(body.slice(at + 1), s.name) });
       }
       case 'set': {
         const v = this.env.get(s.name);
@@ -992,4 +996,77 @@ export function printFns(lowering: Lowering, fns: Fn[], sets: CharSet[] = [], re
   };
   const head = !decls ? [] : [...sets.map((c) => lowering.charSet(lowering.ident(c.name), c.ranges, c.cold === true)), ...tables.map(decl)];
   return [...head, ...all.filter((f) => !f.extern && (only ? only(f) : true)).map((f) => p.fn(f))].join('\n');
+}
+
+// ── Dead initial values (Lowering.stmt.let's deadInit / twice) ──
+// Whether some node of x (an Expr or Stmt tree) satisfies `is`.
+function mentions(x: unknown, is: (e: Expr) => boolean): boolean {
+  if (typeof x !== 'object' || x === null) return false;
+  if (Array.isArray(x)) return x.some((y) => mentions(y, is));
+  if ('k' in x && is(x as Expr)) return true;
+  return Object.values(x).some((y) => mentions(y, is));
+}
+const readsVar = (x: unknown, v: string): boolean => mentions(x, (e) => e.k === 'var' && e.name === v);
+// How a run of statements meets v: 'read' (a path may read it before assigning it), 'set' (every
+// path that goes on past them has assigned it first, or none goes on), 'open' (neither).
+type Meet = 'read' | 'set' | 'open';
+function meet(body: Stmt[], v: string): Meet {
+  for (const s of body) {
+    const m = meet1(s, v);
+    if (m !== 'open') return m;
+  }
+  return 'open';
+}
+function meet1(s: Stmt, v: string): Meet {
+  const join = (ms: Meet[]): Meet => (ms.includes('read') ? 'read' : ms.every((m) => m === 'set') ? 'set' : 'open');
+  const loop = (head: unknown, body: Stmt[]): Meet => (readsVar(head, v) || meet(body, v) === 'read' ? 'read' : 'open');
+  switch (s.k) {
+    case 'comment': return 'open';
+    case 'set': return readsVar(s.e, v) ? 'read' : s.name === v ? 'set' : 'open';
+    case 'setCall': return readsVar(s.call, v) ? 'read' : s.names.includes(v) ? 'set' : 'open';
+    case 'return': return readsVar(s.es, v) ? 'read' : 'set';
+    case 'break': return 'set';   // the path leaves the loop, whose own meet is at best 'open'
+    case 'if': return readsVar(s.c, v) ? 'read' : join([meet(s.then, v), meet(s.else ?? [], v)]);
+    case 'while': return loop(s.c, s.body);
+    case 'for': return loop([s.from, s.to], s.body);
+    case 'forEach': return loop(s.list, s.body);
+    case 'switch': return readsVar(s.on, v) ? 'read' : join([...s.cases.map((c) => meet(c.body, v)), meet(s.else, v)]);
+    default: return JSON.stringify(s).includes(JSON.stringify(v)) ? 'read' : 'open';   // any other statement naming v: as a read
+  }
+}
+/** Whether the initial value of local v, declared just before `rest`, is never read. */
+function initDead(rest: Stmt[], v: string): boolean { return meet(rest, v) !== 'read'; }
+// Whether a path through `rest` may assign v twice (it is declared unassigned just before them).
+// A loop that assigns it may, and so does an assignment where an earlier one may have run.
+function assignsTwice(rest: Stmt[], v: string): boolean {
+  const assigns = (x: unknown): boolean => mentions(x, (e) => ((e as Stmt).k === 'set' && (e as Stmt & { k: 'set' }).name === v) || ((e as Stmt).k === 'setCall' && (e as Stmt & { k: 'setCall' }).names.includes(v)));
+  // the state after `body` from `may` (whether an assignment may have run); null: no path goes on
+  let twice = false;
+  const run = (body: Stmt[], may: boolean | null): boolean | null => {
+    for (const s of body) {
+      if (may === null) return null;
+      switch (s.k) {
+        case 'set': case 'setCall':
+          if ((s.k === 'set' ? s.name === v : s.names.includes(v))) { if (may) twice = true; may = true; }
+          break;
+        case 'return': case 'break': return null;
+        case 'if': {
+          const a = run(s.then, may), b = run(s.else ?? [], may);
+          may = a === null ? b : b === null ? a : a || b;
+          break;
+        }
+        case 'switch': {
+          const outs = [...s.cases.map((c) => run(c.body, may)), run(s.else, may)].filter((o) => o !== null);
+          may = outs.length === 0 ? null : outs.some((o) => o);
+          break;
+        }
+        case 'while': case 'for': case 'forEach':
+          if (assigns(s.body)) { twice = true; may = true; }
+          break;
+      }
+    }
+    return may;
+  };
+  run(rest, false);
+  return twice;
 }
