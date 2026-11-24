@@ -118,7 +118,7 @@ interpreter. Where that argument cannot be made for a row, the row says so.
 | Postfix: `sameLine`, `tailClosed`, `requireAssignTarget` | `postfix[]`, `postfixSameLine` | `postfixOp` | `x\n++\ny`, `++x++` | V |
 | Mixfix operand re-bind (`matchMixfixLed`): a failed `<L1> $ <L2> …` led retries its operand capped at each depth-0 L2 | `ledRebind`; `rbScan` (`src/rebind-family.ts`, one body for every form) | `PrattLowering.rebind` | `REBIND.ts` | V |
 | Template literals: the template token carries its hole rule; a head commits to the chain | `Step tok` with `hole`, `nudTplHole`, `postfixTplHole` | `nudTpl`, `postfixTpl`, `matchTemplate*` | `TEMPLATE_STEPS` | V |
-| `>`-composites: `>` `>` `=` are separate tokens, read as one operator where an operator is read | `gtComps`, `gtOpRead` | `_opLid` / `gt_op` | `a >>= b`, `let x = f<A<B>>(c);` | V |
+| `>`-composites: `>` `>` `=` are separate tokens, read as one operator where an operator is read | `gtComps`, `gtOp` | `_opLid` / `gt_op` | `a >>= b`, `let x = f<A<B>>(c);` | V |
 | The empty node's offset (`offset()` with no children) | unreachable: `defineGrammar` refuses nullable rules except the entry | — | `''`, `'// c'` | V |
 
 Not argued by the table: the interpreter's indent / markup / `noCommentBefore` mechanisms. Their
