@@ -457,6 +457,10 @@
         }
       ],
       [
+        "@ident(?=\\s+(?:is)(?![\\w$]))",
+        "identifier"
+      ],
+      [
         "@ident",
         {
           "cases": {
@@ -747,6 +751,265 @@
         }
       ]
     ],
+    "type_6": [
+      [
+        "(?==(?!>)|[),\\]])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "typenest_paren": [
+      [
+        "\\)",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@typeEntry"
+      },
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typenest_paren"
+        }
+      ],
+      [
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "next": "@typenest_square"
+        }
+      ],
+      {
+        "include": "@bracketCounting"
+      }
+    ],
+    "typenest_square": [
+      [
+        "\\]",
+        {
+          "token": "delimiter.square",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@typeEntry"
+      },
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typenest_paren"
+        }
+      ],
+      [
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "next": "@typenest_square"
+        }
+      ],
+      {
+        "include": "@bracketCounting"
+      }
+    ],
+    "typelist_default": [
+      [
+        "(?=[),\\]])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@typeEntry"
+      },
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typenest_paren"
+        }
+      ],
+      [
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "next": "@typenest_square"
+        }
+      ],
+      {
+        "include": "@bracketCounting"
+      }
+    ],
+    "typelist_paren_ret": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        ":",
+        {
+          "token": "delimiter",
+          "switchTo": "@type_1_first"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "typelist_paren": [
+      [
+        "\\)(?=\\s*:)",
+        {
+          "token": "delimiter.parenthesis",
+          "switchTo": "@typelist_paren_ret"
+        }
+      ],
+      [
+        "\\)",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@pop"
+        }
+      ],
+      [
+        "@ident(?=\\s*\\??\\s*:)",
+        "identifier"
+      ],
+      [
+        ":",
+        {
+          "token": "delimiter",
+          "next": "@type_6"
+        }
+      ],
+      [
+        "=(?!>)",
+        {
+          "token": "operator",
+          "next": "@typelist_default"
+        }
+      ],
+      {
+        "include": "@typeEntry"
+      },
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typenest_paren"
+        }
+      ],
+      [
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "next": "@typenest_square"
+        }
+      ],
+      {
+        "include": "@bracketCounting"
+      }
+    ],
+    "type_7": [
+      [
+        "(?=[,;}])",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ],
+      {
+        "include": "@type"
+      }
+    ],
+    "typelist_square_ret": [
+      [
+        "[ \\t\\r\\n]+",
+        "white"
+      ],
+      [
+        ":",
+        {
+          "token": "delimiter",
+          "switchTo": "@type_7"
+        }
+      ],
+      [
+        "",
+        {
+          "token": "",
+          "next": "@pop"
+        }
+      ]
+    ],
+    "typelist_square": [
+      [
+        "\\](?=\\s*:)",
+        {
+          "token": "delimiter.square",
+          "switchTo": "@typelist_square_ret"
+        }
+      ],
+      [
+        "\\]",
+        {
+          "token": "delimiter.square",
+          "next": "@pop"
+        }
+      ],
+      [
+        "@ident(?=\\s*\\??\\s*:)",
+        "identifier"
+      ],
+      [
+        ":",
+        {
+          "token": "delimiter",
+          "next": "@type_6"
+        }
+      ],
+      [
+        "=(?!>)",
+        {
+          "token": "operator",
+          "next": "@typelist_default"
+        }
+      ],
+      {
+        "include": "@typeEntry"
+      },
+      [
+        "\\(",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typenest_paren"
+        }
+      ],
+      [
+        "\\[",
+        {
+          "token": "delimiter.square",
+          "next": "@typenest_square"
+        }
+      ],
+      {
+        "include": "@bracketCounting"
+      }
+    ],
     "keywordName": [
       [
         "(?:keyof|is|unique|satisfies)(?![\\w$])(?!\\s*(?:!|&|\\(|\\*|-|<|\\?|\\[|\\{|\\|))(?=\\s*[!%&()*+,\\-/:;<=>?[\\]\\^{|}~])",
@@ -881,6 +1144,27 @@
               "next": "@typehead_2"
             }
           }
+        }
+      ],
+      [
+        "\\)(?=\\s*:\\s*@ident(?:\\s*\\.\\s*@ident)*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*(?:\\s*\\|\\s*@ident(?:\\s*\\.\\s*@ident)*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*)*\\s*\\{)",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typelist_paren_ret"
+        }
+      ],
+      [
+        "\\((?=\\s*(?:@ident(?:\\s*,\\s*|\\s+))*(?:\\.\\.\\.\\s*)?@ident\\s*\\??\\s*:)",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typelist_paren"
+        }
+      ],
+      [
+        "\\[(?=\\s*(?:@ident(?:\\s*,\\s*|\\s+))*(?:\\.\\.\\.\\s*)?@ident\\s*\\??\\s*:)",
+        {
+          "token": "delimiter.square",
+          "next": "@typelist_square"
         }
       ]
     ],
@@ -1510,6 +1794,13 @@
       ]
     ],
     "root": [
+      [
+        "\\((?=\\s*\\)\\s*:)",
+        {
+          "token": "delimiter.parenthesis",
+          "next": "@typelist_paren"
+        }
+      ],
       {
         "include": "@exprBody"
       },

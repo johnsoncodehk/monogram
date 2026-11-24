@@ -620,6 +620,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   const facts = highlightFacts(grammar);
   const tbody = facts.typeBody;
   const typeEntryRules: MonarchRule[] = [];
+  const rootTypeRules: MonarchRule[] = [];   // tried in an expression position only (Monarch's root state)
   const refusals: HighlighterRefusal[] = [];
   const refuse = (construct: string) => { if (!refusals.some(r => r.construct === construct)) refusals.push({ construct, reason: 'Monarch matches at the cursor and sees no text before it' }); };
   if (tbody) {
@@ -643,6 +644,8 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       tokenizer['typeValueDot'] = [[`\\.(?=\\s*${ident})`, { token: tok('.'), switchTo: '@typeValue' }], ['', { token: '', next: '@pop' }]];
     }
     for (const [w] of scopeOverrides) if (identKeywordToken.has(w) && !allLiterals.has(w)) typeCases[w] = identKeywordToken.get(w)!;
+    const idName0 = identToken ? `<${identToken.name}>` : null;
+    const namedOpeners = [...new Set(facts.typeContexts.sites.filter(s => s.opener && isKeywordLiteral(s.opener) && s.left.length && s.left.every(([n, m]) => n === idName0 && m === ':')).map(s => s.opener!))].sort();
     const groups: [string, string, string][] = [];   // [open, close, state]
     groups.push(['<', '>', 'type_angle']);
     if (facts.parenType) groups.push(['(', ')', 'type_paren']);
@@ -652,6 +655,9 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       wsRule, ...commentRules, ...stringNestedRules, ...templateNestedRules, ...numberRules.map(stripSwitch),
       ...groups.map(([o, , st]) => [escapeRegex(o), { token: o === '<' ? 'delimiter.angle' : tok(o), next: `@${st}` }] as MonarchRule),
       ...valueAfter.length ? [[`(?:${valueAfter.map(escapeRegex).join('|')})${wordEnd}`, { cases: Object.fromEntries(valueAfter.map(w => [w, { token: typeCases[w] as string, next: '@typeValue' }])) }] as MonarchRule] : [],
+      // a name before an opener word whose position's left is that name after `:` (`): x is T`: the
+      // name of a parameter where a type would begin)
+      ...namedOpeners.length ? [[`${ident}(?=\\s+(?:${namedOpeners.map(escapeRegex).join('|')})${wordEnd})`, 'identifier'] as MonarchRule] : [],
       [ident, { cases: { ...typeCases, '@default': 'type.identifier' } }],
       { include: '@symbols' },
     ];
@@ -766,6 +772,66 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       const ahead = `(?=\\s+${ident}\\s*${bang ? '(?:!\\s*)?' : ''}(?:${params ? '<|' : ''}${escapeRegex(opener)}))`;
       typeEntryRules.push([`(?:${kws.map(escapeRegex).join('|')})${wordEnd}${ahead}`,
         { cases: Object.fromEntries(kws.map(k => [k, { token: identKeywordToken.get(k) ?? 'keyword', next: `@${hs}` }])) }]);
+    }
+    // 3. a parameter list: a `:` position whose left is a name right after an open bracket
+    //    (`(x: T`, `[k: string`) is entered at the bracket, confirmed by a bounded lookahead: the
+    //    bracket, words (modifiers, names) each followed by a space or `,`, an optional `...`, a
+    //    name, `?`, `:` (`( name :` is no expression: a `:` after a name inside a bracket needs a
+    //    ternary's `?` before it). The list's state reads its own `:` positions and default values
+    //    (`=`, read to the list's `,` or close bracket, brackets counted), and after its close
+    //    bracket a `:` position whose left is that bracket (a return type). Past the bound: a list
+    //    whose first annotated parameter follows a binding pattern or a decorator is not entered.
+    //    A `()` in an expression position (Monarch's root state) is an arrow's empty list; a `)`
+    //    elsewhere followed by `: T {` (a name, `.` names, `<…>` without nested angles, `[]`,
+    //    `|` unions) on the line is a return type before a body; `): T =>` there is not read (the
+    //    ternary `c ? (x) : y => z`): both refusals.
+    const interp = !!templateToken?.template;
+    const closeOf = (o: string) => groups.find(([g]) => g === o)?.[1] ?? { '(': ')', '[': ']' }[o];
+    const nameFirst = (n: string) => n === idName || (isKeywordLiteral(n) && !facts.varDeclarationKeywords.has(n));
+    const listBrackets = [...new Set(sites.flatMap(s => s.opener === ':' && !entered.has(s) ? s.left.filter(([n, b]) => nameFirst(n) && (b === '(' || b === '[')).map(p => p[1]) : []))].sort();
+    if (listBrackets.length && interp && tokenizer['bracketCounting']) {
+      const listRules = new Set(sites.filter(s => s.opener === ':' && s.left.some(([n, b]) => nameFirst(n) && listBrackets.includes(b))).map(s => s.rule));
+      const paramSites = sites.filter(s => s.opener === ':' && listRules.has(s.rule));
+      const paramState = siteState(closersOf(paramSites));
+      // brackets counted: `(` `[` pushed here, `{` by the brace-counting state, which reads the rest
+      const nest: MonarchRule[] = [{ include: '@typeEntry' }, ['\\(', { token: tok('('), next: '@typenest_paren' }],
+        ['\\[', { token: tok('['), next: '@typenest_square' }], { include: '@bracketCounting' }];
+      tokenizer['typenest_paren'] = [['\\)', { token: tok(')'), next: '@pop' }], ...nest];
+      tokenizer['typenest_square'] = [['\\]', { token: tok(']'), next: '@pop' }], ...nest];
+      const listDelims = [...new Set(paramSites.flatMap(s => s.closers).filter(c => c === ',' || listBrackets.some(b => closeOf(b) === c)))];
+      tokenizer['typelist_default'] = [[`(?=[${listDelims.map(escapeForCharClass).join('')}])`, { token: '', next: '@pop' }], ...nest];
+      const eq = paramSites.some(s => s.closers.includes('=')) ? closerAlt('=') : null;
+      const optional = paramSites.some(s => s.left.some(([n]) => n === '?'));
+      const word = `${ident}\\s*${optional ? '\\??\\s*' : ''}:`;
+      const spread = paramSites.some(s => s.left.some(([n, m]) => n === idName && m === '...')) ? '(?:\\.\\.\\.\\s*)?' : '';
+      const ahead = `(?=\\s*(?:${ident}(?:\\s*,\\s*|\\s+))*${spread}${word})`;
+      for (const b of listBrackets) {
+        const c = closeOf(b)!, st = `typelist_${b === '(' ? 'paren' : 'square'}`;
+        const ret = sites.filter(s => s.opener === ':' && s.left.some(([n]) => n === c));
+        const rules: MonarchRule[] = [];
+        if (ret.length) {
+          const retState = siteState(closersOf(ret));
+          tokenizer[`${st}_ret`] = [wsRule, [':', { token: tok(':'), switchTo: `@${retState}` }], ['', { token: '', next: '@pop' }]];
+          rules.push([`${escapeRegex(c)}(?=\\s*:)`, { token: tok(c), switchTo: `@${st}_ret` }]);
+          if (b === '(') {
+            // outside a confirmed list: `): T {` on the line; in an expression position: `()`
+            const T = `${ident}(?:\\s*\\.\\s*${ident})*(?:\\s*<[^<>;{}()]*>)?(?:\\s*\\[\\s*\\])*`;
+            typeEntryRules.push([`\\)(?=\\s*:\\s*${T}(?:\\s*\\|\\s*${T})*\\s*\\{)`, { token: tok(')'), next: `@${st}_ret` }]);
+            rootTypeRules.push([`\\((?=\\s*\\)\\s*:)`, { token: tok('('), next: `@${st}` }]);
+            refuse(`return type after \`)\` + \`:\`: entered after a parameter list read as one, after \`()\` in an expression position, or before \`{\` on the line (\`c ? (x) : y => z\` is a ternary)`);
+          }
+        }
+        tokenizer[st] = [
+          ...rules,
+          [escapeRegex(c), { token: tok(c), next: '@pop' }],
+          [`${ident}(?=\\s*${optional ? '\\??\\s*' : ''}:)`, 'identifier'],
+          [':', { token: tok(':'), next: `@${paramState}` }],
+          ...eq ? [[eq, { token: tok('=', 'operator'), next: '@typelist_default' }] as MonarchRule] : [],
+          ...nest,
+        ];
+        typeEntryRules.push([`${escapeRegex(b)}${ahead}`, { token: tok(b), next: `@${st}` }]);
+      }
+      refuse(`parameter list: entered where its first annotated parameter is a name (\`(a, b: T\`, \`(...r: T\`); after a binding pattern or a decorator not entered`);
     }
     // the positions no entry reads
     const left = new Map<string, number>();
@@ -931,7 +997,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   }) : null;
   if (el) Object.assign(tokenizer, el.states);
 
-  const root: MonarchRule[] = [...el?.entryTop ?? [], { include: '@exprBody' }];
+  const root: MonarchRule[] = [...el?.entryTop ?? [], ...rootTypeRules, { include: '@exprBody' }];
   if (regexToken) root.push(...exprSlashRules);
   if (angle) root.push(['<|>', toExpr(comparisonTok)]);   // expr-pos `<`/`>` = comparison
   tokenizer['root'] = root;
