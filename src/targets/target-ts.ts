@@ -5,7 +5,7 @@
 // is checked byte-for-byte against the interpreter (createParser), so a divergence in the
 // portable logic surfaces here before Go/Rust are compiled.
 import { type ParserIR, type RdRule, type PrattRule, type NodeCap, type NudRef, type Step, type Alt, type LexTok, type NewlineCfg, type FirstSig, type Guard, type Dispatch, type LexFirstBytes, type LexIdPlan, type ReusePlan, type ShapeInhVal, type AssignTargetsIR } from '../ir/parser-ir.ts';
-import { hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
+import { prattTail, hasRebind, nudLowForm, demandTwinCond, demandLids, DEFER_SHIFT, blockBody, elementBraceSteps, elementSkipsText, regionKids, portableIR, sepDelimLid, buildLexDispatchPlan, lexTokFirstBytes, punctFirstBytes, buildLexIdPlan, buildLidPrefilter, lidOf, lidDeltaTable, ctxWordLids, CTX_WORD_BITS, kidOf, lidFlagTable, kidFlagTable, groupByPreserveOrder, tokenSetBits, prattOpTables, OP_ROW, prattOpRow, binLeftOps, stepExpr, stepStmts, ruleShell, prattShell, entryShell, gtCompLit, compLeadLids, buildArenaIdPlan, withReservedRules, type PortableFacts, type StepLowering, type RuleLowering, type DispatchLowering, type PrattLowering, type CommitLowering } from '../ir/parser-ir.ts';
 import type { ArmForm } from '../ir/assign-targets.ts';
 import { ST_CAPPED, ST_FORM, ST_TAIL, ST_SUP_NEXT, ST_SUP_CUR, RM_DIAGS, RM_ATT, RM_AMAX, RM_FAIL, RM_PROBE, RM_SP, nativeCases, shorterDispatch } from '../ir/recovery-family.ts';
 import type { EmitOptions } from './target.ts';
@@ -1136,7 +1136,7 @@ ${kids.map((k) => `      case ${k}:
     if (!${rsCall(r.name, 'right', `${r.name}_bpW(info >>> ${OP_ROW.rbpShift} & ${OP_ROW.bpMask})`)}) { back(ledSave); _n = b + 1; break; }
     ${finPTs(r.name, 'bin', 'b')};
     if (_capped) { _form = ${binF}; return true; }
-    form = ${binF}; tailClosed = true;
+    form = ${binF};${prattTail(r) === 'none' ? '' : ' tailClosed = true;'}
   }`,
     entry: (bp) => `${tsPrattOpTables(r, ids)}
 function parse${r.name}W(): boolean {
@@ -1145,12 +1145,12 @@ function parse${r.name}W(): boolean {
   _suppressCur = prev;
   return r;
 }`,
-    bpOpen: (label, nudBp, bp) => `function ${r.name}_bpW(${bp ? 'minBp: number' : ''}): boolean {
+    bpOpen: (label, nudBp, bp, tail) => `function ${r.name}_bpW(${bp ? 'minBp: number' : ''}): boolean {
   const b = _n;${rsOf(r.name) ? ' const p0 = pos; let nr = 0;' : dem.length ? ' const p0 = pos;' : ''}
   if (!${r.name}_nudW(${nudBp ? 'minBp' : ''})) return false;
   let form = _form;
-  if (_capped) return true;   // an assignment-level arrow admits no led
-  let tailClosed = _tail;
+  if (_capped) return true;   // an assignment-level arrow admits no led${tail === 'none' ? '' : `
+  ${tail === 'reassigned' ? 'let' : 'const'} tailClosed = _tail;`}
   ${label ? 'ledLoop: ' : ''}for (;;) {
     const t = peek();
     if (t === null) break;${rsOf(r.name) ? '\n    if (pos === _stop) break;' : ''}`,

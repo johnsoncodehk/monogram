@@ -19,7 +19,8 @@ interface Item { text: string; names: string[]; refs: Set<string>; root: boolean
 
 const isIdStart = (c: number): boolean => (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
 const isId = (c: number): boolean => isIdStart(c) || (c >= 48 && c <= 57);
-const BLOCK_ITEM = /^(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?(?:fn|impl|struct|enum|trait|mod|union|macro_rules!)\b/;
+// (`macro_rules!` takes no \b: no word boundary follows the `!`)
+const BLOCK_ITEM = /^(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?(?:(?:fn|impl|struct|enum|trait|mod|union)\b|macro_rules!)/;
 
 function split(src: string): { text: string; refs: Set<string> }[] {
   const out: { text: string; refs: Set<string> }[] = [];

@@ -2000,7 +2000,7 @@ export type PrattLowering = {
   binary: string;                                // the binary operator, its right operand at rbp; a CAPPED right operand (an assignment-level arrow) caps the node: it returns at once, still capped, so no further led or operator takes it, here or in an enclosing call (`a = () => {} || x` rejects: the interpreter's cap propagation)
   leftDone?: string;                             // after the loop: the left operand's finishing step (none for the CST)
   entry(bp: boolean): string;                    // the entry function (and the operator tables, where the target prints them beside it); bp: `bp` takes the binding power
-  bpOpen(label: boolean, nudBp: boolean, bp: boolean, closesTail: boolean): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power; bp: `bp` takes it; closesTail: a binary / postfix operator or a led closes the tail, so the tail flag is reassigned)
+  bpOpen(label: boolean, nudBp: boolean, bp: boolean, tail: 'none' | 'read' | 'reassigned'): string; // `bp` up to the loop's buffered token (label: a led continues the loop by name; nudBp: `nud` takes the binding power; bp: `bp` takes it; tail: prattTail, whether the tail flag is declared and reassigned)
   bpClose: string;                               // `bp`'s normal return: the node is not capped (a sub-parse's capped flag, an arrow inside a call's arguments, is not its own)
   nudEnter(bp: boolean): string;                 // `nud` up to its buffered token `t` (none: no match); bp: it takes the binding power (a capped arm reads it)
   nudOpen: string;                               // `nud`'s candidate frame, up to its candidates
@@ -2031,6 +2031,12 @@ function calledAtBp(ir: Pick<ParserIR, 'rules' | 'lookaheads'>): Set<string> {
   return out;
 }
 // Only a capped arm reads the binding power in `nud` (capBelow): without one, nud takes none.
+/** How a Pratt rule's loop uses the access-tail flag: 'none' (no postfix, postfix token or tail-led
+ *  test reads it: the flag is not printed, nor any store to it), 'read' (read, never reassigned),
+ *  'reassigned' (read, and a binary / postfix operator or a led closes the tail). */
+export const prattTail = (r: PrattRule): 'none' | 'read' | 'reassigned' =>
+  !(r.postfix.length > 0 || r.postfixToks.length > 0 || r.postfixTplHole !== undefined || r.ledAccessTail.some((a) => a)) ? 'none'
+    : r.binary.length > 0 || r.postfix.length > 0 || r.ledClosesTail.some((c) => c) ? 'reassigned' : 'read';
 const nudTakesBp = (r: PrattRule): boolean => r.nudOrder.some((a) => a.kind === 'capped' || (a.kind === 'seq' && a.capBp !== undefined));
 // Whether `bp` takes the binding power: something reads it (nud, a prefix or binary or postfix
 // operator, a precedence-gated led, a re-bind) or a step calls the rule at one. A rule without
@@ -2095,7 +2101,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'rules' | 'lookahead
     const lid = g.key as number;
     const leaves = exits.has(lid) && ledIf(g.members[g.members.length - 1]!.index) === '';
     return { key: lid, idx: ledIdx.get(lid)!, leaves, arms: g.members.map(({ item: b, index: i }, j) =>
-      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]!, exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null, r.ledCapsFromTail[i]!)}`) };
+      `${ledIf(i)}${L.ledArm(i, cond(b.steps), r.ledForm[i]!, r.ledClosesTail[i]! && prattTail(r) !== 'none', exits.has(lid) && j === g.members.length - 1, r.ledClean[i]!, rebinds[i] ?? null, r.ledCapsFromTail[i]!)}`) };
   }));
   const postToks = r.postfixToks.length === 0 ? ''
     : L.postfixToks(groupByPreserveOrder(r.postfixToks, (tok) => kidOf(ids, tok)).map((g) => g.key as number)) + (r.postfixTplHole !== undefined ? L.postfixTpl(r.postfixTplHole) : '');
@@ -2103,7 +2109,7 @@ export function prattShell(r: PrattRule, ir: Pick<ParserIR, 'rules' | 'lookahead
   // field, and a test that never passes still costs its instructions on every iteration.
   const hasBin = r.binary.length > 0, hasPost = r.postfix.length > 0;
   const nudBp = nudTakesBp(r), takesBp = prattTakesBp(r, ir);
-  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp, takesBp, hasBin || hasPost || r.ledClosesTail.some((c) => c)), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
+  const bp = [L.bpOpen(r.leds.length > 0 || r.postfixToks.length > 0, nudBp, takesBp, prattTail(r)), ...(r.leds.length > 0 || hasPost || hasBin ? [L.opRow] : []), leds, postToks, ...(hasPost ? [L.postfixOp] : []), hasBin ? L.binary : L.noBinary, ...(L.leftDone ? [L.leftDone] : []), L.bpClose].join('\n');
   // The committed arm's run-time tests at a key (CommitTest): its token / literal unless the key
   // decides it, its guard's remaining tests, a capped arm's binding power.
   const tests = (t: CommitTest): string[] => {
