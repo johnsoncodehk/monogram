@@ -47,7 +47,7 @@ import ts from 'typescript';
 import { parseAllDocuments } from 'yaml';
 import { parseFragment } from 'parse5';
 import { createParser, type CstNode } from '../src/gen-parser.ts';
-import type { CstGrammar } from '../src/types.ts';
+import type { Grammar } from '../src/types.ts';
 import { generateInputs } from './grammar-gen.ts';
 import {
   type TmTok, type Violation,
@@ -60,7 +60,7 @@ import {
 //    ddmin / fingerprint / emit ENGINE below is language-agnostic. ──
 interface LangCfg {
   name: string;
-  module: string;          // grammar module (default export = CstGrammar)
+  module: string;          // grammar module (default export = Grammar)
   scopeName: string;       // TextMate scope, e.g. source.yaml
   tmPath: string;          // the derived flat .tmLanguage.json
   tmExtra?: Record<string, string>;  // extra scopeName → file for multi-file grammars
@@ -132,7 +132,7 @@ function sig(v: Violation): string { return `${v.kind}|${v.tokenType}|${v.got}|$
 // One repro's check: parse it (parser must still ACCEPT — a shrink that breaks parsing is not a valid
 // candidate), tokenize, and report whether `target` (a divergence signature) still appears among the
 // detected violations. Returns the matching Violation (for its fresh offsets) or null.
-interface Probe { parse: (text: string, rule?: string) => CstNode; tm: vsctm.IGrammar; grammar: CstGrammar; roleOf: ReturnType<typeof buildRoleMap>; anchored: Map<string, Set<string>>; }
+interface Probe { parse: (text: string, rule?: string) => CstNode; tm: vsctm.IGrammar; grammar: Grammar; roleOf: ReturnType<typeof buildRoleMap>; anchored: Map<string, Set<string>>; }
 function reproStillDiverges(p: Probe, text: string, target: string): Violation | null {
   let cst: CstNode;
   try { cst = p.parse(text); } catch { return null; }      // parser must accept the shrunk input
@@ -216,7 +216,7 @@ interface LangResult { name: string; kept: Gap[]; droppedOverAccept: number; dis
 
 async function runLang(cfg: LangCfg): Promise<LangResult> {
   if (!existsSync(cfg.tmPath)) return { name: cfg.name, kept: [], droppedOverAccept: 0, discovered: 0 };
-  const grammar = (await import(cfg.module)).default as CstGrammar;
+  const grammar = (await import(cfg.module)).default as Grammar;
   const { parse } = createParser(grammar);
   const tm = await loadTm(cfg.scopeName, { [cfg.scopeName]: cfg.tmPath, ...(cfg.tmExtra ?? {}) });
   if (!tm) throw new Error(`failed to load ${cfg.tmPath}`);
