@@ -700,6 +700,11 @@ export interface CstGrammar {
   // `>>`, `>=`, `>>>=` … from adjacent single `>` tokens where it reads an operator (tsc's
   // reScanGreaterToken). Absent: `>` is an ordinary punctuator and `>=` one token. See gtComposites.
   composeGt?: true;
+  // The `<` mirror, DECLARED: `<` OPENS a bracket (TypeScript's type arguments) where a `<`-led
+  // operator could also begin (`X<<T>() => T>`: `<<` is two openings), so the lexer scans every `<`
+  // alone and the parser composes `<<`, `<=`, `<<=` from adjacent single `<` tokens where it reads
+  // an operator (what tsc's reScanLessThanToken undoes by splitting). See gtComposites.
+  composeLt?: true;
   // DECLARED ASSIGNMENT-TARGET CONTEXTS, by name (api.ts `target(ctx)`, `targetOps(ctx, …)`): which
   // nodes may stand where a context's target is taken. Arms are named by their stable names
   // (grammar-names), never by text. A node passes iff its arm is in `leaves`, or in `containers`

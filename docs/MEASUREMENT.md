@@ -92,6 +92,10 @@ that can never pass still costs its instructions on every iteration: `Type_bp` p
 typescript.d.ts for tests of fields its row never sets. What remains is one masked load per
 iteration (`Expr_bp'2` on checker.ts: +397k), partly offset by the composite-lead compare it
 replaces (-136k).
+The row landed with Rust at +0.08% to +0.32% on the real inputs (Go -3% to -3.9%, TS blocks -0.5%
+to -1.2%) because of what that load buys: the loop's cost no longer depends on lid numbering or on
+how many composite leads and flags a grammar has. A second lead (`<`, `composeLt`) is the same bit
+21 set on one more lid, with no new compare in the loop.
 
 ### Large functions at the edge of the register budget
 The same symptom showed in the lexer. Making `@` a punctuator (one more punctuator site in
