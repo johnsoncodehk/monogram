@@ -157,6 +157,22 @@ const filter = rest[0];
 let gates = filter ? GATES.filter((g) => (g.group + ' ' + g.name).includes(filter)) : GATES;
 if (!gates.length) { console.error(`no gate matches "${filter}"`); process.exit(1); }
 
+// The type check of the whole project (tsconfig.json: src, test, the grammar files), with the
+// project's `typescript` (7: the native compiler; the parser oracle is `tsc-oracle`). It is the one
+// invocation: every run without a gate filter does it first, `--quick` and `--changed` included
+// (a few seconds; it reads the generated *.cst-match.ts, so `npm run gen` comes first).
+if (!filter && !listOnly) {
+  const t0 = Date.now();
+  try {
+    execFileSync(join('node_modules', '.bin', 'tsc'), ['--noEmit', '-p', '.'], { encoding: 'utf8', stdio: 'pipe' });
+    console.log(`    ✓ typecheck (tsc --noEmit, whole project) ${Date.now() - t0}ms`);
+  } catch (e) {
+    const out = e as { stdout?: string; stderr?: string };
+    console.log(`    ✗ typecheck (tsc --noEmit, whole project) ${Date.now() - t0}ms\n${out.stdout ?? ''}${out.stderr ?? ''}`);
+    process.exit(1);
+  }
+}
+
 if (changedMode) {
   const { gateTargetDeps, gateDeps } = await import('./gate-deps.ts');
   const git = (...a: string[]) => execFileSync('git', a, { encoding: 'utf8' }).split('\n').filter(Boolean);
