@@ -2133,6 +2133,9 @@ export interface TypeBody {
   unguarded: string[];
   /** The literals a type may begin with (the type rules' literal FIRST). */
   starts: string[];
+  /** The keywords of a type followed by a rule that is no type (`typeof` before `TypeofRef`:
+   *  a value's name, `typeof a.b`). */
+  valueAfter: string[];
 }
 
 const OPEN_CLOSE: Record<string, string> = { '(': ')', '[': ']', '{': '}', '<': '>' };
@@ -2202,9 +2205,20 @@ export function typeBody(grammar: CstGrammar): TypeBody | null {
       if (lit?.type === 'literal' && !rejectsOperand(items[i + 1])) unguarded.add(lit.value);
     }
   }
+  const valueAfter = new Set<string>();
+  for (const name of types) {
+    const body = byName.get(name)!;
+    for (const arm of body.type === 'alt' ? body.items : [body]) {
+      const items = arm.type === 'seq' ? arm.items : [];
+      items.forEach((x, i) => {
+        const y = items[i + 1];
+        if (x.type === 'literal' && isKeywordLiteral(x.value) && y?.type === 'ref' && byName.has(y.name) && !types.has(y.name)) valueAfter.add(x.value);
+      });
+    }
+  }
   const starts = new Set<string>();
   for (const name of types) for (const l of firstLiterals(byName.get(name)!, byName)) starts.add(l);
-  return { continuers: longestFirstOf(cont), unguarded: longestFirstOf([...unguarded].filter(l => cont.has(l))), starts: longestFirstOf(starts) };
+  return { continuers: longestFirstOf(cont), unguarded: longestFirstOf([...unguarded].filter(l => cont.has(l))), starts: longestFirstOf(starts), valueAfter: [...valueAfter].sort() };
 }
 
 /** The type positions of a grammar, and the keywords that open one (see TypeContext). */

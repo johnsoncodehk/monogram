@@ -628,9 +628,19 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     // the words of a type: its keywords (typeContextKeywords: `keyof`, `void`, `infer` … a
     // keyword there, whatever the expression reads), the scoped built-ins; every other word names a type
     const typeCases: Record<string, MonarchAction> = {};
+    // a word scoped for both readings (`void`: an operator, a primitive type) takes its type
+    // scope (`support.type…`) there, as TextMate's type rules do
     for (const w of facts.typeContextKeywords) {
-      const t = identKeywordToken.get(w);
-      typeCases[w] = !t || t === 'operator' ? 'keyword' : t;
+      const scopes = scopeOverrides.get(w) ?? [];
+      const ty = scopes.find(x => x.startsWith('support.type'));
+      typeCases[w] = ty ? scopeToMonarch(ty) : identKeywordToken.get(w) ?? 'keyword';
+    }
+    // a word of a type followed by a VALUE name (`typeof a.b`: tbody.valueAfter): the name, then
+    // `.` name, reads as an identifier
+    const valueAfter = tbody.valueAfter.filter(w => typeCases[w]);
+    if (valueAfter.length) {
+      tokenizer['typeValue'] = [wsRule, [ident, { token: 'identifier', switchTo: '@typeValueDot' }], ['', { token: '', next: '@pop' }]];
+      tokenizer['typeValueDot'] = [[`\\.(?=\\s*${ident})`, { token: tok('.'), switchTo: '@typeValue' }], ['', { token: '', next: '@pop' }]];
     }
     for (const [w] of scopeOverrides) if (identKeywordToken.has(w) && !allLiterals.has(w)) typeCases[w] = identKeywordToken.get(w)!;
     const groups: [string, string, string][] = [];   // [open, close, state]
@@ -641,6 +651,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     tokenizer['type'] = [
       wsRule, ...commentRules, ...stringNestedRules, ...templateNestedRules, ...numberRules.map(stripSwitch),
       ...groups.map(([o, , st]) => [escapeRegex(o), { token: o === '<' ? 'delimiter.angle' : tok(o), next: `@${st}` }] as MonarchRule),
+      ...valueAfter.length ? [[`(?:${valueAfter.map(escapeRegex).join('|')})${wordEnd}`, { cases: Object.fromEntries(valueAfter.map(w => [w, { token: typeCases[w] as string, next: '@typeValue' }])) }] as MonarchRule] : [],
       [ident, { cases: { ...typeCases, '@default': 'type.identifier' } }],
       { include: '@symbols' },
     ];
@@ -658,8 +669,18 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
     // a closer, as a lookahead alternative: not where a longer literal of a type begins with it
     // (`=` of `=>`), a word as a whole word
     const closerAlt = (c: string) => {
+      if (isKeywordLiteral(c)) return escapeRegex(c) + wordEnd;
       const longer = typeLits.filter(l => l.length > c.length && l.startsWith(c)).map(l => escapeRegex(l.slice(c.length)));
-      return escapeRegex(c) + (isKeywordLiteral(c) ? wordEnd : '') + (longer.length ? `(?!${longer.join('|')})` : '');
+      return escapeRegex(c) + (longer.length ? `(?!${longer.join('|')})` : '');
+    };
+    // the lookahead of a closer set: a closer another one's lookahead already sees is left out
+    // (`==` behind `=(?!>)`), the one-character closers without an exception as one class
+    const closerLookahead = (closers: string[]): string => {
+      const alts = closers.map(c => [c, closerAlt(c)] as const);
+      const kept = alts.filter(([c]) => !alts.some(([d, re]) => d !== c && d.length < c.length && new RegExp(`^(?:${re})`).test(c)));
+      const single = kept.filter(([c, re]) => c.length === 1 && re === escapeRegex(c)).map(([c]) => c);
+      const rest = kept.filter(([c, re]) => !(c.length === 1 && re === escapeRegex(c))).map(([, re]) => re);
+      return `(?=${[...rest, ...single.length ? [`[${single.map(escapeForCharClass).join('')}]`] : []].join('|')})`;
     };
     const startsType = new Set(tbody.starts);
     const siteStates = new Map<string, string>();
@@ -668,7 +689,7 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
       let st = siteStates.get(key);
       if (!st) {
         siteStates.set(key, st = `type_${siteStates.size + 1}`);
-        tokenizer[st] = [[`(?=${closers.map(closerAlt).join('|')})`, { token: '', next: '@pop' }], { include: '@type' }];
+        tokenizer[st] = [[closerLookahead(closers), { token: '', next: '@pop' }], { include: '@type' }];
         // a closer that is a bracket beginning a type (`{` after `x is`) begins it as the type's
         // first token: the position is entered in a state that reads that bracket's group, then
         // reads on in the position's state (after a first token the bracket ends the type)
@@ -779,17 +800,29 @@ function generateTokenMonarch(grammar: CstGrammar): MonarchLanguage {
   // following word or token decides nothing (no rule), nor does a follower that is a prefix of
   // the literal there (the test is conservative). Tried before the identifier rule.
   const kwNames = highlightFacts(grammar).keywordNameGroups;
-  const keywordNameRules = (top: boolean): MonarchRule[] => kwNames.flatMap(({ words, followers, starts }) => {
+  // One copy, in a state both the base states and the holes include: its action sets no mode.
+  // The mode after a name matters only when the next character reads differently in the
+  // expression and the value state (`/`: a regex or a division; `<`: a comparison or type
+  // arguments / a tag); the base states first try, per such character, the words whose group
+  // has it among `starts` and no follower beginning with it, and switch to the value state.
+  const kwNameRules: MonarchRule[] = kwNames.flatMap(({ words, followers, starts }) => {
     const ws = words.filter(w => identKeywordToken.has(w));
     if (!ws.length) return [];
     const f = followers.map(escapeRegex).join('|');
-    return [[`(?:${ws.map(escapeRegex).join('|')})${wordEnd}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*[${starts.map(escapeForCharClass).join('')}])`, top ? toValue('identifier') : 'identifier'] as MonarchRule];
+    return [[`(?:${ws.map(escapeRegex).join('|')})${wordEnd}${f ? `(?!\\s*(?:${f}))` : ''}(?=\\s*[${starts.map(escapeForCharClass).join('')}])`, 'identifier'] as MonarchRule];
   });
+  const modeChars = [...regexToken ? ['/'] : [], ...angle || view ? ['<'] : []];
+  const kwNameModeRules: MonarchRule[] = modeChars.flatMap(c => {
+    const ws = kwNames.filter(k => k.starts.includes(c) && !k.followers.some(l => l.startsWith(c))).flatMap(k => k.words.filter(w => identKeywordToken.has(w)));
+    return ws.length ? [[`(?:${ws.map(escapeRegex).join('|')})${wordEnd}(?=\\s*${escapeRegex(c)})`, toValue('identifier')] as MonarchRule] : [];
+  });
+  if (kwNameRules.length) tokenizer['keywordName'] = kwNameRules;
+  const kwName: MonarchRule[] = kwNameRules.length ? [{ include: '@keywordName' }] : [];
   // the declaration heads push in a base state and in a hole alike: one state, included by both
   const typeEntry: MonarchRule[] = typeEntryRules.length ? [{ include: '@typeEntry' }] : [];
   if (typeEntryRules.length) tokenizer['typeEntry'] = typeEntryRules;
-  const identRules = [...typeEntry, ...keywordNameRules(true), identRule];
-  const identRulesInterp = [...typeEntry, ...keywordNameRules(false), identRuleInterp];
+  const identRules = [...typeEntry, ...kwNameModeRules, ...kwName, identRule];
+  const identRulesInterp = [...typeEntry, ...kwName, identRuleInterp];
 
   // ── Operators & structural punctuation ──
   // Closers (`)`,`]`,`}`) → value position; everything else (openers, `,`, ops,
