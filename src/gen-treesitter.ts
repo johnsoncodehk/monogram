@@ -1253,8 +1253,9 @@ function refusalWinners(body: RuleExpr, ctx: GrammarJsContext): Set<RuleExpr> {
   for (const x of body.items) {
     const xs = items(x);
     const k = xs.findIndex(i => i.type === 'not');
-    // (A reservable refusal is no drop: it renders as the identifier's reserved word set.)
-    if (k <= 0 || (xs[k] as { reservable?: boolean }).reservable || renderExpr(xs[k], ctx) !== 'blank()' || xs.slice(0, k).some(i => i.type !== 'literal')) continue;
+    // (A reserved-word guard is no drop: it renders as the word step's reserved word set.)
+    if (k <= 0 || renderExpr(xs[k], ctx) !== 'blank()' || xs.slice(0, k).some(i => i.type !== 'literal')) continue;
+    if (reservedGuardWords(xs[k], xs[k + 1], ctx.reserved.word, ctx.reserved.isWordLiteral)) continue;
     const prefix = xs.slice(0, k).map(i => renderExpr(i, ctx));
     const refusedFirst = firstOf((xs[k] as Extract<RuleExpr, { type: 'not' }>).body);
     for (const y of body.items) {
