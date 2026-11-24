@@ -28,7 +28,7 @@
 // lowRs), a writer ORs the arm's leaf / last bits in (ArmForm, PrattRule.ledForm / postForm /
 // binForm / preLeaf). Readers: the prefix operand's requireTarget test (nudPrefix, commitPrefix),
 // the postfix operator's (postfixOp), the binary operator's requireTarget and noUnaryLhs tests
-// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`), the
+// (binary). Writers: every NUD arm (nudLeaf, nudTpl, nudSeq, commitLeaf, commitSeq: `fm`; a prefix-shaped bracket / sequence arm, ending in an `atLevel` operand, has FORM_UNARY low bits: PrattRule.nudBracketForm / nudSeqForm, emit-portable nudLowForm), the
 // prefix node (PrattOpTables pre.form), every led (ledForm), a postfix token / template arm
 // (postfixTokForm), the postfix operator node (postForm), the binary node (binForm), an rd rule of
 // the closure (altForm). Not yet: the recovery encoding (recoveryTables refuses contexts) and the
@@ -153,8 +153,8 @@ export function planTargets(grammar: CstGrammar, rules: RuleIR[]): TargetsIR | n
       const arm = r.nudNames[i]!;
       switch (n.kind) {
         case 'tok': return armForm(r.name, arm, null, 0);
-        case 'bracket': return armForm(r.name, arm, r.nudBrackets[n.index]!.steps, 0);
-        case 'seq': return armForm(r.name, arm, r.nudSeqs[n.index]!, 0);
+        case 'bracket': return armForm(r.name, arm, r.nudBrackets[n.index]!.steps, r.nudBracketForm[n.index]!);   // FORM_UNARY when prefix-shaped
+        case 'seq': return armForm(r.name, arm, r.nudSeqs[n.index]!, r.nudSeqForm[n.index]!);
         case 'capped': return armForm(r.name, arm, r.nudCapped[n.index]!.steps, 0);
         case 'prefix': return armForm(r.name, arm, null, 0);   // its low bits are the operator's (PrattRule.prefix form)
       }

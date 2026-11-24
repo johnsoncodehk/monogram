@@ -46,7 +46,7 @@ type MixfixInfo = { openLit: string; sepLit: string };
 function analyze(grammar: CstGrammar) {
   const {
     tokenNames, opTable, prefixOps, noUnaryLhsOps, postfixOpValues, requireTargetOps,
-    ledPrecByConnector, binaryConnectors, connectorLbp,
+    ledPrecByConnector, binaryConnectors, connectorLbp, atLevelBp,
     prattRules, prattClassified, leftRecClassified, leftRecSet, ruleByName,
     nullableRules, exprNullable, maxBp, templateTokenName, templateTokenNames,
     exprSecond, suppressSetOf, suppressedIn,
@@ -59,7 +59,18 @@ function analyze(grammar: CstGrammar) {
     || ((e.type === 'seq' || e.type === 'alt') && e.items.some(atLevelIn))
     || ((e.type === 'quantifier' || e.type === 'group' || e.type === 'not') && atLevelIn(e.body))
     || (e.type === 'sep' && atLevelIn(e.element));
-  for (const r of grammar.rules) if (atLevelIn(r.body)) throw new Error(`jsTarget: rule ${r.name} reads a rule atLevel(…); not supported, use the portable targets`);
+  // One use is supported: a Pratt rule's NUD ending in its own operand read at an operator's level
+  // (`['<', Type, '>', atLevel('!', $)]`, the type assertion), a PREFIX-SHAPED NUD (selfAtLevelEnd).
+  const selfAtLevelEnd = (alt: RuleExpr, ruleName: string): boolean => {
+    const items = alt.type === 'seq' ? alt.items : [alt];
+    const last = items[items.length - 1];
+    return last !== undefined && last.type === 'group' && last.atLevel !== undefined && last.body.type === 'ref' && last.body.name === ruleName
+      && !items.slice(0, -1).some(atLevelIn);
+  };
+  for (const r of grammar.rules) {
+    const alts = r.body.type === 'alt' ? r.body.items : [r.body];
+    if (alts.some((alt) => atLevelIn(alt) && !(prattRules.has(r.name) && selfAtLevelEnd(alt, r.name)))) throw new Error(`jsTarget: rule ${r.name} reads a rule atLevel(…); not supported, use the portable targets`);
+  }
   if (grammar.targets && Object.keys(grammar.targets).length) throw new Error(`jsTarget: declared target contexts (CstGrammar.targets: ${Object.keys(grammar.targets).join(', ')}) are not supported; use the portable targets`);
 
   // First-token dispatch.
@@ -385,7 +396,8 @@ function analyze(grammar: CstGrammar) {
     prattRules, leftRecSet, ruleByName, prattClassified, leftRecClassified,
     maxBp, templateTokenName, templateTokenNames, firstTokenOf, altDeepFirst, altNullable,
     altSecond, ledMeta, contMeta, nudCap, nullableRules, firstSets, symtab, qualKeys,
-    exprFirst, exprNullable, suppressSetOf, suppressedIn,
+    exprFirst, exprNullable, suppressSetOf, suppressedIn, atLevelBp, selfAtLevelEnd,
+    unaryRows: [...prattClassified.entries()].some(([name, { nuds }]) => nuds.some((nud) => selfAtLevelEnd(nud, name))),
     markupContainer: markupContainerOf(grammar),
   };
 }
@@ -682,6 +694,13 @@ class Emitter {
           return this.matchQuantifierInto(expr.body, expr.kind, onFail, closerT);
         }
       case 'group': {
+        // atLevel(op, $) ending a NUD (the one use analyze admits): this rule's core read at op's
+        // level, as a prefix operator's operand is (gen-parser.ts matchExpr 'group').
+        const lvl = this.a.atLevelBp(expr);
+        if (lvl !== null) {
+          const name = (expr.body as { name: string }).name;
+          return `if (!parseRuleEntry(${this.memoIndex(name)}, ${this.a.grammar.rules.findIndex((r) => r.name === name)}, ${this.ruleFn(name)}_pratt, ${lvl})) { ${onFail} }`;
+        }
         // A suppress-carrying group stages the LED-connector exclusion for the next
         // parseRule (the index of its connector set, grammar-analysis suppressSets), then
         // matches its body (same as matchExpr 'group').
@@ -1335,6 +1354,7 @@ function emitJsParser(grammar: CstGrammar): string {
   // tail kid is an operator-tag leaf in postfixOpValues. A parenthesized cover / member /
   // element / call / non-null tail has no operator-tag leaf at head or tail, so it passes.
   e.emit(`function _notTarget(lhs: number) {`);
+  if (a.unaryRows) e.emit(`  if ((rowCapped[lhs] & 2) !== 0) return true;`);
   e.emit(`  const n = rowCount[lhs]; if (n === 0) return false;`);
   e.emit(`  const cs = rowStart[lhs];`);
   e.emit(`  const _h = kids[cs];`);
@@ -1555,9 +1575,10 @@ let rowNF = new Int32Array(8192).fill(0x7fffffff);
 // 'succeed' over broken text and wipe its diagnostics). Recovering passes adopt
 // these rows freely.
 let rowRM = new Uint8Array(8192);
-// Per row of a Pratt rule's result: 1 iff the node is CAPPED (_prattCapped at its return). A memo
+// Per row of a Pratt rule's result: bit 1 iff the node is CAPPED (_prattCapped at its return). A memo
 // hit or an adopted row restores the flag from here, so a construct that reads it after a
-// trailing self operand (cap propagation) sees what a fresh parse would.
+// trailing self operand (cap propagation) sees what a fresh parse would. Bit 2 iff a PREFIX-SHAPED
+// NUD built it (analyze's selfAtLevelEnd): its form is the prefix-unary one.
 let rowCapped = new Uint8Array(8192);
 function ktr(p: number, k: number) { const v = kidTokRel[k]; return v < 0 ? v + rowTokLen[p] + 1 : v; }
 function kcr(p: number, k: number) { const v = kidRel[k]; return v < 0 ? v + rowLen[p] + 1 : v; }
@@ -2142,8 +2163,12 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
       e.emit(`    if (nud_${sn}_${i}() && pos > bestNudPos) {`);
       e.emit(`      lhs = finishNode(${rid}, mark);`);
       e.emit(`      bestNudPos = pos;`);
-      // A NUD ending in a fresh operand of this rule (`... $`) closes the access tail.
-      e.emit(`      nudClosed = ${items[items.length - 1]?.type === 'ref' && (items[items.length - 1] as { name: string }).name === rule.name};`);
+      // A NUD ending in a fresh operand of this rule (`... $`) closes the access tail; so does a
+      // PREFIX-SHAPED one (its operand read at an operator's level), whose row is marked unary
+      // (rowCapped bit 2: not a target, no noUnaryLhs left operand).
+      const unary = a.selfAtLevelEnd(nud, rule.name);
+      e.emit(`      nudClosed = ${unary || (items[items.length - 1]?.type === 'ref' && (items[items.length - 1] as { name: string }).name === rule.name)};`);
+      if (unary) e.emit(`      rowCapped[lhs] = 2;`);
       // The LONGEST match wins; record whether THAT winner is capped: a capped arm, or one whose
       // trailing self operand returned capped (`...() => {}`: cap propagation, as the led below).
       const endsSelf = items[items.length - 1]?.type === 'ref' && (items[items.length - 1] as { name: string }).name === rule.name;
@@ -2236,6 +2261,7 @@ function emitPrattRule(e: Emitter, a: ReturnType<typeof analyze>, rule: RuleDecl
   // A target-requiring infix (`=`/`+=`/…) needs a LeftHandSideExpression LEFT operand
   // (`-x = 1`, `++x = 1`, `x++ = 1` are syntax errors). Like noUnaryLhs, fail hard.
   e.emit(`        if (REQTGT_T[opT] !== 0 && _notTarget(lhs)) break _fail;`);
+  if (a.unaryRows) e.emit(`        if (NOUNARY_T[opT] !== 0 && (rowCapped[lhs] & 2) !== 0) break _fail;`);
   e.emit(`        if (NOUNARY_T[opT] !== 0 && rowCount[lhs] > 0) {`);
   e.emit(`          const _h = kids[rowStart[lhs]];`);
   e.emit(`          if (_h < 0 && ((~_h) & 3) === 2) {`);
@@ -2429,10 +2455,12 @@ function emitDriver(e: Emitter, a: ReturnType<typeof analyze>, entry: string) {
 // and SECOND-token reads past it. Left-to-right parsing keeps the watermark near the
 // current frontier, so the value is tight on the dominant flow and only OVER-
 // invalidates (soundly) near big-backtrack clusters.
-function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number) {
+// bp > 0: the rule read at an operator's level (atLevel): no memo (it is keyed by position only),
+// the enclosing frame's no-in context kept, the recovery cycle refusal as for any entry.
+function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => number, bp = 0) {
   const mySup = suppressNext;
   suppressNext = 0;
-  const capped = parseLimit >= 0;
+  const capped = parseLimit >= 0 || bp !== 0;
   const start = pos;
   let me = memoEnd[idx];
   let mn = memoNode[idx];
@@ -2471,7 +2499,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
         absTok[id] = start;
         absChar[id] = start < tokN ? toff(start) : (tokN > 0 ? tend(tokN - 1) : 0);
         scPush(id);
-        _prattCapped = rowCapped[id] !== 0;
+        _prattCapped = (rowCapped[id] & 1) !== 0;
         return true;
       }
       return false;
@@ -2519,7 +2547,7 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
         mx[start] = ext;
         mg[start] = memoGenCur;
         scPush(aid);
-        _prattCapped = rowCapped[aid] !== 0;
+        _prattCapped = (rowCapped[aid] & 1) !== 0;
         return true;
       }
     }
@@ -2539,14 +2567,14 @@ function parseRuleEntry(idx: number, rid: number, core: (minBp: number) => numbe
     recRunning.set(recKey, mySerial);
   }
   const prevSup = suppressCur;
-  suppressCur = mySup;
+  if (bp === 0) suppressCur = mySup;
   const fm0 = frameMax;
   frameMax = start;
   const cm0 = cycleMinSerial;
   if (recKey >= 0) cycleMinSerial = 0x7fffffff;
   let result;
   try {
-    result = core(0);
+    result = core(bp);
   } finally {
     suppressCur = prevSup;
     if (recKey >= 0) recRunning.delete(recKey);
